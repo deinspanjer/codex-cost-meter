@@ -1,4 +1,4 @@
-# Codex Title Cost Estimate
+# Codex Cost Meter
 
 Estimate the API-list-price equivalent of a Codex task and its descendants, then include that estimate in the persisted root-task title.
 
