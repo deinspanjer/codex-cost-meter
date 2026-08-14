@@ -164,6 +164,14 @@ jobs:
             target: aarch64-apple-darwin
           - runner: macos-15-intel
             target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            architecture: x86_64
+            musl: true
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            architecture: aarch64
+            musl: true
     runs-on: ${{ needs.changes.outputs.docs_only == 'true' && 'ubuntu-latest' || matrix.runner }}
     steps:
       - name: Require change classification
@@ -180,7 +188,29 @@ jobs:
         run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
       - if: needs.changes.outputs.docs_only != 'true'
         run: rustup default 1.97.1
+      - if: needs.changes.outputs.docs_only != 'true' && matrix.musl
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
       - if: needs.changes.outputs.docs_only != 'true'
         run: rustup target add ${{ matrix.target }}
       - if: needs.changes.outputs.docs_only != 'true'
-        run: cargo build --release --target ${{ matrix.target }}
+        name: Build release binary
+        env:
+          TARGET: ${{ matrix.target }}
+          MUSL: ${{ matrix.musl }}
+        run: |
+          if [ "$MUSL" = true ]; then
+            target_upper=$(echo "$TARGET" | tr '[:lower:]-' '[:upper:]_')
+            target_lower=${TARGET//-/_}
+            export "CARGO_TARGET_${target_upper}_LINKER=musl-gcc"
+            export "CC_${target_lower}=musl-gcc"
+          fi
+          cargo build --release --target "$TARGET"
+      - if: needs.changes.outputs.docs_only != 'true' && matrix.musl
+        name: Package and inspect Linux archive
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          archive=$(python3 scripts/version.py package-linux --architecture "$ARCHITECTURE" --binary "target/$TARGET/release/codex-cost-meter" --output-dir target/release)
+          test "$(tar -tzf "$archive")" = "$(printf '%s\n%s\n%s\n' codex-cost-meter README.md LICENSE)"
+          (cd "$(dirname "$archive")" && sha256sum --check "$(basename "$archive").sha256")
