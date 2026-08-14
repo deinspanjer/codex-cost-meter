@@ -3,7 +3,9 @@ mod output;
 mod pricing;
 mod report;
 mod rollout;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+// Windows dispatch is intentionally deferred to Task 3.
 mod schedule;
 mod session_index;
 mod title;
