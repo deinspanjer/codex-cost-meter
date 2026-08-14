@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -41,7 +42,7 @@ class VersionToolTests(unittest.TestCase):
 
     def run_tool(self, *arguments, success=True):
         result = subprocess.run(
-            ["python3", str(SCRIPT), *arguments],
+            [sys.executable, str(SCRIPT), *arguments],
             cwd=self.root,
             text=True,
             capture_output=True,
