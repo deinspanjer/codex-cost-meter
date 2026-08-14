@@ -13,11 +13,15 @@ use crate::update::{self, UpdateError, UpdateOptions};
 
 use crate::update::FailureClass;
 
+#[cfg(any(target_os = "linux", test))]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(target_os = "windows", test))]
 mod windows;
 
+#[cfg(target_os = "linux")]
+pub(crate) use linux::{Inspection, Paths};
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{Inspection, Paths};
 #[cfg(target_os = "windows")]
@@ -113,7 +117,7 @@ pub(crate) enum StatusError {
 
 #[derive(Debug, Error)]
 pub(crate) enum ScheduleError {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[error("could not find the current executable")]
     CurrentExecutable {
         #[source]
@@ -122,6 +126,9 @@ pub(crate) enum ScheduleError {
     #[cfg(target_os = "macos")]
     #[error(transparent)]
     Lifecycle(#[from] macos::LifecycleError),
+    #[cfg(target_os = "linux")]
+    #[error(transparent)]
+    Lifecycle(#[from] linux::LifecycleError),
     #[cfg(target_os = "windows")]
     #[error(transparent)]
     Lifecycle(#[from] windows::LifecycleError),
@@ -144,6 +151,11 @@ pub(crate) fn install(paths: &Paths, options: &InstallOptions) -> Result<(), Sch
     macos::install(paths, options).map_err(Into::into)
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn install(paths: &Paths, options: &InstallOptions) -> Result<(), ScheduleError> {
+    linux::install(paths, options).map_err(Into::into)
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) fn install(paths: &Paths, options: &InstallOptions) -> Result<(), ScheduleError> {
     windows::install(paths, options).map_err(Into::into)
@@ -152,6 +164,11 @@ pub(crate) fn install(paths: &Paths, options: &InstallOptions) -> Result<(), Sch
 #[cfg(target_os = "macos")]
 pub(crate) fn inspect(paths: &Paths) -> Result<Inspection, ScheduleError> {
     macos::inspect(paths).map_err(Into::into)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn inspect(paths: &Paths) -> Result<Inspection, ScheduleError> {
+    linux::inspect(paths).map_err(Into::into)
 }
 
 #[cfg(target_os = "windows")]
@@ -164,6 +181,11 @@ pub(crate) fn remove(paths: &Paths) -> Result<(), ScheduleError> {
     macos::remove(paths).map_err(Into::into)
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn remove(paths: &Paths) -> Result<(), ScheduleError> {
+    linux::remove(paths).map_err(Into::into)
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) fn remove(paths: &Paths) -> Result<(), ScheduleError> {
     windows::remove(paths).map_err(Into::into)
@@ -174,6 +196,11 @@ pub(crate) fn resume(paths: &Paths) -> Result<(), ScheduleError> {
     macos::resume(paths).map_err(Into::into)
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn resume(paths: &Paths) -> Result<(), ScheduleError> {
+    linux::resume(paths).map_err(Into::into)
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) fn resume(paths: &Paths) -> Result<(), ScheduleError> {
     windows::resume(paths).map_err(Into::into)
@@ -182,6 +209,11 @@ pub(crate) fn resume(paths: &Paths) -> Result<(), ScheduleError> {
 #[cfg(target_os = "macos")]
 pub(crate) fn uninstall(paths: &Paths) -> Result<(), ScheduleError> {
     macos::uninstall(paths).map_err(Into::into)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn uninstall(paths: &Paths) -> Result<(), ScheduleError> {
+    linux::uninstall(paths).map_err(Into::into)
 }
 
 #[cfg(target_os = "windows")]

@@ -192,6 +192,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes musl-tools
       - if: needs.changes.outputs.docs_only != 'true'
         run: rustup target add ${{ matrix.target }}
+      - if: needs.changes.outputs.docs_only != 'true' && matrix.musl
+        name: Test Linux scheduling contracts
+        run: |
+          cargo test schedule::linux::tests
+          cargo test --test linux_schedule_cli
       - if: needs.changes.outputs.docs_only != 'true'
         name: Build release binary
         env:

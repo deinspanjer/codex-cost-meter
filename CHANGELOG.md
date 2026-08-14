@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.7.0]
+
+- Add current-user Linux systemd scheduling for idle title updates.
+
 ## [0.6.0]
 
 - Add static Linux musl x86_64 and aarch64 archives for reporting and title updates.
