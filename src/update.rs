@@ -1,5 +1,3 @@
-#![allow(dead_code)] // The v0.2 CLI task consumes this dry-run interface.
-
 use std::{
     collections::{HashMap, HashSet},
     fs::{File, OpenOptions, TryLockError},

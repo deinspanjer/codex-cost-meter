@@ -114,6 +114,26 @@ fn assert_concise_failure(output: &Output) {
 }
 
 #[test]
+fn parser_errors_with_control_arguments_are_one_line_and_do_not_echo_the_value() {
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args([
+            "update",
+            "--thread-id",
+            "root",
+            "--title-metrics",
+            "cost,\nforged",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(stderr(&output).lines().count(), 1);
+    assert!(stderr(&output).contains("control character"));
+    assert!(!stderr(&output).contains("forged"));
+}
+
+#[test]
 fn dry_run_prints_one_safe_proposal_without_mutation() {
     let fixture = Fixture::new();
     let database_before = fs::read(&fixture.database).unwrap();
@@ -223,7 +243,10 @@ fn accepts_extra_schema_and_sanitizes_metadata() {
     assert_eq!(stdout.lines().count(), 2);
 
     let unsafe_id = fixture.command(&["--thread-id", "child\u{1b}[31m\r\nforged"]);
-    assert_concise_failure(&unsafe_id);
+    assert_eq!(unsafe_id.status.code(), Some(2));
+    assert!(unsafe_id.stdout.is_empty());
+    assert_eq!(stderr(&unsafe_id).lines().count(), 1);
+    assert!(stderr(&unsafe_id).contains("control character"));
     assert!(!stderr(&unsafe_id).contains('\u{1b}'));
     assert!(!stderr(&unsafe_id).contains('\r'));
 }

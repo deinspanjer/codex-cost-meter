@@ -121,7 +121,6 @@ impl ReportContext {
         )
     }
 
-    #[allow(dead_code)]
     pub(crate) fn is_root(&self, thread_id: &str) -> bool {
         self.index.is_root(thread_id)
     }

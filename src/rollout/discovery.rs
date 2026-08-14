@@ -109,7 +109,6 @@ impl RolloutIndex {
         self.records.get(id)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn is_root(&self, id: &str) -> bool {
         self.records
             .get(id)

@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Consumed by the later v0.2 CLI and update tasks.
-
 use std::str::FromStr;
 
 use thiserror::Error;
