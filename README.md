@@ -4,16 +4,16 @@
 
 `codex-cost-meter` is a small cross-platform utility for exact-thread usage and estimated API-list-price cost. Its capabilities include descendant accounting, bounded root-title updates, and current-user schedules for eligible idle updates on macOS and Windows. It is diagnostic, not a ChatGPT billing record.
 
-v0.5 supports macOS 14+ as a Universal 2 archive for Apple Silicon and Intel, plus Windows x64 as a native archive. Both platforms can install, inspect, resume, remove, and uninstall their current-user schedule; Windows arm64 remains deferred.
+v0.6 supports macOS 14+ as a Universal 2 archive for Apple Silicon and Intel, Windows x64 as a native archive, and static musl Linux archives for x86_64 and aarch64. Linux supports `report` and explicit `update` commands; Linux scheduling and uninstall are not yet available. macOS and Windows can install, inspect, resume, remove, and uninstall their current-user schedule; Windows arm64 remains deferred.
 
 ![Codex sidebar showing cost and token metrics in task titles](https://raw.githubusercontent.com/deinspanjer/codex-cost-meter/main/docs/assets/sidebar-title-metrics.png)
 
 ## Quick start
 
-1. Download the archive for your platform and its matching checksum from the [latest stable release](https://github.com/deinspanjer/codex-cost-meter/releases/latest).
+1. Download the macOS Universal 2, Windows x64, Linux x86_64 musl, or Linux aarch64 musl archive for your platform and its matching checksum from the [latest stable release](https://github.com/deinspanjer/codex-cost-meter/releases/latest).
 2. Verify the checksum before extracting the archive.
 3. [Find your session ID](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#find-your-session-id).
-4. Run `./codex-cost-meter report <SESSION_ID>` on macOS, or `& .\codex-cost-meter\codex-cost-meter.exe report <SESSION_ID>` in PowerShell.
+4. Run `./codex-cost-meter report <SESSION_ID>` on macOS or Linux, or `& .\codex-cost-meter\codex-cost-meter.exe report <SESSION_ID>` in PowerShell.
 
 For platform-specific download, checksum, extraction, and trust guidance, see [install and run](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#install-and-run).
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.6.0]
+
+- Add static Linux musl x86_64 and aarch64 archives for reporting and title updates.
+
 ## [0.5.2]
 
 - Improve first-report onboarding with a visual quick start and session-ID guidance.

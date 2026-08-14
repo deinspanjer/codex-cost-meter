@@ -149,7 +149,7 @@ def changed(root, _before):
     return version != "0.0.0" and not tagged(root, version)
 
 
-def package(root, binary, output_dir):
+def package(root, binary, output_dir, platform="macos-universal2"):
     name, version = read_package(root)
     verify(root)
     binary = binary.resolve()
@@ -159,7 +159,7 @@ def package(root, binary, output_dir):
         raise ValueError(f"binary does not exist: {binary}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    archive = output_dir / f"{name}-v{version}-macos-universal2.tar.gz"
+    archive = output_dir / f"{name}-v{version}-{platform}.tar.gz"
     checksum = archive.with_suffix(archive.suffix + ".sha256")
     with tempfile.TemporaryDirectory() as temporary_directory:
         staging = Path(temporary_directory)
@@ -189,6 +189,12 @@ def package(root, binary, output_dir):
         encoding="utf-8",
     )
     return archive
+
+
+def package_linux(root, binary, architecture, output_dir):
+    if architecture not in {"x86_64", "aarch64"}:
+        raise ValueError("architecture must be x86_64 or aarch64")
+    return package(root, binary, output_dir, f"linux-{architecture}-musl")
 
 
 def package_windows(root, binary, output_dir):
@@ -243,6 +249,10 @@ def main():
     package_parser = commands.add_parser("package")
     package_parser.add_argument("--binary", type=Path, required=True)
     package_parser.add_argument("--output-dir", type=Path, required=True)
+    package_linux_parser = commands.add_parser("package-linux")
+    package_linux_parser.add_argument("--architecture", required=True)
+    package_linux_parser.add_argument("--binary", type=Path, required=True)
+    package_linux_parser.add_argument("--output-dir", type=Path, required=True)
     package_windows_parser = commands.add_parser("package-windows")
     package_windows_parser.add_argument("--binary", type=Path, required=True)
     package_windows_parser.add_argument("--output-dir", type=Path, required=True)
@@ -260,6 +270,12 @@ def main():
             print(str(changed(root, arguments.before)).lower())
         elif arguments.command == "package":
             print(package(root, arguments.binary, arguments.output_dir))
+        elif arguments.command == "package-linux":
+            print(
+                package_linux(
+                    root, arguments.binary, arguments.architecture, arguments.output_dir
+                )
+            )
         elif arguments.command == "package-windows":
             print(package_windows(root, arguments.binary, arguments.output_dir))
         else:

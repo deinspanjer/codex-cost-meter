@@ -126,7 +126,7 @@ fn help_and_version_describe_the_public_cli_contract() {
 
     assert!(version.status.success());
     assert!(version.stderr.is_empty());
-    assert!(String::from_utf8(version.stdout).unwrap().contains("0.5.2"));
+    assert!(String::from_utf8(version.stdout).unwrap().contains("0.6.0"));
 }
 
 #[test]
