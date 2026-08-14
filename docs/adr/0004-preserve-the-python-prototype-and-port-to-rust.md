@@ -259,6 +259,37 @@ target/universal2/release/codex-cost-meter report <program-root> --codex-home <l
 
 The candidate scan skipped oversized JSONL records, so its whole-tree complete estimate is unavailable and the displayed cost is a lower bound; no model was unpriced. Its higher immediate whole-tree total of 1,129,261 output tokens remains below the absolute 1,000,000,000-token stop gate. The small difference from the preceding prototype snapshot reflects live local task state advancing between the two read-only scans, not a filtered accounting adjustment.
 
+### v0.2.0 approved pre-release accounting snapshot
+
+This snapshot was taken after the whole-branch review, its single corrective fix wave and scoped re-review, the one-time durable owner-persona reconstruction, and the release-decider verdict, but before the protected merge and public release checks. The persona is now preserved in the release rubric; later milestones reuse it and incur persona-refinement overhead only when new owner evidence exposes a durable rubric gap.
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.2 post-plan baseline | 250 | 5h 21m 11.025s | 238,900,661 | 890,051 | 239,790,712 |
+| Approved pre-release whole tree | 308 | 9h 27m 34.397s | 310,532,497 | 1,228,371 | 311,760,868 |
+| Raw post-plan delta | 58 | 4h 06m 23.372s | 71,631,836 | 338,320 | 71,970,156 |
+| Excluded governance overhead | 11 | 7m 52.487s | 1,914,497 | 14,687 | 1,929,184 |
+| Accountable delivery actual | 47 | 3h 58m 30.885s | 69,717,339 | 323,633 | 70,040,972 |
+
+The excluded governance row contains the separately attributable one-time persona-research tree and release-decider lifecycle. Direct reporter calls created no agent lifecycle. Mixed controller work remains conservatively in delivery actuals rather than being estimated away. Against the post-plan remaining-v0.2 forecast of 38–78 turns, 8–20 summed hours, and 150k–450k output tokens, accountable delivery is within the turn and output ranges and below the forecast time range. Protected merge, publication, and public-asset verification remain outside this pre-release snapshot and will be added to the final post-release actual.
+
+The release decider returned `APPROVE_WITH_FOLLOWUPS` with no release blocker. Its only follow-up is the already-triaged loss of the underlying I/O cause when the updater cannot read `session_index.jsonl`; `TODO.md` bounds that v0.3 work to diagnostic clarity without a general error-framework expansion.
+
+The rebuilt v0.2.0 candidate binary produced this additive, deliberately unfiltered root-task report after the final production fix:
+
+| Scope | Rollouts | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Known estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 1 | 43 (42 complete, 1 incomplete) | 145,289,061 | 142,512,640 | 402,186 | 153,339 | 341m 58.427s | $97.20 |
+| Whole tree | 64 | 308 (306 complete, 2 incomplete) | 310,816,256 | 300,926,464 | 1,229,735 | 481,944 | 567m 34.397s | $192.99+ |
+
+| Model | Turns | Output tokens | Known estimated cost |
+| --- | ---: | ---: | ---: |
+| `gpt-5.6-sol` | 100 | 785,774 | $171.66 |
+| `gpt-5.6-terra` | 58 | 428,370 | $20.81 |
+| `codex-auto-review` | 150 | 15,591 | $0.53 |
+
+The application again marked whole-tree input incomplete because the rollout scan skipped oversized JSONL records, so the displayed known cost is a lower bound. No model was unpriced. The absolute whole-tree output total of 1,229,735 tokens includes excluded governance work and remains far below the 1,000,000,000-token program-stop gate.
+
 
 ## Evidence
 
