@@ -19,6 +19,8 @@ pub(crate) struct CostResult {
 }
 
 pub(crate) struct Catalog {
+    as_of: String,
+    source: String,
     histories: HashMap<String, Vec<PricePoint>>,
     proxies: HashMap<String, String>,
     undated_proxies: HashSet<String>,
@@ -48,6 +50,10 @@ where
 
 #[derive(Deserialize)]
 struct RawCatalog {
+    #[serde(default)]
+    as_of: String,
+    #[serde(default)]
+    source: String,
     histories: HashMap<String, Vec<PricePoint>>,
     proxies: HashMap<String, String>,
     undated_proxies: HashSet<String>,
@@ -118,6 +124,8 @@ impl Catalog {
         }
 
         Ok(Self {
+            as_of: raw.as_of,
+            source: raw.source,
             histories: raw.histories,
             proxies: raw.proxies,
             undated_proxies: raw.undated_proxies,
@@ -168,6 +176,18 @@ impl Catalog {
             known,
             complete: complete.then_some(known),
         }
+    }
+
+    pub(crate) fn as_of(&self) -> &str {
+        &self.as_of
+    }
+
+    pub(crate) fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub(crate) fn proxies(&self) -> &HashMap<String, String> {
+        &self.proxies
     }
 }
 

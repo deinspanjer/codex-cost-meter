@@ -53,7 +53,7 @@ pub(crate) enum JsonlReadError {
 }
 
 impl JsonlReadError {
-    fn kind(&self) -> io::ErrorKind {
+    pub(crate) fn kind(&self) -> io::ErrorKind {
         match self {
             Self::Read { source, .. } => source.kind(),
         }
