@@ -524,6 +524,29 @@ After publication, the checksummed Universal 2 binary downloaded from the public
 
 The report measured 473m 56.7s of summed agent-turn time. Its scan skipped oversized JSONL records, so the whole-tree cost is a known lower bound rather than a complete estimate; no model was unpriced. This post-publication snapshot intentionally includes later review, native CI diagnosis and correction, release, and reporting activity and is not substituted into the pre-review estimate comparison. Its 6,078,251 cumulative output tokens remain 993,921,749 below the 1,000,000,000-token program stop gate.
 
+### v0.5.1 published-binary self-report
+
+This self-report covers a separate root and does not alter the frozen v0.5 comparisons. Identifiers, titles, prompts, and local paths remain omitted.
+
+| Scope | Rollouts | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 1 | 1 (0 complete, 1 incomplete) | 13,238,392 | 13,015,552 | 25,504 | 7,787 | 0s | complete $3.35483840 |
+| Whole tree | 15 | 45 (41 complete, 4 incomplete) | 23,178,594 | 22,393,600 | 88,241 | 29,614 | 1,546.878s | complete estimate unavailable; known lower-bound $8.08582128 |
+
+| Model | Turns | Output tokens | Estimated cost |
+| --- | ---: | ---: | ---: |
+| Terra | 14 | 70,672 | $5.94581920 |
+| Sol | 3 | 15,069 | $2.10815000 |
+| auto-review | 28 | 2,500 | $0.03185208 |
+
+| Role | Rollouts | Output tokens | Summed duration | Estimated cost | Incomplete turns |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| root | 1 | 25,504 | 0s | $3.35483840 | 1 |
+| subagent | 10 | 60,237 | 1,468.144s | $4.69913080 | 3 |
+| security review | 4 | 2,500 | 78.734s | $0.03185208 | 0 |
+
+One incomplete-input warning makes the whole-tree complete estimate unavailable; no models were unpriced.
+
 ## Evidence
 
 The decision uses the completed prototype work on rollout statistics, persisted title updates, recovery behavior, fleet portability, and the Rust multi-architecture assessment. Private task identifiers are intentionally omitted from the public repository.
