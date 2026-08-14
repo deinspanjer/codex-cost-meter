@@ -2,9 +2,16 @@
 
 ## Install and run
 
-Download the archive for your platform and its `.sha256` checksum from the release, verify the checksum, and extract the archive. Place the binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or `$env:USERPROFILE\.codex\codex-cost-meter.exe` in PowerShell on Windows. The Windows location is a suggestion, not a requirement.
+To produce your first report:
 
-On macOS, verify the download with `shasum -a 256 -c <CHECKSUM_FILE>`. On Windows, compare `(Get-FileHash <ZIP_FILE> -Algorithm SHA256).Hash` with the hash at the start of the downloaded checksum file. The Windows ZIP contains `codex-cost-meter.exe`, `README.md`, and `LICENSE`.
+1. Open the [latest stable release](https://github.com/deinspanjer/codex-cost-meter/releases/latest). Download the macOS Universal 2 `.tar.gz` archive for either Apple Silicon or Intel, or the Windows x64 `.zip` archive, plus that archive's matching `.sha256` file.
+2. Verify the download before extracting it. On macOS, run `shasum -a 256 -c codex-cost-meter-v<VERSION>-macos-universal2.tar.gz.sha256`. In PowerShell on Windows, run `& { $archive = 'codex-cost-meter-v0.5.1-windows-x64.zip'; $expected = (Get-Content "$archive.sha256" -Raw).Trim().Split()[0]; if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw "checksum mismatch" } }`.
+3. Extract the verified archive: `tar -xzf codex-cost-meter-v<VERSION>-macos-universal2.tar.gz` on macOS, or `Expand-Archive codex-cost-meter-v<VERSION>-windows-x64.zip -DestinationPath .\codex-cost-meter` in PowerShell.
+4. Copy the task ID from the URL of the Codex task you want to report, then run `./codex-cost-meter report <TASK_ID>` on macOS or `& .\codex-cost-meter\codex-cost-meter.exe report <TASK_ID>` in PowerShell.
+
+Place the binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or `$env:USERPROFILE\.codex\codex-cost-meter.exe` in PowerShell on Windows. The Windows location is a suggestion, not a requirement.
+
+The Windows ZIP contains `codex-cost-meter.exe`, `README.md`, and `LICENSE`.
 
 macOS examples:
 

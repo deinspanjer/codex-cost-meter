@@ -10,6 +10,8 @@ v0.5 supports macOS 14+ as a Universal 2 archive for Apple Silicon and Intel, pl
 
 The [user guide](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md), [developer guide](https://github.com/deinspanjer/codex-cost-meter/blob/main/DEVELOPERS.md), and [future work](https://github.com/deinspanjer/codex-cost-meter/blob/main/TODO.md) are maintained separately. The [`python-prototype/`](https://github.com/deinspanjer/codex-cost-meter/tree/main/python-prototype) directory is an archived historical reference.
 
+For a first report, follow the [download, checksum, and task-ID quick start](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#install-and-run).
+
 ## License
 
 Licensed under the [MIT License](LICENSE).

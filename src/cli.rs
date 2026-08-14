@@ -10,7 +10,12 @@ use crate::{
 };
 
 #[derive(Debug, Parser)]
-#[command(name = "codex-cost-meter")]
+#[command(
+    name = "codex-cost-meter",
+    version,
+    about = "Report Codex task usage and estimated API-list-price cost.",
+    long_about = "Report Codex task usage and estimated API-list-price cost, or preview and apply bounded task-title updates."
+)]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Command,
@@ -18,11 +23,15 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    #[command(about = "Report usage and estimated cost for one Codex task.")]
     Report(ReportArgs),
+    #[command(about = "Preview or apply bounded Codex task-title updates.")]
     Update(UpdateArgs),
     #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[command(about = "Manage scheduled idle task-title updates.")]
     Schedule(ScheduleArgs),
     #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[command(about = "Remove the schedule and this executable.")]
     Uninstall,
 }
 
@@ -36,9 +45,13 @@ pub(crate) struct ScheduleArgs {
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Subcommand)]
 pub(crate) enum ScheduleCommand {
+    #[command(about = "Install the current-user idle-update schedule.")]
     Install(ScheduleInstallArgs),
+    #[command(about = "Show the installed schedule and its bounded status.")]
     Status,
+    #[command(about = "Resume a paused installed schedule.")]
     Resume,
+    #[command(about = "Remove the current-user schedule.")]
     Remove,
     #[command(hide = true)]
     Run(ScheduleRunArgs),
@@ -63,28 +76,58 @@ pub(crate) struct ScheduleRunArgs {
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduledUpdateArgs {
-    #[arg(long, default_value_t = 15, value_parser = parse_positive_u64)]
+    #[arg(
+        long,
+        default_value_t = 15,
+        value_parser = parse_positive_u64,
+        help = "Minimum idle time in minutes before updating a task."
+    )]
     idle_minutes: u64,
-    #[arg(long, default_value_t = 500, value_parser = parse_positive_usize)]
+    #[arg(
+        long,
+        default_value_t = 500,
+        value_parser = parse_positive_usize,
+        help = "Maximum number of idle tasks per scheduled run."
+    )]
     limit: usize,
-    #[arg(long, default_value = "4m", value_parser = parse_runtime)]
+    #[arg(
+        long,
+        default_value = "4m",
+        value_parser = parse_runtime,
+        help = "Maximum scheduled-run duration in seconds or minutes."
+    )]
     max_runtime: Duration,
-    #[arg(long, value_parser = parse_reprice_before)]
+    #[arg(
+        long,
+        value_parser = parse_reprice_before,
+        help = "Reprice tasks updated before this ISO date or timestamp."
+    )]
     reprice_before: Option<OffsetDateTime>,
-    #[arg(long, default_value_t = 65, value_parser = parse_positive_usize)]
+    #[arg(
+        long,
+        default_value_t = 65,
+        value_parser = parse_positive_usize,
+        help = "Maximum Unicode-scalar width of each updated title."
+    )]
     max_width: usize,
-    #[arg(long, default_value = "cost,total-tokens", value_parser = parse_metric_text)]
+    #[arg(
+        long,
+        default_value = "cost,total-tokens",
+        value_parser = parse_metric_text,
+        help = "Comma-separated title metrics: cost, total-tokens, input-tokens, output-tokens, or all."
+    )]
     title_metrics: String,
-    #[arg(long)]
+    #[arg(long, help = "Use this Codex storage directory.")]
     codex_home: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct ReportArgs {
+    #[arg(help = "Task ID to report, from the Codex task URL.")]
     pub(crate) thread_id: String,
-    #[arg(long)]
+    #[arg(long, help = "Write the report as JSON.")]
     pub(crate) json: bool,
-    #[arg(long)]
+    #[arg(long, help = "Use this Codex storage directory.")]
     codex_home: Option<PathBuf>,
 }
 
@@ -96,25 +139,66 @@ pub(crate) struct ReportArgs {
         .multiple(true)
 ))]
 pub(crate) struct UpdateArgs {
-    #[arg(long = "thread-id", conflicts_with = "idle_minutes")]
+    #[arg(
+        long = "thread-id",
+        conflicts_with = "idle_minutes",
+        help = "Select a task by ID; repeat for multiple tasks."
+    )]
     pub(crate) thread_ids: Vec<String>,
-    #[arg(long = "match-title", conflicts_with = "idle_minutes")]
+    #[arg(
+        long = "match-title",
+        conflicts_with = "idle_minutes",
+        help = "Select a task by its unique case-insensitive title; repeat as needed."
+    )]
     pub(crate) title_matches: Vec<String>,
-    #[arg(long, value_parser = parse_positive_u64)]
+    #[arg(
+        long,
+        value_parser = parse_positive_u64,
+        help = "Select root tasks idle for at least this many minutes."
+    )]
     pub(crate) idle_minutes: Option<u64>,
-    #[arg(long, default_value_t = 20, value_parser = parse_positive_usize, requires = "idle_minutes")]
+    #[arg(
+        long,
+        default_value_t = 20,
+        value_parser = parse_positive_usize,
+        requires = "idle_minutes",
+        help = "Maximum number of idle tasks to select."
+    )]
     pub(crate) limit: usize,
-    #[arg(long, value_parser = parse_runtime)]
+    #[arg(
+        long,
+        value_parser = parse_runtime,
+        help = "Stop after this preview or update runtime in seconds or minutes."
+    )]
     pub(crate) max_runtime: Option<Duration>,
-    #[arg(long, value_parser = parse_reprice_before, requires = "idle_minutes", conflicts_with_all = ["thread_ids", "title_matches"])]
+    #[arg(
+        long,
+        value_parser = parse_reprice_before,
+        requires = "idle_minutes",
+        conflicts_with_all = ["thread_ids", "title_matches"],
+        help = "Reprice idle tasks updated before this ISO date or timestamp."
+    )]
     pub(crate) reprice_before: Option<OffsetDateTime>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Apply the proposed title updates; otherwise only preview them."
+    )]
     pub(crate) apply: bool,
-    #[arg(long, default_value_t = 65, value_parser = parse_positive_usize)]
+    #[arg(
+        long,
+        default_value_t = 65,
+        value_parser = parse_positive_usize,
+        help = "Maximum Unicode-scalar width of each updated title."
+    )]
     pub(crate) max_width: usize,
-    #[arg(long, default_value = "cost,total-tokens", value_parser = parse_metrics)]
+    #[arg(
+        long,
+        default_value = "cost,total-tokens",
+        value_parser = parse_metrics,
+        help = "Comma-separated title metrics: cost, total-tokens, input-tokens, output-tokens, or all."
+    )]
     pub(crate) title_metrics: MetricList,
-    #[arg(long)]
+    #[arg(long, help = "Use this Codex storage directory.")]
     codex_home: Option<PathBuf>,
 }
 
