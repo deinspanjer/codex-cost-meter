@@ -109,6 +109,12 @@ impl RolloutIndex {
         self.records.get(id)
     }
 
+    pub(crate) fn is_root(&self, id: &str) -> bool {
+        self.records
+            .get(id)
+            .is_some_and(|record| matches!(&record.kind, RolloutKind::Root))
+    }
+
     pub(crate) fn descendants(&self, root_id: &str) -> Option<Vec<String>> {
         self.records.get(root_id)?;
         let mut seen = HashSet::from([root_id.to_owned()]);

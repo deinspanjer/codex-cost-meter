@@ -157,6 +157,48 @@ Compared with the post-plan forecast of 30–66 turns, 6–16 summed hours, and 
 
 Total program output at this snapshot was 852,852 tokens, below the 1,000,000,000-token stop gate.
 
+## v0.2 post-design baseline and forecast
+
+The cumulative snapshot taken after the just-in-time v0.2 title-update design was finalized was:
+
+| Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| ---: | ---: | ---: | ---: | ---: |
+| 247 | 5h 21m 01.087s | 236,906,552 | 876,736 | 237,783,288 |
+
+This is the post-design baseline for v0.2. The 12 turns, 35.257s, 6,091,343 input tokens, and 23,884 output tokens since the published-v0.1 snapshot include the late v0.1 self-report capture and documentation plus v0.2 design refinement. They are excluded from v0.2 delivery comparisons rather than being divided across mixed task boundaries after the fact. Total program output remained below the 1,000,000,000-token stop gate.
+
+The refined v0.2 design adds one bundled SQLite dependency, three focused modules, one shared report context, dry-run/apply CLI integration, mutation hardening, documentation, and the existing release gates. Beginning after this snapshot, the post-design forecast is:
+
+| Remaining v0.2 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Detailed implementation planning | 6–12 | 0.5–2 hours | 20k–60k |
+| Title composition and shared session-index behavior | 10–22 | 2–5 hours | 35k–110k |
+| SQLite selection, locking, mutation, and recovery | 18–36 | 3–8 hours | 55k–180k |
+| CLI integration, hardening, docs, review, and release | 14–30 | 3–7 hours | 45k–140k |
+| **Remaining v0.2 total** | **48–100** | **8.5–22 hours** | **155k–490k** |
+
+The forecast assumes bundled SQLite builds for both macOS architectures without toolchain intervention, the observed Codex schema still satisfies the required-column contract, disk-full behavior can be tested through bounded I/O failure injection, and scheduling remains outside v0.2. Bounded implementation and review packets should use Terra where available; architectural or unresolved data-integrity decisions remain with Sol.
+
+### v0.2 planning actual and post-plan forecast
+
+The finalized six-task TDD plan produced this cumulative post-plan baseline:
+
+| Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| ---: | ---: | ---: | ---: | ---: |
+| 250 | 5h 21m 11.025s | 238,900,661 | 890,051 | 239,790,712 |
+
+Compared with the v0.2 post-design baseline, detailed planning used 3 turns, 9.938s of summed agent time, 1,994,109 input tokens, and 13,315 output tokens. This planning cost counts against the post-design forecast. The snapshot is the implementation baseline for the post-plan comparison, and total program output remained below the 1,000,000,000-token stop gate.
+
+The plan has five independently reviewable implementation tasks plus documentation, accounting, final review, release-decider, and publication work. Release-persona refresh and release-decider execution remain excluded governance overhead; fixes they request remain delivery work.
+
+| Remaining v0.2 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Shared report/session-index state and title composition | 8–16 | 2–4 hours | 35k–100k |
+| SQLite selection, mutation, lock, and recovery | 14–28 | 3–7 hours | 55k–170k |
+| CLI integration and compatibility hardening | 6–14 | 1.5–4 hours | 25k–80k |
+| Durable docs, validation, review, correction, and release | 10–20 | 1.5–5 hours | 35k–100k |
+| **Remaining v0.2 total** | **38–78** | **8–20 hours** | **150k–450k** |
+
 ## Milestone self-reports
 
 ### v0.1.0 late post-release snapshot
@@ -175,6 +217,79 @@ The published v0.1.0 Universal 2 binary produced this report after release verif
 | `codex-auto-review` | 116 | 11,292 | $0.41 |
 
 The report also measured 111m 03.1s of descendant agent-turn time, which can overlap. It marked the whole-tree input incomplete because the rollout scan skipped oversized JSONL records; therefore the trailing `+` means the reported whole-tree cost is a lower bound. Pricing was effective 2026-08-06 and used the embedded model proxies recorded by the application.
+
+### v0.2.0 candidate-prep accounting snapshot
+
+This snapshot was taken after the `0.2.0` version bump, local package validation, and temporary-plan removal, but before the final review, owner-persona decision, protected merge, and release checks. The selected program root is resolved from the current Codex task lineage; its identifier, title, prompt, local path, and all other task metadata are intentionally omitted here.
+
+Prototype accounting command (with placeholders in this public record):
+
+```text
+python3 python-prototype/rollout_stats.py <program-root> --codex-home <local-codex-home> --json
+```
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.2 post-plan baseline | 250 | 5h 21m 11.025s | 238,900,661 | 890,051 | 239,790,712 |
+| Candidate-prep whole tree | 288 | 8h 40m 09.835s | 290,975,700 | 1,128,594 | 292,104,294 |
+| Candidate-prep raw delta | 38 | 3h 18m 58.810s | 52,075,039 | 238,543 | 52,313,582 |
+
+The raw delta is the candidate-prep delivery actual to date: implementation, ordinary reviews, validation, durable documentation, release preparation, and corrective work. Against the post-plan remaining-v0.2 forecast of 38–78 turns, 8–20 summed hours, and 150k–450k output tokens, it has reached the lower turn bound, remains below the time range, and is within the output-token range. It is not a final milestone actual because the remaining review, owner, merge, and release work has not yet occurred.
+
+No separately attributable re-estimation or accounting-capture lifecycle occurred after the post-plan baseline; direct reporter invocations do not create an agent-turn lifecycle. No owner-persona or release-decider lifecycle had run at this candidate-prep boundary. Accordingly, separately excluded governance overhead is zero in this snapshot; any small mixed-turn capture work is conservatively retained in the raw delivery delta rather than guessed apart. Future separately attributable governance work remains excluded from estimate-versus-actual while still contributing to the absolute stop check.
+
+The prototype saw complete priced model data for the selected tree: 54 rollouts, 285 complete/aborted turns and 3 incomplete turns, with known estimated cost of $180.22. Its absolute whole-tree output total, 1,128,594 tokens, was below the 1,000,000,000-output-token program stop gate.
+
+The v0.2.0 candidate binary self-report is additive and deliberately unfiltered: it includes the root and every linked descendant regardless of whether a lifecycle is accountable delivery or excluded governance work. Candidate command (placeholders preserve the public sanitization format):
+
+```text
+target/universal2/release/codex-cost-meter report <program-root> --codex-home <local-codex-home> --json
+```
+
+| Scope | Rollouts | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 1 | 43 (42 complete, 1 incomplete) | 136,581,760 | 133,911,552 | 380,883 | 146,180 | 341m 58.427s | $91.73 |
+| Whole tree | 54 | 288 (285 complete, 3 incomplete) | 291,112,195 | 282,023,424 | 1,129,261 | 437,533 | 520m 09.835s | $180.26+ |
+
+| Model | Turns | Output tokens | Known estimated cost |
+| --- | ---: | ---: | ---: |
+| `gpt-5.6-sol` | 96 | 726,864 | $161.25 |
+| `gpt-5.6-terra` | 53 | 388,408 | $18.50 |
+| `codex-auto-review` | 139 | 13,989 | $0.51 |
+
+The candidate scan skipped oversized JSONL records, so its whole-tree complete estimate is unavailable and the displayed cost is a lower bound; no model was unpriced. Its higher immediate whole-tree total of 1,129,261 output tokens remains below the absolute 1,000,000,000-token stop gate. The small difference from the preceding prototype snapshot reflects live local task state advancing between the two read-only scans, not a filtered accounting adjustment.
+
+### v0.2.0 approved pre-release accounting snapshot
+
+This snapshot was taken after the whole-branch review, its single corrective fix wave and scoped re-review, the one-time durable owner-persona reconstruction, and the release-decider verdict, but before the protected merge and public release checks. The persona is now preserved in the release rubric; later milestones reuse it and incur persona-refinement overhead only when new owner evidence exposes a durable rubric gap.
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.2 post-plan baseline | 250 | 5h 21m 11.025s | 238,900,661 | 890,051 | 239,790,712 |
+| Approved pre-release whole tree | 308 | 9h 27m 34.397s | 310,532,497 | 1,228,371 | 311,760,868 |
+| Raw post-plan delta | 58 | 4h 06m 23.372s | 71,631,836 | 338,320 | 71,970,156 |
+| Excluded governance overhead | 11 | 7m 52.487s | 1,914,497 | 14,687 | 1,929,184 |
+| Accountable delivery actual | 47 | 3h 58m 30.885s | 69,717,339 | 323,633 | 70,040,972 |
+
+The excluded governance row contains the separately attributable one-time persona-research tree and release-decider lifecycle. Direct reporter calls created no agent lifecycle. Mixed controller work remains conservatively in delivery actuals rather than being estimated away. Against the post-plan remaining-v0.2 forecast of 38–78 turns, 8–20 summed hours, and 150k–450k output tokens, accountable delivery is within the turn and output ranges and below the forecast time range. Protected merge, publication, and public-asset verification remain outside this pre-release snapshot and will be added to the final post-release actual.
+
+The release decider returned `APPROVE_WITH_FOLLOWUPS` with no release blocker. Its only follow-up is the already-triaged loss of the underlying I/O cause when the updater cannot read `session_index.jsonl`; `TODO.md` bounds that v0.3 work to diagnostic clarity without a general error-framework expansion.
+
+The rebuilt v0.2.0 candidate binary produced this additive, deliberately unfiltered root-task report after the final production fix:
+
+| Scope | Rollouts | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Known estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 1 | 43 (42 complete, 1 incomplete) | 145,289,061 | 142,512,640 | 402,186 | 153,339 | 341m 58.427s | $97.20 |
+| Whole tree | 64 | 308 (306 complete, 2 incomplete) | 310,816,256 | 300,926,464 | 1,229,735 | 481,944 | 567m 34.397s | $192.99+ |
+
+| Model | Turns | Output tokens | Known estimated cost |
+| --- | ---: | ---: | ---: |
+| `gpt-5.6-sol` | 100 | 785,774 | $171.66 |
+| `gpt-5.6-terra` | 58 | 428,370 | $20.81 |
+| `codex-auto-review` | 150 | 15,591 | $0.53 |
+
+The application again marked whole-tree input incomplete because the rollout scan skipped oversized JSONL records, so the displayed known cost is a lower bound. No model was unpriced. The absolute whole-tree output total of 1,229,735 tokens includes excluded governance work and remains far below the 1,000,000,000-token program-stop gate.
+
 
 ## Evidence
 

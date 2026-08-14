@@ -156,12 +156,13 @@ fn unknown_thread_is_a_single_line_runtime_error() {
 }
 
 #[test]
-fn runtime_errors_sanitize_terminal_control_thread_ids() {
+fn parser_errors_sanitize_terminal_control_thread_ids() {
     let home = fixture_home();
     let output = report_with_home(home.path(), "unknown\u{1b}[31m\r\nforged", true);
     let message = stderr(&output);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(message.contains("control character"));
     assert!(!message.contains('\u{1b}'));
     assert!(!message.contains('\r'));
     assert_eq!(message.lines().count(), 1);

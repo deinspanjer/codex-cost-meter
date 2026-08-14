@@ -1,10 +1,10 @@
 # Developer guide
 
-## v0.1 architecture
+## v0.2 architecture
 
-One Rust 2024 crate produces one read-only `codex-cost-meter` binary. `cli` parses `report`; `rollout::discovery` bounds and indexes JSONL without following directory symlinks; `rollout::analysis` attributes usage and preserves ambiguity; `pricing` embeds date-aware rates; `report` aggregates a root and descendants; and `output` renders sanitized human or structured JSON output. `data/model-prices.json` is the built-in catalog.
+One Rust 2024 crate produces one `codex-cost-meter` binary. `cli` parses `report` and `update`; `rollout::discovery` bounds and indexes JSONL without following directory symlinks; `rollout::analysis` attributes usage and preserves ambiguity; `pricing` embeds date-aware rates; `report` reuses one rollout/catalog context; `session_index` owns bounded snapshots and durable index appends; `title` owns pure metric parsing and bounded composition; `update` owns SQLite selection, the process lock, and the SQLite-then-JSONL recovery sequence; and `output` renders sanitized report output. `data/model-prices.json` is the built-in catalog.
 
-Exact-ID reporting reads rollout JSONL plus an optional `session_index.jsonl` name; it deliberately does not need SQLite. The [`python-prototype/`](python-prototype/) directory is historical reference only, not the active architecture.
+Exact-ID reporting reads rollout JSONL plus an optional `session_index.jsonl` name. Title updates additionally read the supported `state_5.sqlite` `threads` contract documented in the user guide. `rusqlite` uses its bundled SQLite build so the Universal 2 executable has no separately installed SQLite dependency; the standard-library file lock avoids another locking dependency. The [`python-prototype/`](python-prototype/) directory is historical reference only, not the active architecture.
 
 ## Build and test
 
@@ -20,13 +20,16 @@ Use focused commands while iterating:
 just test-filter report::tests
 just test-filter output::tests
 just test-version
+just test-filter title::tests
+just test-filter update::tests
+cargo test --test update_cli
 just check
 just package
 ```
 
 `just check` runs formatting, tests, version-tool tests, and warnings-denied Clippy. `just package` builds both macOS slices, creates a Universal 2 binary, verifies its architectures and ad-hoc signature, and writes a deterministic archive plus checksum under `target/release/`.
 
-Unit tests live beside the behavior they protect; `tests/report_cli.rs` covers command dispatch, home resolution, output, errors, and hardening. Keep tests focused on behavioral invariants, use temporary Codex homes, and keep input handling non-panicking and bounded.
+Unit tests live beside the behavior they protect; `tests/report_cli.rs` covers reporting dispatch, home resolution, output, errors, and hardening, while `tests/update_cli.rs` covers the update command contract. Title, session-index, and update tests use temporary Codex homes and cover metric boundaries, root-only selection, dry-run immutability, dual-store apply/recovery, schema compatibility, and lock/error handling. Keep tests focused on behavioral invariants, parallel-safe where possible, and input handling non-panicking and bounded.
 
 ## Release and phase gates
 
@@ -34,7 +37,7 @@ Unit tests live beside the behavior they protect; `tests/report_cli.rs` covers c
 
 Before a phase or release closes, require self, task, and final review; focused and full validation; durable documentation uplift; accounting; and the [release-decider rubric](docs/release/owner-approval-rubric.md). The maintainability review checks requirement traceability, focused tests, proportionate module/dependency/test growth, current consumers for abstractions, and explicit bounded follow-ups. Stop for owner review under the program-stop conditions in [ADR 0004](docs/adr/0004-preserve-the-python-prototype-and-port-to-rust.md).
 
-## Documentation placement
+## Documentation Placement Rules
 
 | Document | Canonical content |
 | --- | --- |
@@ -42,6 +45,8 @@ Before a phase or release closes, require self, task, and final review; focused 
 | `USERS.md` | Installation, runtime behavior, privacy, and troubleshooting |
 | `DEVELOPERS.md` | Architecture, tooling, tests, release process, and these rules |
 | `TODO.md` | Actionable future work only |
+
+## Change-Driven Update Matrix
 
 | Change | Update |
 | --- | --- |
