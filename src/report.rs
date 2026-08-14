@@ -1,20 +1,18 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    io,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use serde::Serialize;
-use serde_json::Value;
 use thiserror::Error;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     pricing::{Catalog, PricingError, Usage},
     rollout::{
         analysis::{AnalysisError, RolloutStats, analyze},
-        discovery::{RolloutIndex, read_jsonl},
+        discovery::RolloutIndex,
     },
+    session_index::Snapshot,
 };
 
 #[derive(Debug, Error)]
@@ -94,6 +92,43 @@ pub(crate) struct PricingReport {
     pub as_of: String,
     pub source: String,
     pub model_proxies: BTreeMap<String, String>,
+}
+
+pub(crate) struct ReportContext {
+    codex_home: PathBuf,
+    index: RolloutIndex,
+    catalog: Catalog,
+    session_index: Snapshot,
+}
+
+impl ReportContext {
+    pub(crate) fn new(codex_home: &Path) -> Result<Self, PricingError> {
+        Ok(Self {
+            codex_home: codex_home.into(),
+            index: RolloutIndex::build(codex_home),
+            catalog: Catalog::embedded()?,
+            session_index: Snapshot::load(codex_home),
+        })
+    }
+
+    pub(crate) fn build(&self, thread_id: &str) -> Result<Report, ReportError> {
+        build_with_state(
+            thread_id,
+            &self.codex_home,
+            &self.index,
+            &self.catalog,
+            self.session_index(),
+        )
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn is_root(&self, thread_id: &str) -> bool {
+        self.index.is_root(thread_id)
+    }
+
+    pub(crate) fn session_index(&self) -> &Snapshot {
+        &self.session_index
+    }
 }
 
 #[derive(Default)]
@@ -237,16 +272,31 @@ impl Aggregate {
 }
 
 pub(crate) fn build(thread_id: &str, codex_home: &Path) -> Result<Report, ReportError> {
-    let index = RolloutIndex::build(codex_home);
-    let catalog = Catalog::embedded()?;
-    build_with_index(thread_id, codex_home, &index, &catalog)
+    ReportContext::new(codex_home)?.build(thread_id)
 }
 
+#[cfg(test)]
 fn build_with_index(
     thread_id: &str,
     codex_home: &Path,
     index: &RolloutIndex,
     catalog: &Catalog,
+) -> Result<Report, ReportError> {
+    build_with_state(
+        thread_id,
+        codex_home,
+        index,
+        catalog,
+        &Snapshot::load(codex_home),
+    )
+}
+
+fn build_with_state(
+    thread_id: &str,
+    codex_home: &Path,
+    index: &RolloutIndex,
+    catalog: &Catalog,
+    session_index: &Snapshot,
 ) -> Result<Report, ReportError> {
     let root = index
         .record(thread_id)
@@ -321,7 +371,14 @@ fn build_with_index(
             rollout_id: thread_id.into(),
             rollout_type: root.kind.report_type(),
             project: root.cwd.clone(),
-            thread_name: latest_thread_name(codex_home, thread_id, &mut warnings),
+            thread_name: session_index
+                .is_complete()
+                .then(|| {
+                    session_index
+                        .entry(thread_id)
+                        .map(|entry| entry.name.clone())
+                })
+                .flatten(),
             total_subagent_spawns: descendants.len(),
             total_subagent_turn_duration_seconds: children_stats.total_turn_duration_seconds,
             stats: root_stats,
@@ -342,68 +399,20 @@ fn build_with_index(
                 .map(|(model, target)| (model.clone(), target.clone()))
                 .collect(),
         },
-        incomplete_input_warnings: warnings,
+        incomplete_input_warnings: {
+            if session_index.read_error().is_some() {
+                warnings.push("session index could not be read".into());
+            } else {
+                if session_index.oversized_records() > 0 {
+                    warnings.push("session index skipped oversized JSONL records".into());
+                }
+                if session_index.malformed_records() > 0 {
+                    warnings.push("session index contains malformed JSONL records".into());
+                }
+            }
+            warnings
+        },
     })
-}
-
-fn latest_thread_name(
-    codex_home: &Path,
-    thread_id: &str,
-    warnings: &mut Vec<String>,
-) -> Option<String> {
-    let path = codex_home.join("session_index.jsonl");
-    let mut latest = None::<(OffsetDateTime, String)>;
-    let mut malformed = false;
-    let result = read_jsonl(&path, |line| {
-        let Ok(value) = serde_json::from_slice::<Value>(line) else {
-            malformed = true;
-            return;
-        };
-        let Some(object) = value.as_object() else {
-            malformed = true;
-            return;
-        };
-        if object.get("id").and_then(Value::as_str) != Some(thread_id) {
-            return;
-        }
-        let Some(name) = object.get("thread_name").and_then(Value::as_str) else {
-            return;
-        };
-        if name.is_empty() {
-            return;
-        }
-        let Some(updated_at) = object.get("updated_at").and_then(Value::as_str) else {
-            malformed = true;
-            return;
-        };
-        let Ok(updated_at) = OffsetDateTime::parse(updated_at, &Rfc3339) else {
-            malformed = true;
-            return;
-        };
-        if latest
-            .as_ref()
-            .is_none_or(|(current, _)| updated_at >= *current)
-        {
-            latest = Some((updated_at, name.into()));
-        }
-    });
-    let mut invalid = malformed;
-    match result {
-        Ok(summary) if summary.oversized_lines_skipped > 0 => {
-            warnings.push("session index skipped oversized JSONL records".into());
-            invalid = true;
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
-        Err(_) => {
-            warnings.push("session index could not be read".into());
-            return None;
-        }
-    }
-    if malformed {
-        warnings.push("session index contains malformed JSONL records".into());
-    }
-    (!invalid).then(|| latest.map(|(_, name)| name)).flatten()
 }
 
 fn round(value: f64, decimal_places: i32) -> f64 {
@@ -418,7 +427,7 @@ mod tests {
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
-    use super::{ReportError, build, build_with_index};
+    use super::{ReportContext, ReportError, build, build_with_index};
     use crate::{pricing::Catalog, rollout::discovery::RolloutIndex};
 
     fn write_jsonl(home: &TempDir, relative: &str, rows: &[Value]) {
@@ -533,6 +542,21 @@ mod tests {
         assert_eq!(report.tree.rollout_count, 2);
         assert_eq!(report.by_rollout_type["security_review"].rollout_count, 1);
         assert_eq!(report.by_model["gpt-5.6-terra"].input_tokens, 100);
+    }
+
+    #[test]
+    fn context_reuses_report_and_session_index_state() {
+        let home = fixture_home();
+
+        let context = ReportContext::new(home.path()).unwrap();
+
+        assert!(context.is_root("root"));
+        assert!(!context.is_root("child"));
+        assert_eq!(
+            context.session_index().entry("root").unwrap().name,
+            "Newest name"
+        );
+        assert_eq!(context.build("root").unwrap().tree.rollout_count, 2);
     }
 
     #[test]
