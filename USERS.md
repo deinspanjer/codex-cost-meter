@@ -2,7 +2,7 @@
 
 ## Install and run
 
-Download the archive for your platform and its `.sha256` checksum from the release, verify the checksum, and extract the archive. Place the binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or `$env:USERPROFILE\.codex\codex-cost-meter.exe` in PowerShell on Windows.
+Download the archive for your platform and its `.sha256` checksum from the release, verify the checksum, and extract the archive. Place the binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or `$env:USERPROFILE\.codex\codex-cost-meter.exe` in PowerShell on Windows. The Windows location is a suggestion, not a requirement.
 
 On macOS, verify the download with `shasum -a 256 -c <CHECKSUM_FILE>`. On Windows, compare `(Get-FileHash <ZIP_FILE> -Algorithm SHA256).Hash` with the hash at the start of the downloaded checksum file. The Windows ZIP contains `codex-cost-meter.exe`, `README.md`, and `LICENSE`.
 
@@ -22,7 +22,7 @@ $threadId = "<THREAD_ID>"
 & "$env:USERPROFILE\.codex\codex-cost-meter.exe" update --thread-id $threadId
 ```
 
-Use the bare executable name only when you place it in an existing directory on `PATH`; v0.4 does not create or use a `bin` directory under the Codex home. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then the platform home plus `.codex`. `report` is read-only and reports that exact ID and its linked descendants without SQLite; `update` is dry-run by default and reads the supported local SQLite state only for title-update selection or application (details below).
+Use the bare executable name only when you place it in an existing directory on `PATH`; the tool does not require or create a `bin` directory under the Codex home. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then the platform home plus `.codex`. `report` is read-only and reports that exact ID and its linked descendants without SQLite; `update` is dry-run by default and reads the supported local SQLite state only for title-update selection or application (details below).
 
 The macOS archive is ad-hoc signed, not Developer ID signed or notarized. Gatekeeper can therefore require a user decision before first launch. The Windows executable is unsigned, so Windows or organizational controls can also require an explicit trust decision or block it. Verify the downloaded checksum and follow your organization's trust process; the checksum detects transfer corruption or tampering but does not establish publisher identity. Production signing is planned for a later release.
 
@@ -49,24 +49,26 @@ Titles default to `--title-metrics cost,total-tokens` and `--max-width 65`. Choo
 
 For dry runs, the tool opens Codex's state database read-only. With `--apply`, it locks one updater process, updates both `title` and `name` in a single SQLite transaction, then appends durable JSONL entries to `session_index.jsonl`. It supports `state_5.sqlite` directly under the selected Codex home or under `sqlite/`, and requires the `threads` columns `id`, `title`, `name`, `history_mode`, `updated_at`, and `first_user_message`; extra schema is accepted. SQLite and JSONL are deliberately not cross-store atomic: if index writing fails after a committed transaction, the command fails and a later identical `--apply` remains eligible to repair both stores. A busy updater, database/schema problem, or unreadable index is a safe actionable failure.
 
-## Schedule idle title updates on macOS
+## Schedule idle title updates
 
-Windows scheduling is not included in v0.4; run `report` or `update` directly there. On macOS, `schedule install` creates one current-user LaunchAgent. It runs when loaded and every five minutes, and it applies updates only to eligible idle root tasks. It uses these defaults: `--idle-minutes 15`, `--limit 500`, `--max-runtime 4m`, `--max-width 65`, and `--title-metrics cost,total-tokens`.
+On macOS, `schedule install` creates one current-user LaunchAgent. On Windows, it registers one current-user Task Scheduler task named `Codex Cost Meter`. Each starts once when registered or loaded and then runs every five minutes. It applies updates only to eligible idle root tasks and uses these defaults: `--idle-minutes 15`, `--limit 500`, `--max-runtime 4m`, `--max-width 65`, and `--title-metrics cost,total-tokens`.
 
 ```text
-~/.codex/codex-cost-meter schedule install
-~/.codex/codex-cost-meter schedule install --idle-minutes 30 --limit 100 --max-runtime 2m
-~/.codex/codex-cost-meter schedule status
-~/.codex/codex-cost-meter schedule resume
-~/.codex/codex-cost-meter schedule remove
-~/.codex/codex-cost-meter uninstall
+<PATH_TO_BINARY> schedule install
+<PATH_TO_BINARY> schedule install --idle-minutes 30 --limit 100 --max-runtime 2m
+<PATH_TO_BINARY> schedule status
+<PATH_TO_BINARY> schedule resume
+<PATH_TO_BINARY> schedule remove
+<PATH_TO_BINARY> uninstall
 ```
 
-`schedule install` accepts the displayed defaults as overrides, plus `--reprice-before` and `--codex-home`; the scheduled command always applies updates and does not accept explicit thread or title selection. The job stores the canonical path of the executable. Moving or deleting that binary breaks the installed job; run `schedule remove` before moving it, then install again from its new location.
+On Windows PowerShell, invoke the suggested install location as `& "$env:USERPROFILE\.codex\codex-cost-meter.exe" schedule install`; use the actual path if you chose another location. `schedule install` accepts the displayed defaults as overrides, plus `--reprice-before` and `--codex-home`; the scheduled command always applies updates and does not accept explicit thread or title selection. The job stores the canonical path of the executable. Moving or deleting that binary breaks the installed job; run `schedule remove` before moving it, then install again from its new location.
 
-`schedule status` reports whether the property list is installed, whether launchd reports the job as loaded, and the bounded status record. When a run has occurred, its fields are `last run`, stable `result`, `consecutive failures`, `paused`, and fixed remediation; otherwise it reports `last run: never`. `schedule resume` clears a pause without re-registering the job. `schedule remove` is idempotent and removes only this tool's LaunchAgent and bounded status record. `uninstall` first performs that removal, then deletes only the currently running executable; it does not delete Codex data or a parent directory.
+`schedule status` reports whether the macOS property list is installed and loaded, or whether the Windows task is registered, followed by the bounded status record. When a run has occurred, its fields are `last run`, stable `result`, `consecutive failures`, `paused`, and fixed remediation; otherwise it reports `last run: never`. `schedule resume` clears a pause without re-registering the schedule. `schedule remove` is idempotent and removes only this tool's LaunchAgent or fixed Windows task and its bounded status record; on Windows it also removes an abandoned temporary task-definition file.
 
-Scheduled runs create no append-only log and are silent on success and ordinary lock contention. They store only fixed result codes and remediation, not task metadata, paths, IDs, titles, prompts, or arbitrary error text. Three consecutive ordinary failures pause the schedule; disk-full, incompatible SQLite schema, and permission-denied failures pause it immediately. Use `schedule status`, correct the local issue, then run `schedule resume`.
+On Windows, scheduling commands require a nonempty `LOCALAPPDATA`; they store the bounded status at `%LOCALAPPDATA%\codex-cost-meter\status.json`. `--codex-home` and `CODEX_HOME` select Codex storage only and do not replace `LOCALAPPDATA`. Task Scheduler keeps the registered task definition for the current user, including the executable and Codex-home paths. On macOS, `uninstall` removes the schedule and deletes only the currently running executable. On Windows, it removes the schedule first and starts a short-lived cleanup process that deletes the executable after it exits; `executable deletion scheduled` does not mean deletion has already completed. If the executable remains after the process has exited, delete that exact `.exe` manually. Neither platform's uninstall deletes Codex data or a parent directory.
+
+Scheduled runs create no append-only log and are normally silent on success and ordinary lock contention. If an update succeeds but its bounded status cannot be persisted, it prints only `update completed; schedule status unavailable`. They store only fixed result codes and remediation, not task metadata, paths, IDs, titles, prompts, or arbitrary error text. Three consecutive ordinary failures pause the schedule; disk-full, incompatible SQLite schema, and permission-denied failures pause it immediately. Use `schedule status`, correct the local issue, then run `schedule resume`.
 
 ## Privacy and troubleshooting
 
@@ -78,5 +80,8 @@ Reports read local Codex JSONL files. Reports, update previews, warnings, and ru
 - **Database, schema, or session-index error** — do not edit Codex storage by hand. Resolve the local access issue and rerun; a failed index append after commit is intentionally recoverable by rerunning the same selection with `--apply`.
 - **Scheduled updates are paused** — use `schedule status` for the fixed remediation, correct the reported storage, schema, or permission problem, then run `schedule resume`.
 - **Scheduled job no longer starts** — if the binary was moved or deleted, run `schedule remove` if possible and install again from its new location.
+- **Windows scheduling state cannot be resolved** — run from a normal Windows user session where `LOCALAPPDATA` is nonempty; `--codex-home` cannot replace it.
+- **Windows task is not registered or Task Scheduler cannot be inspected** — use `schedule status` to confirm the state, then run `schedule install` again after resolving the current-user Task Scheduler or access problem.
+- **Windows uninstall left the executable behind** — wait until `uninstall` has exited, then delete that exact executable manually. It is safe to rerun `schedule remove`; it does not use a wildcard task name.
 - **macOS blocks execution** — recheck the archive checksum, then follow your organization’s Gatekeeper policy. The ad-hoc signature does not establish publisher identity.
 - **Windows blocks execution** — recheck the ZIP checksum, then follow your organization’s application-control or SmartScreen policy. The unsigned executable does not establish publisher identity.

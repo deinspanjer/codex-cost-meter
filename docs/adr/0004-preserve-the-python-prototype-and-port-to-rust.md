@@ -459,6 +459,54 @@ After publication, the checksummed Universal 2 binary downloaded from the public
 
 The report measured 370m 50.5s of summed agent-turn time. Its scan skipped oversized JSONL records, so the whole-tree cost is a known lower bound rather than a complete estimate; no model was unpriced. This post-publication snapshot intentionally includes later review, CI, release, and reporting activity and is not substituted into the pre-review estimate comparison. Its 5,813,660 cumulative output tokens remain below the 1,000,000,000-token program stop gate.
 
+## v0.5 post-design baseline and forecast
+
+The v0.5 Windows scheduling design boundary was captured before detailed implementation planning:
+
+| Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| ---: | ---: | ---: | ---: | ---: |
+| 763 | 13h 35m 11.189s | 2,074,645,140 | 5,830,545 | 2,080,475,685 |
+
+The design adds only the fixed current-user Windows Task Scheduler lifecycle, bounded scheduler status, deferred self-delete, and native smoke evidence. It retains the one crate, target-specific scheduler modules, unsigned Windows x64 release contract, and no Linux or Windows arm64 scheduling work. The cumulative output total remained below the 1,000,000,000-token stop gate.
+
+The post-design forecast for the remaining v0.5 work is 35–75 turns, 5–14 summed agent hours, and 100k–330k output tokens. It includes planning, implementation, ordinary reviews, validation, durable documentation, candidate preparation, and release work; input tokens remain measured actual only. Accountant capture, re-estimation, and release-decider work remain excluded from the feature estimate comparison where separately attributable, but count toward the stop gate.
+
+### v0.5 planning actual and post-plan forecast
+
+The approved four-task plan produced this cumulative post-plan baseline:
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Post-design whole tree | 763 | 13h 35m 11.189s | 2,074,645,140 | 5,830,545 | 2,080,475,685 |
+| Post-plan whole tree | 767 | 13h 45m 38.307s | 2,083,849,156 | 5,854,443 | 2,089,703,599 |
+| Planning delta | 4 | 10m 27.118s | 9,204,016 | 23,898 | 9,227,914 |
+
+Planning and re-estimation are measured separately and excluded from the feature-delivery comparison where attribution is possible. Beginning after this snapshot, the refined execution forecast is:
+
+| Remaining v0.5 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Shared schedule seam and Windows-safe replacement | 4–8 | 0.5–1.5 hours | 15k–40k |
+| Windows Task Scheduler lifecycle core | 7–16 | 1.5–4 hours | 30k–95k |
+| Public scheduling, uninstall, and native smoke evidence | 7–16 | 1.5–4 hours | 30k–95k |
+| Closeout, reviews, corrections, and release | 9–20 | 2–4.5 hours | 35k–90k |
+| **Total after post-plan snapshot** | **27–60** | **5.5–14 hours** | **110k–320k** |
+
+The cumulative output total of 5,854,443 remained below the 1,000,000,000-token stop gate.
+
+### v0.5.0 final candidate accounting snapshot
+
+This snapshot follows the `0.5.0` version bump, candidate validation, and local package inspection, and precedes final whole-branch review, release-decider work, protected merge, and publication. The selected program root and other task metadata are intentionally omitted.
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.5 post-plan baseline | 767 | 13h 45m 38.307s | 2,083,849,156 | 5,854,443 | 2,089,703,599 |
+| Final candidate whole tree | 786 | 14h 27m 17.385s | 2,127,256,306 | 5,971,557 | 2,133,227,863 |
+| Raw post-plan delta | 19 | 41m 39.078s | 43,407,150 | 117,114 | 43,524,264 |
+
+No separately attributable candidate accountant or release-decider lifecycle is available at this boundary, so the raw delta is conservatively treated as delivery. Against the post-plan forecast of 27–60 turns, 5.5–14 summed hours, and 110k–320k output tokens, delivery is 8 turns below the lower bound, 4h 48m 20.922s below the lower time bound, and within the output-token range. Input remains measured actual only.
+
+The separately recorded post-design-to-post-plan planning and re-estimation delta of 4 turns, 10m 27.118s, 9,204,016 input tokens, and 23,898 output tokens remains excluded governance overhead where attribution is possible. The candidate cumulative output total of 5,971,557 is below the 1,000,000,000-token stop gate, so autonomous work may continue without owner review under that gate.
+
 ## Evidence
 
 The decision uses the completed prototype work on rollout statistics, persisted title updates, recovery behavior, fleet portability, and the Rust multi-architecture assessment. Private task identifiers are intentionally omitted from the public repository.

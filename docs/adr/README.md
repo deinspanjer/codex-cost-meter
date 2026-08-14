@@ -9,5 +9,6 @@ Decisions are ordered by dependency and adoption, not by the date this repositor
 | [0003](0003-use-session-index-updated-at-as-the-high-water-mark.md) | Accepted | Use session-index `updated_at` as the high-water mark |
 | [0004](0004-preserve-the-python-prototype-and-port-to-rust.md) | Accepted | Preserve the Python prototype and port the active tool to Rust |
 | [0005](0005-use-native-user-schedulers-with-bounded-status.md) | Accepted | Use native user schedulers with bounded status |
+| [0006](0006-use-current-user-windows-task-scheduler.md) | Accepted | Use current-user Windows Task Scheduler for idle updates |
 
 Later decisions may amend or supersede these records; do not rewrite an accepted decision to hide a changed direction.
