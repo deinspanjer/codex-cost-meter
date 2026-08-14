@@ -1,58 +1,52 @@
 # Developer guide
 
-## Status
+## v0.1 architecture
 
-The active Rust implementation has not been scaffolded. The existing behavior is preserved under [`python-prototype/`](python-prototype/) as a reference, not as the module structure the port must copy.
+One Rust 2024 crate produces one read-only `codex-cost-meter` binary. `cli` parses `report`; `rollout::discovery` bounds and indexes JSONL without following directory symlinks; `rollout::analysis` attributes usage and preserves ambiguity; `pricing` embeds date-aware rates; `report` aggregates a root and descendants; and `output` renders sanitized human or structured JSON output. `data/model-prices.json` is the built-in catalog.
 
-See the [Python prototype developer guide](python-prototype/DEVELOPERS.md) for its architecture, tests, and implementation lessons.
+Exact-ID reporting reads rollout JSONL plus an optional `session_index.jsonl` name; it deliberately does not need SQLite. The [`python-prototype/`](python-prototype/) directory is historical reference only, not the active architecture.
 
-## Rust direction
+## Build and test
 
-Start with one Rust 2024 crate and one run-once executable. Split crates only when a demonstrated ownership, reuse, or build boundary makes the project simpler.
+Local prerequisites are macOS with Xcode Command Line Tools (`lipo` and `codesign`), Rust 1.97.1 through `rustup`, and `just`. Before `just package`, install both supported targets:
 
-Initial targets are:
+```text
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+```
 
-- macOS arm64
-- macOS x86_64
-- Windows x64
+Use focused commands while iterating:
 
-The operating system owns scheduling. LaunchAgent/Jamf on macOS and Task Scheduler/Intune or MECM on Windows are packaging concerns, not daemon behavior to embed in the executable.
+```text
+just test-filter report::tests
+just test-filter output::tests
+just test-version
+just check
+just package
+```
 
-Keep platform-specific code limited to storage locations, file locking, and filesystem replacement semantics. Rollout parsing, pricing, selection, high-water tracking, and title formatting should remain shared.
+`just check` runs formatting, tests, version-tool tests, and warnings-denied Clippy. `just package` builds both macOS slices, creates a Universal 2 binary, verifies its architectures and ad-hoc signature, and writes a deterministic archive plus checksum under `target/release/`.
 
-## Compatibility decisions
+Unit tests live beside the behavior they protect; `tests/report_cli.rs` covers command dispatch, home resolution, output, errors, and hardening. Keep tests focused on behavioral invariants, use temporary Codex homes, and keep input handling non-panicking and bounded.
 
-The port begins with the behavior recorded in the [architectural decision index](docs/adr/README.md):
+## Release and phase gates
 
-1. Read task metadata from SQLite and usage from rollout JSONL.
-2. Persist title changes to both SQLite and `session_index.jsonl`.
-3. Use session-index `updated_at` as the update and repricing high-water mark.
-4. Preserve the prototype and move the active implementation to Rust.
+`Cargo.toml` is the version source. Immediately before `just bump`, keep `[Unreleased]` concise and nonempty; the command creates a new empty `[Unreleased]` while rotating its entry into a date-free release heading. `just bump major`, `minor`, or `patch` calculates the next SemVer, while an exact selector such as `just bump 1.0.0` supports an intentional major boundary. A version-changing protected-branch merge validates both macOS architectures, packages, ad-hoc-signs, checksums, tags, and publishes the archive; an unchanged version only validates.
 
-These are internal Codex storage formats, not a supported extension API. Verify behavior against the installed Codex version before changing the compatibility contract.
+Before a phase or release closes, require self, task, and final review; focused and full validation; durable documentation uplift; accounting; and the [release-decider rubric](docs/release/owner-approval-rubric.md). The maintainability review checks requirement traceability, focused tests, proportionate module/dependency/test growth, current consumers for abstractions, and explicit bounded follow-ups. Stop for owner review under the program-stop conditions in [ADR 0004](docs/adr/0004-preserve-the-python-prototype-and-port-to-rust.md).
 
-## Development workflow
+## Documentation placement
 
-Build, test, lint, and release commands will be added when the Rust crate exists. Until then, the only executable checks belong to the [Python prototype](python-prototype/DEVELOPERS.md#verification).
-
-## Documentation placement rules
-
-- `README.md` is the short entry point: purpose, status, capabilities, and links.
-- `USERS.md` contains Rust operator workflows, commands, safety, and troubleshooting.
-- `DEVELOPERS.md` contains Rust architecture, setup, implementation standards, verification, and contributor guidance.
-- `TODO.md` contains future work only; completed behavior belongs in the other documents.
-- Python-specific guidance belongs under `python-prototype/` and is linked from the corresponding root audience document.
-- Focused decisions live under `docs/adr/` and are linked from the audience document that needs them.
-- `AGENTS.md` contains agent instructions, not project documentation.
-
-### Change matrix
+| Document | Canonical content |
+| --- | --- |
+| `README.md` | Entry point, capability summary, and links |
+| `USERS.md` | Installation, runtime behavior, privacy, and troubleshooting |
+| `DEVELOPERS.md` | Architecture, tooling, tests, release process, and these rules |
+| `TODO.md` | Actionable future work only |
 
 | Change | Update |
 | --- | --- |
-| User-visible behavior or commands | `USERS.md` |
-| Architecture, storage contract, or contributor workflow | `DEVELOPERS.md` |
-| Project purpose, headline status, or navigation | `README.md` |
-| New or removed future work | `TODO.md` |
-| Durable decision with meaningful alternatives or consequences | `docs/adr/` and a link from `DEVELOPERS.md` |
-| Python prototype behavior | Corresponding document under `python-prototype/` |
-| Agent-only workflow instruction | `AGENTS.md` |
+| CLI flag, environment variable, or operator-visible error | `USERS.md` (and this guide when developer-impacting) |
+| User workflow or major capability | `README.md` and `USERS.md`, plus this guide for implementation/release impact |
+| Internal refactor or developer tooling/tests | This guide |
+| Durable decision | `docs/adr/` and an appropriate link |
+| Deferred work or design question | `TODO.md` |
