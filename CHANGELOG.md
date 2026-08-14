@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.3.0]
+
+- Add current-user macOS scheduling for idle title updates, with bounded status, circuit breaking, and safe removal or uninstall.
+
 ## [0.2.0]
 
 - Add dry-run and explicit-apply macOS root-task title updates with configurable cost and token metrics, bounded width, and dual-store recovery.

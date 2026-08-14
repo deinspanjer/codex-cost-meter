@@ -336,6 +336,35 @@ The plan has four implementation tasks plus candidate documentation, accounting,
 | Durable docs, validation, final review, correction, and release | 6–14 | 1.5–4 hours | 25k–80k |
 | **Remaining v0.3 total** | **14–34** | **4.75–13.5 hours** | **90k–270k** |
 
+### v0.3.0 candidate-prep accounting snapshot
+
+This snapshot was taken after the `0.3.0` version bump and before final whole-branch review, release-decider work, protected merge, and publication. The selected program root, task title, prompt, local paths, and other task metadata are intentionally omitted from this public record.
+
+The independent prototype reporter measured the whole tree as follows:
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.3 post-plan baseline | 321 | 11h 09m 43.512s | 332,613,311 | 1,286,373 | 333,899,684 |
+| Candidate-prep whole tree | 337 | 11h 52m 52.894s | 359,947,292 | 1,425,901 | 361,373,193 |
+| Raw post-plan delta | 16 | 43m 09.382s | 27,333,981 | 139,528 | 27,473,509 |
+
+No separately attributable post-plan governance lifecycle is excluded at this candidate-prep boundary. Mixed root work is conservatively charged to delivery rather than guessed apart. Against the post-plan remaining-v0.3 forecast of 14–34 turns, 4.75–13.5 summed hours, and 90k–270k output tokens, the raw delivery actual is within the turn and output ranges and below the time range. The selected tree had complete model-price coverage, 334 complete or aborted turns, and 3 incomplete turns; its known estimated cost was $220.61. Its absolute whole-tree output total, 1,425,901 tokens, remains below the 1,000,000,000-output-token program stop gate.
+
+The `0.3.0` candidate binary produced the following additive, deliberately unfiltered root-task report immediately afterwards:
+
+| Scope | Rollouts | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Known estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 1 | 45 (44 complete, 1 incomplete) | 177,976,163 | 174,504,704 | 483,183 | 182,874 | 443m 30.353s | $119.11 |
+| Whole tree | 77 | 337 (334 complete, 3 incomplete) | 360,468,101 | 349,047,040 | 1,427,029 | 557,220 | 712m 52.894s | $220.82+ |
+
+| Model | Turns | Output tokens | Known estimated cost |
+| --- | ---: | ---: | ---: |
+| `gpt-5.6-sol` | 102 | 866,771 | $193.56 |
+| `gpt-5.6-terra` | 71 | 543,162 | $26.70 |
+| `codex-auto-review` | 164 | 17,096 | $0.57 |
+
+The binary scan skipped oversized JSONL records, so the whole-tree complete estimate is unavailable and the displayed known cost is a lower bound; no model was unpriced. Its slightly later whole-tree output total remains below the same absolute stop gate. The difference from the independent snapshot is live local task state advancing between read-only scans, not a filtered accounting adjustment.
+
 
 ## Evidence
 
