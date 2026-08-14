@@ -76,6 +76,18 @@ class VersionToolTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.run_tool("verify", success=False)
+
+    def test_verify_uses_the_unsourced_root_package_entry(self):
+        (self.root / "Cargo.lock").write_text(
+            "version = 4\n\n"
+            "[[package]]\nname = \"fixture\"\nversion = \"0.0.0\"\n"
+            "source = \"registry+https://example.invalid/index\"\n\n"
+            "[[package]]\nname = \"fixture\"\nversion = \"9.9.9\"\n",
+            encoding="utf-8",
+        )
+        self.run_tool("verify", success=False)
+
+    def test_verify_accepts_matching_unsourced_root_package_entry(self):
         (self.root / "Cargo.lock").write_text(
             "version = 4\n\n[[package]]\nname = \"fixture\"\nversion = \"0.0.0\"\n",
             encoding="utf-8",

@@ -86,7 +86,12 @@ def lock_matches(root, name, version):
     for block in re.findall(r"(?ms)^\[\[package\]\]\s*$.*?(?=^\[\[package\]\]|\Z)", lock.read_text(encoding="utf-8")):
         lock_name = re.search(r'(?m)^name\s*=\s*"([^"]+)"\s*$', block)
         lock_version = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', block)
-        if lock_name and lock_version and lock_name.group(1) == name:
+        if (
+            lock_name
+            and lock_version
+            and lock_name.group(1) == name
+            and not re.search(r"(?m)^source\s*=", block)
+        ):
             return lock_version.group(1) == version
     return False
 
