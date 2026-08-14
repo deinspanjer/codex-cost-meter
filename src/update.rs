@@ -318,7 +318,9 @@ fn base_name(row: &ThreadRow, snapshot: &Snapshot) -> String {
         if let Some(name) = nonblank(row.name.as_deref()) {
             return name.into();
         }
-    } else if let Some(title) = title.filter(|title| Some(*title) != prompt) {
+        return normalize_whitespace(prompt.or(title).unwrap_or("Untitled"));
+    }
+    if let Some(title) = title.filter(|title| Some(*title) != prompt) {
         return title.into();
     }
     if let Some(name) = snapshot
@@ -538,6 +540,13 @@ mod tests {
             ("legacy-title", " SQLite title ", None, "legacy", "Prompt"),
             ("legacy-index", "Prompt", None, "legacy", "Prompt"),
             (
+                "paginated-blank",
+                "SQLite title",
+                None,
+                "paginated",
+                "  Prompt   words ",
+            ),
+            (
                 "fallback",
                 "  Prompt   words ",
                 None,
@@ -550,13 +559,21 @@ mod tests {
         }
         index(
             &home,
-            &[("legacy-index", "Index name", OffsetDateTime::now_utc())],
+            &[
+                ("legacy-index", "Index name", OffsetDateTime::now_utc()),
+                (
+                    "paginated-blank",
+                    "Stale index name",
+                    OffsetDateTime::now_utc(),
+                ),
+            ],
         );
         let mut options = options();
         options.thread_ids = vec![
             "paginated".into(),
             "legacy-title".into(),
             "legacy-index".into(),
+            "paginated-blank".into(),
             "fallback".into(),
         ];
 
@@ -568,7 +585,13 @@ mod tests {
                 .iter()
                 .map(|proposal| proposal.old_title.as_str())
                 .collect::<Vec<_>>(),
-            ["SQLite name", "SQLite title", "Index name", "Prompt words"]
+            [
+                "SQLite name",
+                "SQLite title",
+                "Index name",
+                "Prompt words",
+                "Prompt words",
+            ]
         );
     }
 
