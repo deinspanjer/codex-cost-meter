@@ -218,6 +218,48 @@ The published v0.1.0 Universal 2 binary produced this report after release verif
 
 The report also measured 111m 03.1s of descendant agent-turn time, which can overlap. It marked the whole-tree input incomplete because the rollout scan skipped oversized JSONL records; therefore the trailing `+` means the reported whole-tree cost is a lower bound. Pricing was effective 2026-08-06 and used the embedded model proxies recorded by the application.
 
+### v0.2.0 candidate-prep accounting snapshot
+
+This snapshot was taken after the `0.2.0` version bump, local package validation, and temporary-plan removal, but before the final review, owner-persona decision, protected merge, and release checks. The selected program root is resolved from the current Codex task lineage; its identifier, title, prompt, local path, and all other task metadata are intentionally omitted here.
+
+Prototype accounting command (with placeholders in this public record):
+
+```text
+python3 python-prototype/rollout_stats.py <program-root> --codex-home <local-codex-home> --json
+```
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.2 post-plan baseline | 250 | 5h 21m 11.025s | 238,900,661 | 890,051 | 239,790,712 |
+| Candidate-prep whole tree | 288 | 8h 40m 09.835s | 290,975,700 | 1,128,594 | 292,104,294 |
+| Candidate-prep raw delta | 38 | 3h 18m 58.810s | 52,075,039 | 238,543 | 52,313,582 |
+
+The raw delta is the candidate-prep delivery actual to date: implementation, ordinary reviews, validation, durable documentation, release preparation, and corrective work. Against the post-plan remaining-v0.2 forecast of 38–78 turns, 8–20 summed hours, and 150k–450k output tokens, it has reached the lower turn bound, remains below the time range, and is within the output-token range. It is not a final milestone actual because the remaining review, owner, merge, and release work has not yet occurred.
+
+No separately attributable re-estimation or accounting-capture lifecycle occurred after the post-plan baseline; direct reporter invocations do not create an agent-turn lifecycle. No owner-persona or release-decider lifecycle had run at this candidate-prep boundary. Accordingly, separately excluded governance overhead is zero in this snapshot; any small mixed-turn capture work is conservatively retained in the raw delivery delta rather than guessed apart. Future separately attributable governance work remains excluded from estimate-versus-actual while still contributing to the absolute stop check.
+
+The prototype saw complete priced model data for the selected tree: 54 rollouts, 285 complete/aborted turns and 3 incomplete turns, with known estimated cost of $180.22. Its absolute whole-tree output total, 1,128,594 tokens, was below the 1,000,000,000-output-token program stop gate.
+
+The v0.2.0 candidate binary self-report is additive and deliberately unfiltered: it includes the root and every linked descendant regardless of whether a lifecycle is accountable delivery or excluded governance work. Candidate command (placeholders preserve the public sanitization format):
+
+```text
+target/universal2/release/codex-cost-meter report <program-root> --codex-home <local-codex-home> --json
+```
+
+| Scope | Rollouts | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 1 | 43 (42 complete, 1 incomplete) | 136,581,760 | 133,911,552 | 380,883 | 146,180 | 341m 58.427s | $91.73 |
+| Whole tree | 54 | 288 (285 complete, 3 incomplete) | 291,112,195 | 282,023,424 | 1,129,261 | 437,533 | 520m 09.835s | $180.26+ |
+
+| Model | Turns | Output tokens | Known estimated cost |
+| --- | ---: | ---: | ---: |
+| `gpt-5.6-sol` | 96 | 726,864 | $161.25 |
+| `gpt-5.6-terra` | 53 | 388,408 | $18.50 |
+| `codex-auto-review` | 139 | 13,989 | $0.51 |
+
+The candidate scan skipped oversized JSONL records, so its whole-tree complete estimate is unavailable and the displayed cost is a lower bound; no model was unpriced. Its higher immediate whole-tree total of 1,129,261 output tokens remains below the absolute 1,000,000,000-token stop gate. The small difference from the preceding prototype snapshot reflects live local task state advancing between the two read-only scans, not a filtered accounting adjustment.
+
+
 ## Evidence
 
 The decision uses the completed prototype work on rollout statistics, persisted title updates, recovery behavior, fleet portability, and the Rust multi-architecture assessment. Private task identifiers are intentionally omitted from the public repository.
