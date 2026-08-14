@@ -1,7 +1,12 @@
 import argparse
+import gzip
+import hashlib
 from pathlib import Path
 import re
+import shutil
 import subprocess
+import tarfile
+import tempfile
 
 
 VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
@@ -157,6 +162,48 @@ def changed(root, before):
     return previous != version
 
 
+def package(root, binary, output_dir):
+    name, version = read_package(root)
+    verify(root)
+    binary = binary.resolve()
+    if binary.name != name:
+        raise ValueError(f"binary must be named {name}")
+    if not binary.is_file():
+        raise ValueError(f"binary does not exist: {binary}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    archive = output_dir / f"{name}-v{version}-macos-universal2.tar.gz"
+    checksum = archive.with_suffix(archive.suffix + ".sha256")
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        staging = Path(temporary_directory)
+        files = (
+            (binary, name, 0o755),
+            (root / "README.md", "README.md", 0o644),
+            (root / "LICENSE", "LICENSE", 0o644),
+        )
+        for source, member, _ in files:
+            if not source.is_file():
+                raise ValueError(f"package input does not exist: {source}")
+            shutil.copyfile(source, staging / member)
+        with archive.open("wb") as raw_archive:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw_archive, mtime=0) as compressed:
+                with tarfile.open(mode="w", fileobj=compressed) as tar:
+                    for _, member, mode in files:
+                        staged = staging / member
+                        info = tarfile.TarInfo(member)
+                        info.size = staged.stat().st_size
+                        info.mode = mode
+                        info.mtime = info.uid = info.gid = 0
+                        info.uname = info.gname = ""
+                        with staged.open("rb") as source:
+                            tar.addfile(info, source)
+    checksum.write_text(
+        f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
+        encoding="utf-8",
+    )
+    return archive
+
+
 def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -167,6 +214,9 @@ def main():
     notes_parser.add_argument("version")
     changed_parser = commands.add_parser("changed")
     changed_parser.add_argument("--before", required=True)
+    package_parser = commands.add_parser("package")
+    package_parser.add_argument("--binary", type=Path, required=True)
+    package_parser.add_argument("--output-dir", type=Path, required=True)
     commands.add_parser("verify")
     arguments = parser.parse_args()
     root = Path.cwd()
@@ -179,6 +229,8 @@ def main():
             print(notes(root, arguments.version), end="")
         elif arguments.command == "changed":
             print(str(changed(root, arguments.before)).lower())
+        elif arguments.command == "package":
+            print(package(root, arguments.binary, arguments.output_dir))
         else:
             verify(root)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

@@ -1,4 +1,5 @@
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,10 +17,12 @@ class VersionToolTests(unittest.TestCase):
     def tearDown(self):
         self.temporary_directory.cleanup()
 
-    def write_project(self, version="0.0.0", unreleased="- Initial release work\n"):
+    def write_project(
+        self, name="fixture", version="0.0.0", unreleased="- Initial release work\n"
+    ):
         (self.root / "Cargo.toml").write_text(
             "[package]\n"
-            "name = \"fixture\"\n"
+            f"name = \"{name}\"\n"
             f"version = \"{version}\"\n"
             "edition = \"2024\"\n"
             "\n[package.metadata.fixture]\n"
@@ -32,6 +35,8 @@ class VersionToolTests(unittest.TestCase):
             "# Changelog\n\n## [Unreleased]\n\n" + unreleased,
             encoding="utf-8",
         )
+        (self.root / "README.md").write_text("# Fixture\n", encoding="utf-8")
+        (self.root / "LICENSE").write_text("MIT\n", encoding="utf-8")
 
     def run_tool(self, *arguments, success=True):
         result = subprocess.run(
@@ -115,6 +120,20 @@ class VersionToolTests(unittest.TestCase):
         self.assertEqual(self.run_tool("changed", "--before", before).stdout.strip(), "true")
         self.git("tag", "v0.1.0")
         self.assertEqual(self.run_tool("changed", "--before", before).stdout.strip(), "false")
+
+    def test_package_contains_only_the_release_binary_and_documents(self):
+        self.write_project(name="codex-cost-meter")
+        binary = self.root / "codex-cost-meter"
+        binary.write_bytes(b"fixture binary")
+        (self.root / "Cargo.lock").write_text(
+            "version = 4\n\n[[package]]\nname = \"codex-cost-meter\"\nversion = \"0.0.0\"\n",
+            encoding="utf-8",
+        )
+        output = self.root / "output"
+        self.run_tool("package", "--binary", binary, "--output-dir", output)
+        archive = output / "codex-cost-meter-v0.0.0-macos-universal2.tar.gz"
+        with tarfile.open(archive, "r:gz") as package:
+            self.assertEqual(package.getnames(), ["codex-cost-meter", "README.md", "LICENSE"])
 
     def git(self, *arguments):
         return subprocess.run(

@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: macos-15
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+      - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - run: python3 scripts/version.py verify
+      - id: version
+        run: echo "changed=$(python3 scripts/version.py changed --before '${{ github.event.before }}')" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+      - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - run: rustup target add ${{ matrix.target }}
+      - run: just check
+      - run: cargo build --release --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: codex-cost-meter-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/codex-cost-meter
+
+  publish:
+    needs: [version, build]
+    if: needs.version.outputs.changed == 'true'
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+      - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - run: rustup target add x86_64-apple-darwin
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          path: artifacts
+      - name: Merge, package, and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary=target/universal2/release/codex-cost-meter
+          mkdir -p target/universal2/release target/release
+          lipo -create -output "$binary" \
+            artifacts/codex-cost-meter-aarch64-apple-darwin/codex-cost-meter \
+            artifacts/codex-cost-meter-x86_64-apple-darwin/codex-cost-meter
+          test "$(lipo -archs "$binary" | tr ' ' '\n' | sort | tr '\n' ' ')" = "arm64 x86_64 "
+          codesign --force --sign - "$binary"
+          codesign --verify --strict "$binary"
+          archive=$(python3 scripts/version.py package --binary "$binary" --output-dir target/release)
+          checksum="$archive.sha256"
+          version=$(python3 scripts/version.py current)
+          tag="v$version"
+          notes=$(mktemp)
+          python3 scripts/version.py notes "$version" > "$notes"
+          published=false
+          cleanup() {
+            status=$?
+            if [ "$published" = false ]; then
+              gh release delete "$tag" --yes || true
+              git push origin ":refs/tags/$tag" || true
+            fi
+            rm -f "$notes"
+            exit "$status"
+          }
+          trap cleanup EXIT
+          gh release create "$tag" "$archive" "$checksum" --draft --title "codex-cost-meter v$version" --notes-file "$notes"
+          test "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true
+          test "$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)" = "$(printf '%s\n%s' "$(basename "$archive")" "$(basename "$checksum")" | sort)"
+          gh release edit "$tag" --draft=false
+          published=true
