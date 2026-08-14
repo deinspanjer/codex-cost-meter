@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -71,6 +72,20 @@ impl Fixture {
             )
             .unwrap()
     }
+
+    fn effective_index_names(&self) -> BTreeMap<String, String> {
+        fs::read_to_string(self.index())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .map(|entry| {
+                (
+                    entry["id"].as_str().unwrap().to_owned(),
+                    entry["thread_name"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
 }
 
 fn rollout(home: &Path, id: &str, parent: Option<&str>) {
@@ -138,14 +153,9 @@ fn apply_updates_only_the_root_in_both_stores() {
         fixture.names("child"),
         ("Stored child".into(), "Child task".into())
     );
-    assert!(
-        fs::read_to_string(fixture.index())
-            .unwrap()
-            .lines()
-            .last()
-            .unwrap()
-            .contains("\"id\":\"root\"")
-    );
+    let index = fixture.effective_index_names();
+    assert_eq!(index["root"], root.0);
+    assert_eq!(index["child"], "Child task");
 }
 
 #[test]
