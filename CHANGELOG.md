@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.4.0]
+
+- Add native Windows x64 reporting and title updates with a checksummed release archive.
+
 ## [0.3.0]
 
 - Add current-user macOS scheduling for idle title updates, with bounded status, circuit breaking, and safe removal or uninstall.

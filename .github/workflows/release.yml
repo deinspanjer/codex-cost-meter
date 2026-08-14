@@ -35,8 +35,16 @@ jobs:
         include:
           - runner: macos-15
             target: aarch64-apple-darwin
+            python: python3
+            artifact: target/aarch64-apple-darwin/release/codex-cost-meter
           - runner: macos-15-intel
             target: x86_64-apple-darwin
+            python: python3
+            artifact: target/x86_64-apple-darwin/release/codex-cost-meter
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            python: python
+            artifact: target/x86_64-pc-windows-msvc/release/codex-cost-meter.exe
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -47,13 +55,14 @@ jobs:
       - run: rustup target add ${{ matrix.target }}
       - run: cargo fmt --check
       - run: cargo test
-      - run: python3 -m unittest scripts/test_version.py -v
+      - run: ${{ matrix.python }} -m unittest scripts/test_version.py -v
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --release --target ${{ matrix.target }}
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: codex-cost-meter-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/codex-cost-meter
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
 
   publish:
     needs: [version, build]
@@ -87,6 +96,10 @@ jobs:
           codesign --verify --strict "$binary"
           archive=$(python3 scripts/version.py package --binary "$binary" --output-dir target/release)
           checksum="$archive.sha256"
+          windows_archive=$(python3 scripts/version.py package-windows \
+            --binary artifacts/codex-cost-meter-x86_64-pc-windows-msvc/codex-cost-meter.exe \
+            --output-dir target/release)
+          windows_checksum="$windows_archive.sha256"
           version=$(python3 scripts/version.py current)
           tag="v$version"
           notes=$(mktemp)
@@ -104,8 +117,10 @@ jobs:
           trap cleanup EXIT
           gh release create "$tag" --draft --target "$GITHUB_SHA" --title "codex-cost-meter v$version" --notes-file "$notes"
           draft_created=true
-          gh release upload "$tag" "$archive" "$checksum"
+          gh release upload "$tag" "$archive" "$checksum" "$windows_archive" "$windows_checksum"
           test "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true
-          test "$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)" = "$(printf '%s\n%s' "$(basename "$archive")" "$(basename "$checksum")" | sort)"
+          test "$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)" = "$(printf '%s\n%s\n%s\n%s' \
+            "$(basename "$archive")" "$(basename "$checksum")" \
+            "$(basename "$windows_archive")" "$(basename "$windows_checksum")" | sort)"
           gh release edit "$tag" --draft=false
           draft_created=false

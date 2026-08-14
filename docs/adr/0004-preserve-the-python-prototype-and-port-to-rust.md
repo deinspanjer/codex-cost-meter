@@ -39,7 +39,7 @@ Also stop all autonomous work when cumulative output-token usage for the program
 
 ## Consequences
 
-- Release work must produce and sign native artifacts for each supported architecture.
+- Release work must produce native artifacts and checksums for each supported architecture. Before v1.0, a Windows archive may remain unsigned when its checksum and trust limitation are disclosed; production macOS and Windows signing remains a v1.0 readiness goal.
 - Windows and Linux need locking and scheduling implementations distinct from macOS while sharing report and update behavior.
 - New product work belongs in Rust; the Python prototype remains runnable for comparison and regression discovery.
 - The port remains coupled to version-sensitive internal Codex storage until a supported API replaces it.
@@ -386,6 +386,63 @@ The rebuilt `0.3.0` candidate binary produced the following additive, deliberate
 
 The binary scan skipped oversized JSONL records, so the whole-tree complete estimate is unavailable and the displayed known cost is a lower bound; no model was unpriced. Its slightly later whole-tree output total also remains below the same absolute stop gate. The difference from the independent snapshot is live local task state advancing between read-only scans, not a filtered accounting adjustment.
 
+
+## v0.4 post-design baseline and forecast
+
+The v0.4 Windows application boundary was captured after the just-in-time design and before detailed planning:
+
+| Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| ---: | ---: | ---: | ---: | ---: |
+| 357 | 12h 36m 52.223s | 394,616,391 | 1,528,428 | 396,144,819 |
+
+This is the post-design baseline for v0.4. The design keeps shared `report` and `update` behavior in the single crate, omits the macOS scheduler surface from Windows at compile time, packages one native Windows x64 executable, and adds native Windows CI. It adds no scheduler abstraction, Windows scheduling placeholder, installer, signing infrastructure, or Windows arm64 build. Total program output remained below the 1,000,000,000-token stop gate.
+
+| Remaining v0.4 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Detailed implementation planning | 3–8 | 0.5–2 hours | 15k–45k |
+| Windows application boundary | 5–12 | 1–3 hours | 20k–60k |
+| Package and native automation | 6–16 | 1.5–4 hours | 30k–90k |
+| Closeout, reviews, corrections, and release | 8–20 | 2–5 hours | 40k–120k |
+| **Remaining v0.4 total** | **22–56** | **5–14 hours** | **105k–315k** |
+
+Accounting capture, re-estimation, and release-decider work remain excluded governance overhead for feature estimate-versus-actual comparisons while still counting toward the absolute stop gate.
+
+### v0.4 planning actual and post-plan forecast
+
+The finalized three-task plan produced this cumulative post-plan baseline:
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Post-design whole tree | 357 | 12h 36m 52.223s | 394,616,391 | 1,528,428 | 396,144,819 |
+| Post-plan whole tree | 360 | 12h 42m 50.581s | 397,183,300 | 1,538,239 | 398,721,539 |
+| Planning delta | 3 | 5m 58.358s | 2,566,909 | 9,811 | 2,576,720 |
+
+The plan retains separate application-boundary, package/automation, and durable-closeout responsibilities. Beginning after the post-plan snapshot, its execution forecast is:
+
+| Remaining v0.4 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Windows application boundary | 5–12 | 1–3 hours | 20k–60k |
+| Package and native automation | 6–16 | 1.5–4 hours | 30k–90k |
+| Closeout, reviews, corrections, and release | 8–20 | 2–5 hours | 40k–120k |
+| **Remaining v0.4 total** | **19–48** | **4.5–12 hours** | **90k–270k** |
+
+The planning delta counts against the post-design forecast. The accounting capture and re-estimation work are excluded governance overhead; input tokens are measured actual only. Total program output remained below the absolute stop gate.
+
+### v0.4.0 final candidate accounting snapshot
+
+This snapshot follows candidate validation and the `0.4.0` version bump, and precedes final review, release-decider work, protected merge, and publication. The selected program root and other task metadata are intentionally omitted from this public record.
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.4 post-plan baseline | 360 | 12h 42m 50.581s | 397,183,300 | 1,538,239 | 398,721,539 |
+| Final candidate whole tree | 594 | 13h 03m 52.687s | 1,413,924,408 | 4,183,846 | 1,418,108,254 |
+| Raw post-plan delta | 234 | 21m 02.106s | 1,016,741,108 | 2,645,607 | 1,019,386,715 |
+
+The raw delta is a conservative candidate delivery comparison because no separately attributable excluded governance lifecycle is available from the aggregate reporter at this mixed-turn boundary. Against the post-plan forecast of 19–48 turns, 4.5–12 summed hours, and 90k–270k output tokens, it exceeded the turn ceiling by 186 turns and the output-token ceiling by 2,375,607 tokens, while finishing 4h 08m 57.894s below the time range. Input remains measured actual only.
+
+The separately recorded post-design-to-post-plan planning and re-estimation delta was 3 turns, 5m 58.358s, 2,566,909 input tokens, and 9,811 output tokens. Accountant capture, re-estimation, and later fixed-rubric release-decider work remain excluded where their lifecycles can be attributed separately; the absolute stop gate includes all work. Candidate cumulative output was 4,183,846 tokens, below the 1,000,000,000-token stop gate.
+
+The published v0.4 binary's additive, unfiltered self-report remains a post-publication milestone artifact rather than being guessed into this pre-review candidate boundary.
 
 ## Evidence
 

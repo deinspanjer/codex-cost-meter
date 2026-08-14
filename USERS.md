@@ -2,7 +2,11 @@
 
 ## Install and run
 
-Download the macOS Universal 2 archive and its `.sha256` checksum from the release, verify the checksum, and extract the archive. Place the binary in a directory you choose. If you have no preference, `~/.codex/codex-cost-meter` is a concrete location:
+Download the archive for your platform and its `.sha256` checksum from the release, verify the checksum, and extract the archive. Place the binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or `$env:USERPROFILE\.codex\codex-cost-meter.exe` in PowerShell on Windows.
+
+On macOS, verify the download with `shasum -a 256 -c <CHECKSUM_FILE>`. On Windows, compare `(Get-FileHash <ZIP_FILE> -Algorithm SHA256).Hash` with the hash at the start of the downloaded checksum file. The Windows ZIP contains `codex-cost-meter.exe`, `README.md`, and `LICENSE`.
+
+macOS examples:
 
 ```text
 ~/.codex/codex-cost-meter report <THREAD_ID>
@@ -10,9 +14,17 @@ Download the macOS Universal 2 archive and its `.sha256` checksum from the relea
 ~/.codex/codex-cost-meter report <THREAD_ID> --codex-home <PATH>
 ```
 
-Use bare `codex-cost-meter` only when you place the binary in an existing directory on `PATH`; v0.3 does not create or use `~/.codex/bin`. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then `~/.codex`. `report` is read-only and reports that exact ID and its linked descendants without SQLite; `update` is dry-run by default and reads the supported local SQLite state only for title-update selection or application (details below).
+Windows uses the same `report` and `update` arguments with `codex-cost-meter.exe`. In PowerShell, replace the placeholder before running:
 
-The archive is ad-hoc signed, not Developer ID signed or notarized. Gatekeeper can therefore require a user decision before first launch. Verify the downloaded checksum and use your organization's macOS trust process; production signing is planned for a later release.
+```text
+$threadId = "<THREAD_ID>"
+& "$env:USERPROFILE\.codex\codex-cost-meter.exe" report $threadId
+& "$env:USERPROFILE\.codex\codex-cost-meter.exe" update --thread-id $threadId
+```
+
+Use the bare executable name only when you place it in an existing directory on `PATH`; v0.4 does not create or use a `bin` directory under the Codex home. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then the platform home plus `.codex`. `report` is read-only and reports that exact ID and its linked descendants without SQLite; `update` is dry-run by default and reads the supported local SQLite state only for title-update selection or application (details below).
+
+The macOS archive is ad-hoc signed, not Developer ID signed or notarized. Gatekeeper can therefore require a user decision before first launch. The Windows executable is unsigned, so Windows or organizational controls can also require an explicit trust decision or block it. Verify the downloaded checksum and follow your organization's trust process; the checksum detects transfer corruption or tampering but does not establish publisher identity. Production signing is planned for a later release.
 
 ## Read the report
 
@@ -37,9 +49,9 @@ Titles default to `--title-metrics cost,total-tokens` and `--max-width 65`. Choo
 
 For dry runs, the tool opens Codex's state database read-only. With `--apply`, it locks one updater process, updates both `title` and `name` in a single SQLite transaction, then appends durable JSONL entries to `session_index.jsonl`. It supports `state_5.sqlite` directly under the selected Codex home or under `sqlite/`, and requires the `threads` columns `id`, `title`, `name`, `history_mode`, `updated_at`, and `first_user_message`; extra schema is accepted. SQLite and JSONL are deliberately not cross-store atomic: if index writing fails after a committed transaction, the command fails and a later identical `--apply` remains eligible to repair both stores. A busy updater, database/schema problem, or unreadable index is a safe actionable failure.
 
-## Schedule idle title updates
+## Schedule idle title updates on macOS
 
-On macOS, `schedule install` creates one current-user LaunchAgent. It runs when loaded and every five minutes, and it applies updates only to eligible idle root tasks. It uses these defaults: `--idle-minutes 15`, `--limit 500`, `--max-runtime 4m`, `--max-width 65`, and `--title-metrics cost,total-tokens`.
+Windows scheduling is not included in v0.4; run `report` or `update` directly there. On macOS, `schedule install` creates one current-user LaunchAgent. It runs when loaded and every five minutes, and it applies updates only to eligible idle root tasks. It uses these defaults: `--idle-minutes 15`, `--limit 500`, `--max-runtime 4m`, `--max-width 65`, and `--title-metrics cost,total-tokens`.
 
 ```text
 ~/.codex/codex-cost-meter schedule install
@@ -67,3 +79,4 @@ Reports read local Codex JSONL files. Reports, update previews, warnings, and ru
 - **Scheduled updates are paused** — use `schedule status` for the fixed remediation, correct the reported storage, schema, or permission problem, then run `schedule resume`.
 - **Scheduled job no longer starts** — if the binary was moved or deleted, run `schedule remove` if possible and install again from its new location.
 - **macOS blocks execution** — recheck the archive checksum, then follow your organization’s Gatekeeper policy. The ad-hoc signature does not establish publisher identity.
+- **Windows blocks execution** — recheck the ZIP checksum, then follow your organization’s application-control or SmartScreen policy. The unsigned executable does not establish publisher identity.

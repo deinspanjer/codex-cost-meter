@@ -1,8 +1,11 @@
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Output},
 };
+
+#[cfg(unix)]
+use std::path::PathBuf;
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -97,6 +100,7 @@ fn report_uses_codex_home_environment_when_no_flag_is_present() {
     assert!(output.stderr.is_empty());
 }
 
+#[cfg(not(windows))]
 #[test]
 fn report_uses_home_codex_directory_as_the_final_default() {
     let root = TempDir::new().unwrap();
@@ -116,8 +120,9 @@ fn report_uses_home_codex_directory_as_the_final_default() {
     assert!(output.stderr.is_empty());
 }
 
+#[cfg(windows)]
 #[test]
-fn report_does_not_use_userprofile_as_a_codex_home_fallback() {
+fn report_uses_userprofile_as_a_codex_home_fallback() {
     let root = TempDir::new().unwrap();
     fixture_home_at(&root.path().join(".codex"));
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
@@ -128,9 +133,44 @@ fn report_does_not_use_userprofile_as_a_codex_home_fallback() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    assert!(stderr(&output).contains("HOME is not set"));
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["rollout"]["rollout_id"],
+        "root"
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn report_uses_complete_home_drive_and_path_as_a_codex_home_fallback() {
+    let root = TempDir::new().unwrap();
+    fixture_home_at(&root.path().join(".codex"));
+    let root = root.path().to_str().unwrap();
+    let Some((drive, path)) = root
+        .get(..2)
+        .zip(root.get(2..))
+        .filter(|(drive, path)| drive.ends_with(':') && path.starts_with('\\'))
+    else {
+        return;
+    };
+
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "root", "--json"])
+        .env_remove("CODEX_HOME")
+        .env_remove("HOME")
+        .env_remove("USERPROFILE")
+        .env("HOMEDRIVE", drive)
+        .env("HOMEPATH", path)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["rollout"]["rollout_id"],
+        "root"
+    );
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
