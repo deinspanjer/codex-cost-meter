@@ -10,7 +10,7 @@ Download the macOS Universal 2 archive and its `.sha256` checksum from the relea
 ~/.codex/codex-cost-meter report <THREAD_ID> --codex-home <PATH>
 ```
 
-Use bare `codex-cost-meter` only when you place the binary in an existing directory on `PATH`; v0.2 does not create or use `~/.codex/bin`. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then `~/.codex`. `report` is read-only and reports that exact ID and its linked descendants without SQLite; `update` is dry-run by default and reads the supported local SQLite state only for title-update selection or application (details below).
+Use bare `codex-cost-meter` only when you place the binary in an existing directory on `PATH`; v0.3 does not create or use `~/.codex/bin`. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then `~/.codex`. `report` is read-only and reports that exact ID and its linked descendants without SQLite; `update` is dry-run by default and reads the supported local SQLite state only for title-update selection or application (details below).
 
 The archive is ad-hoc signed, not Developer ID signed or notarized. Gatekeeper can therefore require a user decision before first launch. Verify the downloaded checksum and use your organization's macOS trust process; production signing is planned for a later release.
 
