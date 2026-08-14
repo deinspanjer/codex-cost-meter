@@ -2,9 +2,9 @@
 
 ## Overview
 
-`codex-cost-meter` is a small macOS utility for exact-thread usage and estimated API-list-price cost. Its capabilities include descendant accounting, bounded root-title updates, and a current-user macOS schedule for eligible idle updates. It is diagnostic, not a ChatGPT billing record.
+`codex-cost-meter` is a small cross-platform utility for exact-thread usage and estimated API-list-price cost. Its capabilities include descendant accounting and bounded root-title updates; macOS also supports a current-user schedule for eligible idle updates. It is diagnostic, not a ChatGPT billing record.
 
-v0.3 supports macOS 14+ as a Universal 2 archive for Apple Silicon and Intel.
+v0.4 supports macOS 14+ as a Universal 2 archive for Apple Silicon and Intel, plus Windows x64 as a native archive. Windows scheduling is planned for v0.5.
 
 ## Documentation
 
