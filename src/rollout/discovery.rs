@@ -38,8 +38,6 @@ pub(crate) struct DiscoveryWarning {
     pub error: io::ErrorKind,
 }
 
-pub(crate) type DiscoveryError = std::convert::Infallible;
-
 #[derive(Default)]
 pub(crate) struct LineReadSummary {
     pub oversized_lines_skipped: usize,
@@ -68,7 +66,7 @@ pub(crate) struct RolloutIndex {
 }
 
 impl RolloutIndex {
-    pub(crate) fn build(home: &Path) -> Result<Self, DiscoveryError> {
+    pub(crate) fn build(home: &Path) -> Self {
         let mut candidates = Vec::new();
         let mut warnings = Vec::new();
         let mut oversized_lines_skipped = 0;
@@ -98,13 +96,13 @@ impl RolloutIndex {
             child_ids.sort();
         }
 
-        Ok(Self {
+        Self {
             records,
             children,
             warnings,
             oversized_lines_skipped,
             malformed_lines_skipped,
-        })
+        }
     }
 
     pub(crate) fn record(&self, id: &str) -> Option<&RolloutRecord> {
@@ -459,7 +457,7 @@ mod tests {
             )],
         );
 
-        let index = RolloutIndex::build(home.path()).unwrap();
+        let index = RolloutIndex::build(home.path());
         assert_eq!(
             index.descendants("root").unwrap(),
             vec!["child", "grandchild"]
@@ -506,7 +504,7 @@ mod tests {
             )],
         );
 
-        let index = RolloutIndex::build(home.path()).unwrap();
+        let index = RolloutIndex::build(home.path());
         assert_eq!(index.record("root").unwrap().kind, RolloutKind::Root);
         assert_eq!(
             index.record("review").unwrap().kind,
@@ -553,7 +551,7 @@ mod tests {
         )
         .unwrap();
 
-        let index = RolloutIndex::build(home.path()).unwrap();
+        let index = RolloutIndex::build(home.path());
         assert!(index.record("valid").is_some());
         assert_eq!(index.oversized_lines_skipped(), 1);
         assert_eq!(index.malformed_lines_skipped(), 1);
@@ -572,7 +570,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(outside.path(), home.path().join("sessions/link")).unwrap();
 
-        let index = RolloutIndex::build(home.path()).unwrap();
+        let index = RolloutIndex::build(home.path());
         assert!(index.record("hidden").is_none());
     }
 
@@ -590,7 +588,7 @@ mod tests {
             &[meta("b", Some("a"), json!("cli"))],
         );
 
-        let index = RolloutIndex::build(home.path()).unwrap();
+        let index = RolloutIndex::build(home.path());
         assert_eq!(index.descendants("a").unwrap(), vec!["b"]);
     }
 
@@ -623,7 +621,7 @@ mod tests {
     #[test]
     fn missing_roots_produce_an_empty_index() {
         let home = TempDir::new().unwrap();
-        let index = RolloutIndex::build(home.path()).unwrap();
+        let index = RolloutIndex::build(home.path());
         assert!(index.record("missing").is_none());
         assert_eq!(index.descendants("missing"), None);
     }

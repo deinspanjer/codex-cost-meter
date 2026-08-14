@@ -237,7 +237,7 @@ impl Aggregate {
 }
 
 pub(crate) fn build(thread_id: &str, codex_home: &Path) -> Result<Report, ReportError> {
-    let index = RolloutIndex::build(codex_home).unwrap_or_else(|error| match error {});
+    let index = RolloutIndex::build(codex_home);
     let catalog = Catalog::embedded()?;
     build_with_index(thread_id, codex_home, &index, &catalog)
 }
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn unreadable_descendant_keeps_a_partial_tree_report() {
         let home = fixture_home();
-        let index = RolloutIndex::build(home.path()).unwrap();
+        let index = RolloutIndex::build(home.path());
         fs::remove_file(home.path().join("archived_sessions/child.jsonl")).unwrap();
 
         let report =
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn selected_file_disappearing_after_discovery_is_an_error() {
         let home = fixture_home();
-        let index = RolloutIndex::build(home.path()).unwrap();
+        let index = RolloutIndex::build(home.path());
         fs::remove_file(home.path().join("sessions/root.jsonl")).unwrap();
 
         let error = build_with_index("root", home.path(), &index, &Catalog::embedded().unwrap())
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn selected_file_becoming_unreadable_after_discovery_is_an_error() {
         let home = fixture_home();
-        let index = RolloutIndex::build(home.path()).unwrap();
+        let index = RolloutIndex::build(home.path());
         let selected = home.path().join("sessions/root.jsonl");
         let _guard = PermissionsGuard::remove(&selected);
 
