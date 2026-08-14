@@ -157,6 +157,28 @@ Compared with the post-plan forecast of 30–66 turns, 6–16 summed hours, and 
 
 Total program output at this snapshot was 852,852 tokens, below the 1,000,000,000-token stop gate.
 
+## v0.2 post-design baseline and forecast
+
+The cumulative snapshot taken after the just-in-time v0.2 title-update design was finalized was:
+
+| Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| ---: | ---: | ---: | ---: | ---: |
+| 247 | 5h 21m 01.087s | 236,906,552 | 876,736 | 237,783,288 |
+
+This is the post-design baseline for v0.2. The 12 turns, 35.257s, 6,091,343 input tokens, and 23,884 output tokens since the published-v0.1 snapshot include the late v0.1 self-report capture and documentation plus v0.2 design refinement. They are excluded from v0.2 delivery comparisons rather than being divided across mixed task boundaries after the fact. Total program output remained below the 1,000,000,000-token stop gate.
+
+The refined v0.2 design adds one bundled SQLite dependency, three focused modules, one shared report context, dry-run/apply CLI integration, mutation hardening, documentation, and the existing release gates. Beginning after this snapshot, the post-design forecast is:
+
+| Remaining v0.2 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Detailed implementation planning | 6–12 | 0.5–2 hours | 20k–60k |
+| Title composition and shared session-index behavior | 10–22 | 2–5 hours | 35k–110k |
+| SQLite selection, locking, mutation, and recovery | 18–36 | 3–8 hours | 55k–180k |
+| CLI integration, hardening, docs, review, and release | 14–30 | 3–7 hours | 45k–140k |
+| **Remaining v0.2 total** | **48–100** | **8.5–22 hours** | **155k–490k** |
+
+The forecast assumes bundled SQLite builds for both macOS architectures without toolchain intervention, the observed Codex schema still satisfies the required-column contract, disk-full behavior can be tested through bounded I/O failure injection, and scheduling remains outside v0.2. Bounded implementation and review packets should use Terra where available; architectural or unresolved data-integrity decisions remain with Sol.
+
 ## Milestone self-reports
 
 ### v0.1.0 late post-release snapshot
