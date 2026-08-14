@@ -66,6 +66,70 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
+fn help_and_version_describe_the_public_cli_contract() {
+    let binary = env!("CARGO_BIN_EXE_codex-cost-meter");
+    let root_help = Command::new(binary).arg("--help").output().unwrap();
+    let report_help = Command::new(binary)
+        .args(["report", "--help"])
+        .output()
+        .unwrap();
+    let update_help = Command::new(binary)
+        .args(["update", "--help"])
+        .output()
+        .unwrap();
+    let version = Command::new(binary).arg("--version").output().unwrap();
+
+    assert!(root_help.status.success());
+    assert!(root_help.stderr.is_empty());
+    let root_help = String::from_utf8(root_help.stdout).unwrap();
+    assert!(root_help.contains("report"));
+    assert!(root_help.contains("update"));
+
+    assert!(update_help.status.success());
+    assert!(update_help.stderr.is_empty());
+    let update_help = String::from_utf8(update_help.stdout).unwrap();
+    assert!(update_help.contains("Select a task by ID"));
+    assert!(update_help.contains("Apply the proposed title updates"));
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let schedule_help = Command::new(binary)
+            .args(["schedule", "--help"])
+            .output()
+            .unwrap();
+        assert!(schedule_help.status.success());
+        assert!(schedule_help.stderr.is_empty());
+        let schedule_help = String::from_utf8(schedule_help.stdout).unwrap();
+        assert!(schedule_help.contains("Manage scheduled idle task-title updates"));
+        assert!(
+            schedule_help
+                .lines()
+                .all(|line| !line.trim_start().starts_with("run"))
+        );
+
+        let install_help = Command::new(binary)
+            .args(["schedule", "install", "--help"])
+            .output()
+            .unwrap();
+        assert!(install_help.status.success());
+        assert!(install_help.stderr.is_empty());
+        let install_help = String::from_utf8(install_help.stdout).unwrap();
+        assert!(install_help.contains("Minimum idle time"));
+        assert!(install_help.contains("Use this Codex storage directory"));
+    }
+
+    assert!(report_help.status.success());
+    assert!(report_help.stderr.is_empty());
+    let report_help = String::from_utf8(report_help.stdout).unwrap();
+    assert!(report_help.contains("Task ID"));
+    assert!(report_help.contains("--json"));
+
+    assert!(version.status.success());
+    assert!(version.stderr.is_empty());
+    assert!(String::from_utf8(version.stdout).unwrap().contains("0.5.1"));
+}
+
+#[test]
 fn report_json_uses_explicit_codex_home() {
     let home = fixture_home();
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))

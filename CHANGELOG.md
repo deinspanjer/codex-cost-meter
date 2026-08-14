@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.5.1]
+
+- Add first-report onboarding and self-documenting command help.
+
 ## [0.5.0]
 
 - Add current-user Windows Task Scheduler lifecycle management for idle title updates, including bounded status, safe removal, and deferred self-uninstall.
