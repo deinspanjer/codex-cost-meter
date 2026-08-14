@@ -18,6 +18,7 @@ use super::{InstallOptions, Status, StatusError, read_status, resume_status, wri
 const SERVICE: &str = "io.github.deinspanjer.codex-cost-meter.service";
 const TIMER: &str = "io.github.deinspanjer.codex-cost-meter.timer";
 const SYSTEMCTL: &str = "/usr/bin/systemctl";
+const INACTIVE_OR_MISSING_TIMER_EXIT_CODES: [i32; 2] = [3, 4];
 
 pub(crate) struct Paths {
     service: PathBuf,
@@ -116,6 +117,12 @@ pub(crate) enum LifecycleError {
     Enable,
     #[error("could not disable and stop the systemd user timer")]
     Disable,
+    #[error("could not inspect the systemd user timer")]
+    Inspect,
+    #[error("scheduled Codex home must be an absolute path")]
+    CodexHomeNotAbsolute,
+    #[error("scheduled paths must be valid UTF-8 for systemd")]
+    PathNotUtf8,
     #[error("schedule is not installed")]
     MissingTimer,
     #[error("could not remove the systemd service unit")]
@@ -153,6 +160,8 @@ pub(crate) enum LifecycleError {
 #[derive(Clone, Debug)]
 struct CommandOutput {
     success: bool,
+    exit_code: Option<i32>,
+    stdout: Vec<u8>,
 }
 
 trait CommandRunner {
@@ -168,6 +177,8 @@ impl CommandRunner for SystemRunner {
         let output = Command::new(program).args(arguments).output()?;
         Ok(CommandOutput {
             success: output.status.success(),
+            exit_code: output.status.code(),
+            stdout: output.stdout,
         })
     }
 }
@@ -207,9 +218,12 @@ fn install_with_runner(
     options: &InstallOptions,
     runner: &mut impl CommandRunner,
 ) -> Result<(), LifecycleError> {
+    if !options.codex_home.is_absolute() {
+        return Err(LifecycleError::CodexHomeNotAbsolute);
+    }
     let executable = fs::canonicalize(&options.executable)
         .map_err(|source| LifecycleError::CurrentExecutable { source })?;
-    write_unit(paths.service(), &service_unit(options, &executable))?;
+    write_unit(paths.service(), &service_unit(options, &executable)?)?;
     write_unit(paths.timer(), &timer_unit())?;
     if !systemctl(runner, ["--user".into(), "daemon-reload".into()])?.success {
         return Err(LifecycleError::Reload);
@@ -242,11 +256,15 @@ fn inspect_with_runner(
             "--quiet".into(),
             TIMER.into(),
         ],
-    )?
-    .success;
+    )?;
+    if !active.success
+        && !INACTIVE_OR_MISSING_TIMER_EXIT_CODES.contains(&active.exit_code.unwrap_or_default())
+    {
+        return Err(LifecycleError::Inspect);
+    }
     Ok(Inspection {
         installed: paths.service().is_file() && paths.timer().is_file(),
-        active,
+        active: active.success,
         status: read_status(paths.status()).map_err(|source| LifecycleError::Status { source })?,
     })
 }
@@ -255,18 +273,16 @@ fn remove_with_runner(
     paths: &Paths,
     runner: &mut impl CommandRunner,
 ) -> Result<(), LifecycleError> {
-    if paths.timer().is_file()
-        && !systemctl(
-            runner,
-            [
-                "--user".into(),
-                "disable".into(),
-                "--now".into(),
-                TIMER.into(),
-            ],
-        )?
-        .success
-    {
+    let disable = systemctl(
+        runner,
+        [
+            "--user".into(),
+            "disable".into(),
+            "--now".into(),
+            TIMER.into(),
+        ],
+    )?;
+    if !disable.success && !timer_is_not_found(runner)? {
         return Err(LifecycleError::Disable);
     }
     remove_file_if_present(paths.service())
@@ -279,6 +295,20 @@ fn remove_with_runner(
         return Err(LifecycleError::Reload);
     }
     Ok(())
+}
+
+fn timer_is_not_found(runner: &mut impl CommandRunner) -> Result<bool, LifecycleError> {
+    let output = systemctl(
+        runner,
+        [
+            "--user".into(),
+            "show".into(),
+            "--property=LoadState".into(),
+            "--value".into(),
+            TIMER.into(),
+        ],
+    )?;
+    Ok(output.success && output.stdout == b"not-found\n")
 }
 
 fn resume_impl(paths: &Paths) -> Result<(), LifecycleError> {
@@ -312,37 +342,45 @@ fn systemctl(
         .map_err(|source| LifecycleError::Tool { source })
 }
 
-fn service_unit(options: &InstallOptions, executable: &Path) -> String {
+fn service_unit(options: &InstallOptions, executable: &Path) -> Result<String, LifecycleError> {
     let mut arguments = vec![
-        systemd_quote(&executable.as_os_str().to_string_lossy()),
+        systemd_quote_path(executable)?,
         "schedule".into(),
         "run".into(),
         "--codex-home".into(),
-        systemd_quote(&options.codex_home.as_os_str().to_string_lossy()),
+        systemd_quote_path(&options.codex_home)?,
         "--idle-minutes".into(),
-        options.idle_minutes.to_string(),
+        systemd_quote(&options.idle_minutes.to_string()),
         "--limit".into(),
-        options.limit.to_string(),
+        systemd_quote(&options.limit.to_string()),
         "--max-runtime".into(),
-        runtime_argument(options.max_runtime),
+        systemd_quote(&runtime_argument(options.max_runtime)),
         "--max-width".into(),
-        options.max_width.to_string(),
+        systemd_quote(&options.max_width.to_string()),
         "--title-metrics".into(),
         systemd_quote(&options.title_metrics),
     ];
     if let Some(reprice_before) = options.reprice_before {
         arguments.extend([
             "--reprice-before".into(),
-            reprice_before
-                .format(&Rfc3339)
-                .expect("OffsetDateTime always formats as RFC 3339"),
+            systemd_quote(
+                &reprice_before
+                    .format(&Rfc3339)
+                    .expect("OffsetDateTime always formats as RFC 3339"),
+            ),
         ]);
     }
     arguments.push("--apply".into());
-    format!(
+    Ok(format!(
         "[Unit]\nDescription=Codex Cost Meter scheduled update\n\n[Service]\nType=oneshot\nExecStart={}\nStandardOutput=null\nStandardError=null\n",
         arguments.join(" ")
-    )
+    ))
+}
+
+fn systemd_quote_path(path: &Path) -> Result<String, LifecycleError> {
+    path.to_str()
+        .map(systemd_quote)
+        .ok_or(LifecycleError::PathNotUtf8)
 }
 
 fn timer_unit() -> String {
@@ -386,11 +424,11 @@ fn runtime_argument(runtime: Duration) -> String {
 fn write_unit(path: &Path, unit: &str) -> Result<(), LifecycleError> {
     let parent = path.parent().expect("systemd unit path has a parent");
     fs::create_dir_all(parent).map_err(|source| LifecycleError::CreateUnitDirectory { source })?;
-    let temporary = parent.join(format!(
-        ".{}-{}.tmp",
-        path.file_name().unwrap().to_string_lossy(),
-        std::process::id()
-    ));
+    let filename = path
+        .file_name()
+        .and_then(|filename| filename.to_str())
+        .expect("systemd unit file name is static UTF-8");
+    let temporary = parent.join(format!(".{}-{}.tmp", filename, std::process::id()));
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -422,6 +460,9 @@ mod tests {
         path::{Path, PathBuf},
         time::Duration,
     };
+
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     use tempfile::TempDir;
     use time::OffsetDateTime;
@@ -464,7 +505,19 @@ mod tests {
     }
 
     fn output(success: bool) -> CommandOutput {
-        CommandOutput { success }
+        CommandOutput {
+            success,
+            exit_code: success.then_some(0),
+            stdout: Vec::new(),
+        }
+    }
+
+    fn output_with_exit_code(exit_code: i32, stdout: &[u8]) -> CommandOutput {
+        CommandOutput {
+            success: exit_code == 0,
+            exit_code: Some(exit_code),
+            stdout: stdout.to_vec(),
+        }
     }
 
     fn paths(directory: &TempDir) -> Paths {
@@ -528,11 +581,50 @@ mod tests {
         options.codex_home = PathBuf::from("/tmp/codex%h");
         options.title_metrics = "cost%u$".into();
 
-        let unit = super::service_unit(&options, Path::new("/tmp/codex%n"));
+        let unit = super::service_unit(&options, Path::new("/tmp/codex%n")).unwrap();
 
         assert!(unit.contains("ExecStart=\"/tmp/codex%%n\""));
         assert!(unit.contains("--codex-home \"/tmp/codex%%h\""));
         assert!(unit.contains("--title-metrics \"cost%%u$$\""));
+    }
+
+    #[test]
+    fn install_requires_an_absolute_scheduled_codex_home() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+        let mut options = options(&directory);
+        options.codex_home = PathBuf::from("relative-codex-home");
+        fs::write(&options.executable, "binary").unwrap();
+        let mut runner = FakeRunner::with_outputs([output(true), output(true)]);
+
+        let error = install_with_runner(&paths, &options, &mut runner).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "scheduled Codex home must be an absolute path"
+        );
+        assert!(!paths.service().exists());
+        assert!(runner.calls.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_rejects_non_utf8_paths_before_writing_a_unit() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+        let mut options = options(&directory);
+        options.codex_home = PathBuf::from(OsString::from_vec(b"/tmp/codex-\xff".to_vec()));
+        fs::write(&options.executable, "binary").unwrap();
+        let mut runner = FakeRunner::with_outputs([output(true), output(true)]);
+
+        let error = install_with_runner(&paths, &options, &mut runner).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "scheduled paths must be valid UTF-8 for systemd"
+        );
+        assert!(!paths.service().exists());
+        assert!(runner.calls.is_empty());
     }
 
     #[test]
@@ -548,7 +640,7 @@ mod tests {
         assert_eq!(
             fs::read_to_string(paths.service()).unwrap(),
             format!(
-                "[Unit]\nDescription=Codex Cost Meter scheduled update\n\n[Service]\nType=oneshot\nExecStart=\"{}\" schedule run --codex-home \"{}\" --idle-minutes 15 --limit 500 --max-runtime 4m --max-width 65 --title-metrics \"tokens,cost\" --reprice-before 1970-01-01T00:00:00Z --apply\nStandardOutput=null\nStandardError=null\n",
+                "[Unit]\nDescription=Codex Cost Meter scheduled update\n\n[Service]\nType=oneshot\nExecStart=\"{}\" schedule run --codex-home \"{}\" --idle-minutes \"15\" --limit \"500\" --max-runtime \"4m\" --max-width \"65\" --title-metrics \"tokens,cost\" --reprice-before \"1970-01-01T00:00:00Z\" --apply\nStandardOutput=null\nStandardError=null\n",
                 fs::canonicalize(&options.executable).unwrap().display(),
                 options.codex_home.display(),
             )
@@ -578,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_is_idempotent_and_leaves_unrelated_files_untouched() {
+    fn remove_always_disables_the_fixed_timer_and_leaves_unrelated_files_untouched() {
         let directory = TempDir::new().unwrap();
         let paths = paths(&directory);
         fs::create_dir_all(paths.timer().parent().unwrap()).unwrap();
@@ -588,7 +680,8 @@ mod tests {
         fs::write(paths.status(), "status").unwrap();
         let unrelated = paths.timer().parent().unwrap().join("unrelated.timer");
         fs::write(&unrelated, "unrelated").unwrap();
-        let mut runner = FakeRunner::with_outputs([output(true), output(true), output(true)]);
+        let mut runner =
+            FakeRunner::with_outputs([output(true), output(true), output(true), output(true)]);
 
         remove_with_runner(&paths, &mut runner).unwrap();
         remove_with_runner(&paths, &mut runner).unwrap();
@@ -615,10 +708,79 @@ mod tests {
                 ),
                 (
                     PathBuf::from(SYSTEMCTL),
+                    vec![
+                        "--user".into(),
+                        "disable".into(),
+                        "--now".into(),
+                        TIMER.into()
+                    ],
+                ),
+                (
+                    PathBuf::from(SYSTEMCTL),
                     vec!["--user".into(), "daemon-reload".into()],
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn remove_tolerates_the_exact_not_found_timer_state() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+        let mut runner = FakeRunner::with_outputs([
+            output_with_exit_code(1, b""),
+            output_with_exit_code(0, b"not-found\n"),
+            output(true),
+        ]);
+
+        remove_with_runner(&paths, &mut runner).unwrap();
+
+        assert_eq!(
+            runner.calls,
+            [
+                (
+                    PathBuf::from(SYSTEMCTL),
+                    vec![
+                        "--user".into(),
+                        "disable".into(),
+                        "--now".into(),
+                        TIMER.into()
+                    ],
+                ),
+                (
+                    PathBuf::from(SYSTEMCTL),
+                    vec![
+                        "--user".into(),
+                        "show".into(),
+                        "--property=LoadState".into(),
+                        "--value".into(),
+                        TIMER.into()
+                    ],
+                ),
+                (
+                    PathBuf::from(SYSTEMCTL),
+                    vec!["--user".into(), "daemon-reload".into()],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_rejects_a_disable_failure_when_the_timer_is_not_loaded_as_not_found() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+        let mut runner = FakeRunner::with_outputs([
+            output_with_exit_code(1, b""),
+            output_with_exit_code(0, b"loaded\n"),
+        ]);
+
+        let error = remove_with_runner(&paths, &mut runner).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "could not disable and stop the systemd user timer"
+        );
+        assert_eq!(runner.calls.len(), 2);
     }
 
     #[test]
@@ -649,6 +811,37 @@ mod tests {
                 ],
             )]
         );
+    }
+
+    #[test]
+    fn inspect_reports_an_unexpected_timer_query_failure() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+        let mut runner = FakeRunner::with_outputs([output(false)]);
+
+        let error = match inspect_with_runner(&paths, &mut runner) {
+            Ok(_) => panic!("expected the timer query failure to be reported"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "could not inspect the systemd user timer"
+        );
+    }
+
+    #[test]
+    fn inspect_tolerates_documented_inactive_and_missing_timer_exit_codes() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+
+        for exit_code in [3, 4] {
+            let mut runner = FakeRunner::with_outputs([output_with_exit_code(exit_code, b"")]);
+
+            let inspection = inspect_with_runner(&paths, &mut runner).unwrap();
+
+            assert!(!inspection.active, "exit code {exit_code}");
+        }
     }
 
     #[test]

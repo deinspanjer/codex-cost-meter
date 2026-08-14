@@ -1,6 +1,7 @@
 #![cfg(target_os = "linux")]
 
 use std::{
+    ffi::OsStr,
     fs,
     path::Path,
     process::{Command, Output},
@@ -9,12 +10,21 @@ use std::{
 use tempfile::TempDir;
 
 fn run(home: &Path, config_home: &Path, state_home: &Path, arguments: &[&str]) -> Output {
+    run_with_home(home.as_os_str(), config_home, state_home, arguments)
+}
+
+fn run_with_home(
+    home: &OsStr,
+    config_home: &Path,
+    state_home: &Path,
+    arguments: &[&str],
+) -> Output {
     Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(arguments)
         .env("HOME", home)
         .env("XDG_CONFIG_HOME", config_home)
         .env("XDG_STATE_HOME", state_home)
-        .env("CODEX_HOME", home.join("codex-storage"))
+        .env("CODEX_HOME", Path::new(home).join("codex-storage"))
         .output()
         .unwrap()
 }
@@ -81,4 +91,29 @@ fn linux_schedule_help_is_public_and_status_uses_xdg_scheduler_state() {
     assert!(stdout.contains("last run: never\nresult: success\n"));
     assert!(!stdout.contains("systemctl"));
     assert!(!stdout.contains("ExecStart"));
+}
+
+#[test]
+fn linux_schedule_requires_a_nonempty_absolute_home() {
+    let config_home = TempDir::new().unwrap();
+    let state_home = TempDir::new().unwrap();
+
+    for (home, reason) in [
+        (OsStr::new(""), "HOME is empty"),
+        (OsStr::new("relative-home"), "HOME is not absolute"),
+    ] {
+        let output = run_with_home(
+            home,
+            config_home.path(),
+            state_home.path(),
+            &["schedule", "status"],
+        );
+
+        assert!(!output.status.success());
+        assert!(
+            stderr(&output).contains(&format!("could not resolve default Codex home: {reason}")),
+            "{}",
+            stderr(&output)
+        );
+    }
 }

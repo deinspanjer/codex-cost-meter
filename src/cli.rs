@@ -300,9 +300,20 @@ impl ScheduledUpdateArgs {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn user_home() -> Result<PathBuf, CliError> {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or(CliError::HomeNotSet("HOME is not set"))
+    non_windows_home(env::var_os("HOME"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn non_windows_home(home: Option<std::ffi::OsString>) -> Result<PathBuf, CliError> {
+    let home = home.ok_or(CliError::HomeNotSet("HOME is not set"))?;
+    if home.is_empty() {
+        return Err(CliError::HomeNotSet("HOME is empty"));
+    }
+    let home = PathBuf::from(home);
+    if !home.is_absolute() {
+        return Err(CliError::HomeNotSet("HOME is not absolute"));
+    }
+    Ok(home)
 }
 
 #[cfg(target_os = "windows")]
@@ -624,6 +635,28 @@ mod tests {
         };
         assert!(run.apply);
         assert_eq!(run.options().max_runtime().as_secs(), 240);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn user_home_requires_a_nonempty_absolute_home() {
+        assert_eq!(
+            super::non_windows_home(Some(OsString::from("/home/codex"))).unwrap(),
+            PathBuf::from("/home/codex")
+        );
+        for (home, reason) in [
+            (None, "HOME is not set"),
+            (Some(OsString::new()), "HOME is empty"),
+            (
+                Some(OsString::from("relative-home")),
+                "HOME is not absolute",
+            ),
+        ] {
+            assert_eq!(
+                super::non_windows_home(home).unwrap_err().to_string(),
+                format!("could not resolve default Codex home: {reason}")
+            );
+        }
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
