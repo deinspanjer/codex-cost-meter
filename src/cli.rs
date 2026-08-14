@@ -27,22 +27,22 @@ pub(crate) enum Command {
     Report(ReportArgs),
     #[command(about = "Preview or apply bounded Codex task-title updates.")]
     Update(UpdateArgs),
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[command(about = "Manage scheduled idle task-title updates.")]
     Schedule(ScheduleArgs),
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[command(about = "Remove the schedule and this executable.")]
     Uninstall,
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduleArgs {
     #[command(subcommand)]
     pub(crate) command: ScheduleCommand,
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Subcommand)]
 pub(crate) enum ScheduleCommand {
     #[command(about = "Install the current-user idle-update schedule.")]
@@ -57,14 +57,14 @@ pub(crate) enum ScheduleCommand {
     Run(ScheduleRunArgs),
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduleInstallArgs {
     #[command(flatten)]
     options: ScheduledUpdateArgs,
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduleRunArgs {
     #[command(flatten)]
@@ -73,7 +73,7 @@ pub(crate) struct ScheduleRunArgs {
     apply: bool,
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduledUpdateArgs {
     #[arg(
@@ -236,14 +236,14 @@ impl UpdateArgs {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl ScheduleInstallArgs {
     pub(crate) fn options(&self) -> &ScheduledUpdateArgs {
         &self.options
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl ScheduleRunArgs {
     pub(crate) fn options(&self) -> &ScheduledUpdateArgs {
         debug_assert!(self.apply);
@@ -251,7 +251,7 @@ impl ScheduleRunArgs {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl ScheduledUpdateArgs {
     pub(crate) fn codex_home(&self) -> Result<PathBuf, CliError> {
         resolve_codex_home(&self.codex_home)
@@ -394,7 +394,7 @@ fn parse_metrics(value: &str) -> Result<MetricList, String> {
         .map_err(|error| error.to_string())
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn parse_metric_text(value: &str) -> Result<String, String> {
     parse_metrics(value).map(|_| value.into())
 }
@@ -420,7 +420,7 @@ mod tests {
 
     use clap::Parser;
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     use super::ScheduleCommand;
     use super::{Cli, Command, UpdateArgs, windows_home, windows_local_app_data};
     use crate::title::MetricList;
@@ -515,7 +515,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[test]
     fn parses_schedule_commands_and_rejects_unsupported_selection() {
         for arguments in [
@@ -561,7 +561,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[test]
     fn schedule_arguments_preserve_the_installed_update_contract() {
         let parse = |arguments: &[&str]| {
@@ -626,9 +626,9 @@ mod tests {
         assert_eq!(run.options().max_runtime().as_secs(), 240);
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     #[test]
-    fn parser_rejects_macos_scheduler_commands() {
+    fn parser_rejects_scheduler_commands_on_unsupported_platforms() {
         for arguments in [vec!["schedule", "install"], vec!["uninstall"]] {
             let mut command = vec!["codex-cost-meter"];
             command.extend(arguments.iter().copied());

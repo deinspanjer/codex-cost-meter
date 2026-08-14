@@ -3,7 +3,7 @@ mod output;
 mod pricing;
 mod report;
 mod rollout;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod schedule;
 mod session_index;
 mod title;
@@ -18,7 +18,7 @@ use std::{
 use clap::{Parser, error::ErrorKind};
 use thiserror::Error as ThisError;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use crate::{
     cli::ScheduleCommand,
     schedule::{InstallOptions, Paths, ScheduleError, ScheduledRunError},
@@ -36,10 +36,10 @@ enum AppError {
     Report(#[from] ReportError),
     #[error(transparent)]
     Update(#[from] update::UpdateError),
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[error(transparent)]
     Schedule(#[from] ScheduleError),
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[error(transparent)]
     Scheduled(#[from] ScheduledRunError),
     #[error("could not render report: {0}")]
@@ -60,7 +60,7 @@ enum AppError {
         #[source]
         source: io::Error,
     },
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[error("could not write schedule output")]
     WriteScheduleOutput {
         #[source]
@@ -119,9 +119,9 @@ fn run_with_writer(cli: Cli, writer: &mut impl Write) -> Result<(), AppError> {
             write_update_output(writer, &result, options.apply)?;
             Ok(())
         }
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         Command::Schedule(args) => run_schedule(args.command, writer),
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         Command::Uninstall => {
             let paths = schedule_paths()?;
             schedule::uninstall(&paths)?;
@@ -140,7 +140,7 @@ fn run_with_writer(cli: Cli, writer: &mut impl Write) -> Result<(), AppError> {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(), AppError> {
     match command {
         ScheduleCommand::Install(args) => {
@@ -169,6 +169,12 @@ fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(),
                 "installed: {}\nloaded: {}\n",
                 yes_no(inspection.installed),
                 yes_no(inspection.loaded),
+            );
+            #[cfg(target_os = "linux")]
+            let mut output = format!(
+                "installed: {}\nactive: {}\n",
+                yes_no(inspection.installed),
+                yes_no(inspection.active),
             );
             #[cfg(target_os = "windows")]
             let mut output = format!("registered: {}\n", yes_no(inspection.registered));
@@ -222,12 +228,17 @@ fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(),
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
 
 #[cfg(target_os = "macos")]
+fn schedule_paths() -> Result<Paths, cli::CliError> {
+    Ok(Paths::new(&cli::user_home()?))
+}
+
+#[cfg(target_os = "linux")]
 fn schedule_paths() -> Result<Paths, cli::CliError> {
     Ok(Paths::new(&cli::user_home()?))
 }
@@ -240,6 +251,11 @@ fn schedule_paths() -> Result<Paths, cli::CliError> {
 #[cfg(target_os = "macos")]
 fn schedule_install_output(paths: &Paths) -> String {
     format!("schedule installed: {}\n", paths.plist().display())
+}
+
+#[cfg(target_os = "linux")]
+fn schedule_install_output(paths: &Paths) -> String {
+    format!("schedule installed: {}\n", paths.timer().display())
 }
 
 #[cfg(target_os = "windows")]
