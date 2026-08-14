@@ -1,3 +1,4 @@
+import re
 import subprocess
 import sys
 import tarfile
@@ -144,6 +145,31 @@ class VersionToolTests(unittest.TestCase):
         archive = output / "codex-cost-meter-v0.0.0-macos-universal2.tar.gz"
         with tarfile.open(archive, "r:gz") as package:
             self.assertEqual(package.getnames(), ["codex-cost-meter", "README.md", "LICENSE"])
+
+    def test_package_linux_contains_only_the_release_binary_and_documents(self):
+        self.write_project(name="codex-cost-meter")
+        binary = self.root / "codex-cost-meter"
+        binary.write_bytes(b"fixture binary")
+        (self.root / "Cargo.lock").write_text(
+            "version = 4\n\n[[package]]\nname = \"codex-cost-meter\"\nversion = \"0.0.0\"\n",
+            encoding="utf-8",
+        )
+        output = self.root / "output"
+        for architecture in ("x86_64", "aarch64"):
+            self.run_tool(
+                "package-linux", "--architecture", architecture,
+                "--binary", binary, "--output-dir", output,
+            )
+            archive = output / f"codex-cost-meter-v0.0.0-linux-{architecture}-musl.tar.gz"
+            self.assertTrue(archive.is_file())
+            with tarfile.open(archive, "r:gz") as package:
+                self.assertEqual(
+                    package.getnames(), ["codex-cost-meter", "README.md", "LICENSE"]
+                )
+            checksum = archive.with_suffix(archive.suffix + ".sha256").read_text(
+                encoding="utf-8"
+            )
+            self.assertRegex(checksum, rf"^[0-9a-f]{{64}}  {re.escape(archive.name)}\n$")
 
     def test_package_windows_contains_only_the_executable_and_documents(self):
         self.write_project(name="codex-cost-meter")
