@@ -35,6 +35,14 @@ These are internal Codex storage formats, not a supported extension API. Verify 
 
 Build, test, lint, and release commands will be added when the Rust crate exists. Until then, the only executable checks belong to the [Python prototype](python-prototype/DEVELOPERS.md#verification).
 
+### Autonomous milestone delivery
+
+The owner has approved the roadmap and authorized autonomous just-in-time design, planning, and execution for later milestones. Temporary milestone specifications and plans still receive self-review, task reviews, final review, validation, documentation uplift, accounting, and the release-decider gate, but they do not require another owner approval when they remain within [ADR 0004](docs/adr/0004-preserve-the-python-prototype-and-port-to-rust.md).
+
+Stop for owner review when concrete review evidence identifies an unresolved shared-foundation problem, a conflict with an approved requirement or safety invariant, a material security/data-integrity design change, or a rejected milestone that cannot be corrected confidently. A rejected release blocks dependent milestones; isolated later investigation may continue on separate branches only when it cannot compound the finding. Mechanical specifications and plans must remain absent from every final release tree.
+
+Independently of review verdicts, stop all autonomous work when cumulative output usage for the program's root task and all descendants exceeds **1,000,000,000 tokens**. The threshold includes implementation and excluded governance overhead. After crossing it, perform only the read-only measurement needed to report the total, then wait for owner steering; branch isolation does not bypass this gate.
+
 ## Documentation placement rules
 
 - `README.md` is the short entry point: purpose, status, capabilities, and links.

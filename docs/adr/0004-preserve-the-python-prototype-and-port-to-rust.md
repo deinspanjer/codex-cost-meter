@@ -26,6 +26,10 @@ Deliver support incrementally: macOS Universal 2 first, then Windows x64, then s
 
 Port the behavioral decisions and verified invariants, not the Python module layout.
 
+Treat the approved program design as standing owner authorization to refine, plan, and execute later roadmap milestones autonomously. Each milestone still uses a just-in-time temporary specification and plan, but does not require another owner review when it remains within the approved roadmap and durable decisions. Stop for owner review only when concrete review evidence identifies an unresolved structural/shared-foundation issue, a conflict with an approved requirement or safety invariant, a material security/data-integrity design change, or a rejected milestone that cannot be corrected confidently. A rejected release blocks dependent work, but isolated later investigation may continue on separate branches when it cannot compound the finding.
+
+Also stop all autonomous work when cumulative output-token usage for the program's root task and all descendant agents exceeds 1,000,000,000 tokens. This budget gate counts every output token, including estimate capture, actual capture, persona construction, and release-decider work that is excluded from feature estimate-versus-actual comparisons. Once crossed, allow only read-only accounting needed to report the total, then wait for owner review and steering. Neither an acceptable release verdict nor isolated branch work bypasses this gate.
+
 ## Alternatives considered
 
 - Continue distributing Python: rejected because Python is not a reliable clean-host dependency on either target platform and the updater already contains Unix/macOS-specific behavior.
@@ -39,6 +43,7 @@ Port the behavioral decisions and verified invariants, not the Python module lay
 - Windows and Linux need locking and scheduling implementations distinct from macOS while sharing report and update behavior.
 - New product work belongs in Rust; the Python prototype remains runnable for comparison and regression discovery.
 - The port remains coupled to version-sensitive internal Codex storage until a supported API replaces it.
+- Later milestone planning can continue unattended without speculative up-front plans, while program-level review findings still provide a hard stop.
 
 ## Original pre-design estimate
 

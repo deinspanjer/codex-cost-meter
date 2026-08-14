@@ -360,7 +360,7 @@ Each milestone is prepared on a branch. Before release:
 
 Before every milestone release, spawn a fresh read-only subagent with a sanitized persona rubric derived from the owner's prior feedback. The public rubric records preferences and rejection triggers without private quotations, task identifiers, or transcript provenance.
 
-The judge evaluates a candidate implementation against an already owner-approved design and plan. It is not a substitute for brainstorming, design approval, or plan approval, and it does not reopen an approved product decision merely because older durable documentation has not yet been uplifted. Apparent conflicts must be classified as candidate divergence, an approved decision awaiting documentation uplift, or genuine unresolved ambiguity before choosing a verdict.
+The judge evaluates a candidate implementation against an already owner-approved program design and its milestone plan. It is not a substitute for brainstorming, design review, or plan review; for later milestones, the standing authorization below satisfies the normal owner-review gates when the work remains within the approved program. The judge does not reopen an approved product decision merely because older durable documentation has not yet been uplifted. Apparent conflicts must be classified as candidate divergence, an approved decision awaiting documentation uplift, or genuine unresolved ambiguity before choosing a verdict.
 
 The judge receives the approved requirements, durable decisions, implementation plan, candidate diff, validation evidence, documentation, and maintainability measurements. It must cite concrete candidate evidence and return exactly one verdict:
 
@@ -373,6 +373,23 @@ Missing milestone requirements, security or data-integrity risks, plan divergenc
 A rejection prevents merge, tag, and release. The implementation may be corrected and judged again. If rejection cannot be resolved confidently, later work may continue without releases only when it is isolated on separate branches and does not depend on or compound the rejected design. Structural or shared-foundation concerns stop dependent downstream work.
 
 Persona construction, material persona refreshes, and judge execution are governance overhead and do not count toward implementation estimate-versus-actual comparisons. Fixes prompted by the judge do count as implementation work.
+
+## Autonomous milestone continuation
+
+The owner approves this document as the program-level design through the pre-1.0 roadmap and authorizes autonomous design refinement, implementation planning, and execution for subsequent milestones. After v0.1, each milestone receives a just-in-time temporary specification and implementation plan based on the current code and durable decisions. The normal Superpowers human-review and execution-handoff gates for those later documents are satisfied by this standing authorization when the proposed work remains within this program design.
+
+Each temporary specification and plan still receives its required self-review, task-scoped implementation reviews, final code review, validation, documentation uplift, accounting capture, and release-decider review. It must be removed from the milestone's final release tree after durable content needed by later work is uplifted.
+
+Autonomous continuation stops for owner review when review evidence establishes any of the following:
+
+- a structural or shared-foundation concern that could compound in dependent milestones;
+- a conflict with an owner-approved requirement, ADR, safety invariant, or release boundary that cannot be resolved within the existing design;
+- a security or data-integrity risk whose correction requires a material program-design change; or
+- a rejected milestone that cannot be corrected confidently through bounded implementation work.
+
+Autonomous continuation also stops when cumulative output usage for the program's root task and all descendant agents exceeds **1,000,000,000 tokens**. Unlike estimate-versus-actual accounting, this threshold includes all output from implementation and excluded governance activities. Once crossed, no further design, planning, implementation, review, release, or isolated branch investigation may proceed. Only the read-only accounting necessary to report the total is allowed before owner review and steering.
+
+A release-decider `REJECT` always blocks that milestone's merge, tag, and release, but it does not automatically stop independent later investigation. Later branch work may continue only under the isolation and dependency rules above. Ordinary implementation questions, locally resolvable review findings, and `ACCEPTABLE_WITH_FOLLOW_UP` verdicts do not create a new owner gate. External credentials, hardware, permissions, or authority may still pause the affected operation without reopening the program design.
 
 ## Estimate and actual accounting
 
