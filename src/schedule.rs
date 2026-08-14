@@ -1,7 +1,8 @@
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -14,9 +15,20 @@ use crate::update::FailureClass;
 
 mod macos;
 
-pub(crate) use macos::{Inspection, InstallOptions, Paths};
+pub(crate) use macos::{Inspection, Paths};
 
 const MAX_STATUS_BYTES: u64 = 4096;
+
+pub(crate) struct InstallOptions {
+    pub(crate) executable: PathBuf,
+    pub(crate) codex_home: PathBuf,
+    pub(crate) idle_minutes: u64,
+    pub(crate) limit: usize,
+    pub(crate) max_runtime: Duration,
+    pub(crate) max_width: usize,
+    pub(crate) title_metrics: String,
+    pub(crate) reprice_before: Option<OffsetDateTime>,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -260,7 +272,22 @@ pub(crate) fn write_status(path: &Path, status: &Status) -> Result<(), StatusErr
     file.sync_all()
         .map_err(|source| StatusError::Sync { source })?;
     drop(file);
-    fs::rename(temporary, path).map_err(|source| StatusError::Rename { source })
+    replace_status(&temporary, path).map_err(|source| StatusError::Rename { source })
+}
+
+#[cfg(unix)]
+fn replace_status(temporary: &Path, path: &Path) -> io::Result<()> {
+    fs::rename(temporary, path)
+}
+
+#[cfg(windows)]
+fn replace_status(temporary: &Path, path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(source),
+    }
+    fs::rename(temporary, path)
 }
 
 fn status(
@@ -324,26 +351,32 @@ fn set_private_permissions(_: &File) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        io::{self, Write},
-    };
+    use std::fs;
 
+    #[cfg(unix)]
     use rusqlite::Connection;
+    #[cfg(unix)]
+    use std::io::{self, Write};
     use tempfile::TempDir;
     use time::{Duration, OffsetDateTime};
 
+    #[cfg(unix)]
+    use super::{Paths, run_scheduled};
     use super::{
-        Paths, ResultCode, Status, StatusError, after_failure, after_success, read_status,
-        resume_status, run_scheduled, write_status,
+        ResultCode, Status, StatusError, after_failure, after_success, read_status, resume_status,
+        write_status,
     };
+    use crate::update::FailureClass;
+    #[cfg(unix)]
     use crate::{
         title::{MetricList, TitleFormat},
-        update::{FailureClass, UpdateOptions},
+        update::UpdateOptions,
     };
 
+    #[cfg(unix)]
     struct FailingWriter;
 
+    #[cfg(unix)]
     impl Write for FailingWriter {
         fn write(&mut self, _: &[u8]) -> io::Result<usize> {
             Err(io::Error::other("scheduled output unavailable"))
@@ -354,6 +387,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn scheduled_options() -> UpdateOptions {
         UpdateOptions {
             thread_ids: Vec::new(),
@@ -500,10 +534,12 @@ mod tests {
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("status.json");
         let status = after_failure(None, FailureClass::Ordinary, OffsetDateTime::UNIX_EPOCH);
+        let replacement = after_success(None, OffsetDateTime::UNIX_EPOCH);
 
         write_status(&path, &status).unwrap();
+        write_status(&path, &replacement).unwrap();
 
-        assert_eq!(read_status(&path).unwrap(), Some(status));
+        assert_eq!(read_status(&path).unwrap(), Some(replacement));
         assert!(serde_json::from_slice::<serde_json::Value>(&fs::read(&path).unwrap()).is_ok());
         assert!(
             fs::read_dir(directory.path())
