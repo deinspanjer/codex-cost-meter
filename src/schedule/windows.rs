@@ -1,11 +1,12 @@
 use std::{
-    env,
     ffi::OsString,
     fs::{self, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
-    process::Command,
 };
+
+#[cfg(target_os = "windows")]
+use std::{env, process::Command};
 
 use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
@@ -15,13 +16,33 @@ use super::{InstallOptions, Status, StatusError, read_status, resume_status, wri
 const TASK_NAME: &str = "Codex Cost Meter";
 const SCHTASKS: &str = "schtasks.exe";
 const WHOAMI: &str = "whoami.exe";
+const POWERSHELL: &str = "powershell.exe";
 const MISSING_TASK_HRESULT: i32 = 0x8007_0002u32 as i32;
 const MAX_SID_BYTES: usize = 184;
 const MAX_CREATE_DIAGNOSTIC_CHARS: usize = 256;
+const CLEANUP_SCRIPT: &str = r#"param([int]$ParentProcessId, [string]$ExecutablePath)
+Wait-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
+$deleted = $false
+for ($attempt = 0; $attempt -lt 150; $attempt++) {
+  try {
+    Remove-Item -LiteralPath $ExecutablePath -Force -ErrorAction Stop
+    $deleted = $true
+    break
+  } catch {
+    Start-Sleep -Milliseconds 200
+  }
+}
+if ($deleted) {
+  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+  exit 0
+}
+exit 1
+"#;
 
 pub(crate) struct Paths {
     status: PathBuf,
     definition: PathBuf,
+    cleanup: PathBuf,
 }
 
 impl Paths {
@@ -30,6 +51,7 @@ impl Paths {
         Self {
             status: directory.join("status.json"),
             definition: directory.join("schedule-definition.xml"),
+            cleanup: directory.join("schedule-cleanup.ps1"),
         }
     }
 
@@ -40,6 +62,10 @@ impl Paths {
     fn definition(&self) -> &Path {
         &self.definition
     }
+
+    fn cleanup(&self) -> &Path {
+        &self.cleanup
+    }
 }
 
 pub(crate) struct Inspection {
@@ -49,6 +75,7 @@ pub(crate) struct Inspection {
 
 #[derive(Debug, Error)]
 pub(crate) enum LifecycleError {
+    #[cfg(target_os = "windows")]
     #[error("could not locate the Windows system tools")]
     SystemRoot,
     #[error("could not run a required Windows tool")]
@@ -114,6 +141,20 @@ pub(crate) enum LifecycleError {
         #[source]
         source: StatusError,
     },
+    #[error(
+        "schedule state was removed, but cleanup script could not be written; delete the current executable manually"
+    )]
+    CleanupWrite {
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "schedule state was removed, but cleanup could not be started; delete the current executable manually"
+    )]
+    CleanupSpawn {
+        #[source]
+        source: io::Error,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -126,12 +167,15 @@ struct CommandOutput {
 
 trait CommandRunner {
     fn run(&mut self, tool: &str, arguments: &[OsString]) -> io::Result<CommandOutput>;
+    fn spawn(&mut self, tool: &str, arguments: &[OsString]) -> io::Result<()>;
 }
 
+#[cfg(target_os = "windows")]
 struct SystemRunner {
     system32: PathBuf,
 }
 
+#[cfg(target_os = "windows")]
 impl SystemRunner {
     fn new() -> Result<Self, LifecycleError> {
         let root = env::var_os("SystemRoot").filter(|value| !value.is_empty());
@@ -141,13 +185,10 @@ impl SystemRunner {
     }
 }
 
+#[cfg(target_os = "windows")]
 impl CommandRunner for SystemRunner {
     fn run(&mut self, tool: &str, arguments: &[OsString]) -> io::Result<CommandOutput> {
-        let program = match tool {
-            SCHTASKS => self.system32.join(SCHTASKS),
-            WHOAMI => self.system32.join(WHOAMI),
-            _ => unreachable!("Windows scheduler only runs fixed system tools"),
-        };
+        let program = self.program(tool);
         let output = Command::new(program).args(arguments).output()?;
         Ok(CommandOutput {
             success: output.status.success(),
@@ -156,26 +197,59 @@ impl CommandRunner for SystemRunner {
             stderr: output.stderr,
         })
     }
+
+    fn spawn(&mut self, tool: &str, arguments: &[OsString]) -> io::Result<()> {
+        Command::new(self.program(tool)).args(arguments).spawn()?;
+        Ok(())
+    }
 }
 
+#[cfg(target_os = "windows")]
+impl SystemRunner {
+    fn program(&self, tool: &str) -> PathBuf {
+        match tool {
+            SCHTASKS => self.system32.join(SCHTASKS),
+            WHOAMI => self.system32.join(WHOAMI),
+            POWERSHELL => self
+                .system32
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join(POWERSHELL),
+            _ => unreachable!("Windows scheduler only runs fixed system tools"),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 pub(crate) fn install(paths: &Paths, options: &InstallOptions) -> Result<(), LifecycleError> {
     let mut runner = SystemRunner::new()?;
     install_with_runner(paths, options, &mut runner)
 }
 
+#[cfg(target_os = "windows")]
 pub(crate) fn inspect(paths: &Paths) -> Result<Inspection, LifecycleError> {
     let mut runner = SystemRunner::new()?;
     inspect_with_runner(paths, &mut runner)
 }
 
+#[cfg(target_os = "windows")]
 pub(crate) fn remove(paths: &Paths) -> Result<(), LifecycleError> {
     let mut runner = SystemRunner::new()?;
     remove_with_runner(paths, &mut runner)
 }
 
+#[cfg(target_os = "windows")]
 pub(crate) fn resume(paths: &Paths) -> Result<(), LifecycleError> {
     let mut runner = SystemRunner::new()?;
     resume_with_runner(paths, &mut runner)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn uninstall(paths: &Paths) -> Result<(), LifecycleError> {
+    let current_exe =
+        env::current_exe().map_err(|source| LifecycleError::CurrentExecutable { source })?;
+    let mut runner = SystemRunner::new()?;
+    uninstall_with_current_exe_and_runner(paths, &current_exe, &mut runner)
 }
 
 fn install_with_runner(
@@ -258,6 +332,30 @@ fn resume_with_runner(
         .map_err(|source| LifecycleError::Status { source })
 }
 
+fn uninstall_with_current_exe_and_runner(
+    paths: &Paths,
+    current_exe: &Path,
+    runner: &mut impl CommandRunner,
+) -> Result<(), LifecycleError> {
+    remove_with_runner(paths, runner)?;
+    let executable = fs::canonicalize(current_exe)
+        .map_err(|source| LifecycleError::CurrentExecutable { source })?;
+    write_cleanup(paths).map_err(|source| LifecycleError::CleanupWrite { source })?;
+    runner
+        .spawn(
+            POWERSHELL,
+            &[
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-File".into(),
+                paths.cleanup().as_os_str().to_owned(),
+                std::process::id().to_string().into(),
+                executable.into_os_string(),
+            ],
+        )
+        .map_err(|source| LifecycleError::CleanupSpawn { source })
+}
+
 fn current_sid(runner: &mut impl CommandRunner) -> Result<String, LifecycleError> {
     let output = run(
         runner,
@@ -323,6 +421,19 @@ fn write_definition(paths: &Paths, xml: &str) -> Result<(), LifecycleError> {
 fn remove_definition(paths: &Paths) -> Result<(), LifecycleError> {
     remove_file_if_present(paths.definition())
         .map_err(|source| LifecycleError::RemoveTemporary { source })
+}
+
+fn write_cleanup(paths: &Paths) -> io::Result<()> {
+    let parent = paths.cleanup().parent().expect("cleanup path has a parent");
+    fs::create_dir_all(parent)?;
+    remove_file_if_present(paths.cleanup())?;
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(paths.cleanup())?;
+    file.write_all(CLEANUP_SCRIPT.as_bytes())?;
+    file.flush()?;
+    file.sync_all()
 }
 
 fn remove_file_if_present(path: &Path) -> io::Result<()> {
@@ -471,7 +582,7 @@ mod tests {
     use super::{
         CommandOutput, CommandRunner, InstallOptions, LifecycleError, Paths, extract_sid,
         inspect_with_runner, install_with_runner, quote_argument, remove_with_runner,
-        resume_with_runner,
+        resume_with_runner, uninstall_with_current_exe_and_runner,
     };
     use crate::schedule::{after_failure, write_status};
     use crate::update::FailureClass;
@@ -485,6 +596,7 @@ mod tests {
         outputs: Vec<CommandOutput>,
         definition: Option<String>,
         fail_cleanup: bool,
+        fail_spawn: bool,
     }
 
     impl FakeRunner {
@@ -494,11 +606,17 @@ mod tests {
                 outputs: outputs.into_iter().collect(),
                 definition: None,
                 fail_cleanup: false,
+                fail_spawn: false,
             }
         }
 
         fn fail_cleanup_after_registration(mut self) -> Self {
             self.fail_cleanup = true;
+            self
+        }
+
+        fn fail_cleanup_spawn(mut self) -> Self {
+            self.fail_spawn = true;
             self
         }
     }
@@ -524,6 +642,14 @@ mod tests {
             }
             self.calls.push((tool.into(), arguments.to_vec()));
             Ok(self.outputs.remove(0))
+        }
+
+        fn spawn(&mut self, tool: &str, arguments: &[OsString]) -> std::io::Result<()> {
+            self.calls.push((tool.into(), arguments.to_vec()));
+            if self.fail_spawn {
+                return Err(std::io::Error::other("powershell failed"));
+            }
+            Ok(())
         }
     }
 
@@ -768,6 +894,52 @@ mod tests {
                 ]
             )
         );
+    }
+
+    #[test]
+    fn uninstall_schedules_fixed_cleanup_without_interpolating_the_executable() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+        let executable = directory.path().join("copied executable with spaces.exe");
+        fs::write(&executable, "binary").unwrap();
+        let mut runner = FakeRunner::with_outputs([output(true, 0, b""), output(true, 0, b"")]);
+
+        uninstall_with_current_exe_and_runner(&paths, &executable, &mut runner).unwrap();
+
+        assert_eq!(runner.calls[2].0, "powershell.exe");
+        assert_eq!(
+            runner.calls[2].1[..4],
+            [
+                "-NoProfile",
+                "-NonInteractive",
+                "-File",
+                paths.cleanup().to_str().unwrap()
+            ]
+        );
+        assert_eq!(
+            runner.calls[2].1[5],
+            fs::canonicalize(&executable).unwrap().as_os_str()
+        );
+        let script = fs::read_to_string(paths.cleanup()).unwrap();
+        assert!(!script.contains(executable.to_str().unwrap()));
+        assert!(script.contains("Remove-Item -LiteralPath $ExecutablePath"));
+        assert!(script.contains("Remove-Item -LiteralPath $PSCommandPath"));
+    }
+
+    #[test]
+    fn uninstall_reports_a_distinct_spawn_failure_after_removing_the_task() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+        let executable = directory.path().join("copied.exe");
+        fs::write(&executable, "binary").unwrap();
+        let mut runner = FakeRunner::with_outputs([output(true, 0, b""), output(true, 0, b"")])
+            .fail_cleanup_spawn();
+
+        assert!(matches!(
+            uninstall_with_current_exe_and_runner(&paths, &executable, &mut runner),
+            Err(LifecycleError::CleanupSpawn { .. })
+        ));
+        assert_eq!(runner.calls[2].0, "powershell.exe");
     }
 
     #[test]

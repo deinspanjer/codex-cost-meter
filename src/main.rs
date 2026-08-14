@@ -4,8 +4,6 @@ mod pricing;
 mod report;
 mod rollout;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-#[cfg_attr(target_os = "windows", allow(dead_code))]
-// Windows dispatch is intentionally deferred to Task 3.
 mod schedule;
 mod session_index;
 mod title;
@@ -20,7 +18,7 @@ use std::{
 use clap::{Parser, error::ErrorKind};
 use thiserror::Error as ThisError;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::{
     cli::ScheduleCommand,
     schedule::{InstallOptions, Paths, ScheduleError, ScheduledRunError},
@@ -38,10 +36,10 @@ enum AppError {
     Report(#[from] ReportError),
     #[error(transparent)]
     Update(#[from] update::UpdateError),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[error(transparent)]
     Schedule(#[from] ScheduleError),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[error(transparent)]
     Scheduled(#[from] ScheduledRunError),
     #[error("could not render report: {0}")]
@@ -62,7 +60,7 @@ enum AppError {
         #[source]
         source: io::Error,
     },
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[error("could not write schedule output")]
     WriteScheduleOutput {
         #[source]
@@ -121,25 +119,33 @@ fn run_with_writer(cli: Cli, writer: &mut impl Write) -> Result<(), AppError> {
             write_update_output(writer, &result, options.apply)?;
             Ok(())
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         Command::Schedule(args) => run_schedule(args.command, writer),
         #[cfg(target_os = "macos")]
         Command::Uninstall => {
-            let paths = Paths::new(&cli::user_home()?);
+            let paths = schedule_paths()?;
             schedule::uninstall(&paths)?;
             writer
                 .write_all(b"schedule state and current executable removed\n")
                 .map_err(|source| AppError::WriteScheduleOutput { source })
         }
+        #[cfg(target_os = "windows")]
+        Command::Uninstall => {
+            let paths = schedule_paths()?;
+            schedule::uninstall(&paths)?;
+            writer
+                .write_all(b"schedule state removed; executable deletion scheduled\n")
+                .map_err(|source| AppError::WriteScheduleOutput { source })
+        }
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(), AppError> {
     match command {
         ScheduleCommand::Install(args) => {
             let schedule_options = args.options();
-            let paths = Paths::new(&cli::user_home()?);
+            let paths = schedule_paths()?;
             let options = InstallOptions {
                 executable: std::env::current_exe()
                     .map_err(|source| ScheduleError::CurrentExecutable { source })?,
@@ -153,16 +159,19 @@ fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(),
             };
             schedule::install(&paths, &options)?;
             writer
-                .write_all(format!("schedule installed: {}\n", paths.plist().display()).as_bytes())
+                .write_all(schedule_install_output(&paths).as_bytes())
                 .map_err(|source| AppError::WriteScheduleOutput { source })
         }
         ScheduleCommand::Status => {
-            let inspection = schedule::inspect(&Paths::new(&cli::user_home()?))?;
+            let inspection = schedule::inspect(&schedule_paths()?)?;
+            #[cfg(target_os = "macos")]
             let mut output = format!(
                 "installed: {}\nloaded: {}\n",
                 yes_no(inspection.installed),
                 yes_no(inspection.loaded),
             );
+            #[cfg(target_os = "windows")]
+            let mut output = format!("registered: {}\n", yes_no(inspection.registered));
             if let Some(status) = inspection.status {
                 let last_run = status
                     .last_run_at
@@ -188,19 +197,19 @@ fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(),
                 .map_err(|source| AppError::WriteScheduleOutput { source })
         }
         ScheduleCommand::Resume => {
-            schedule::resume(&Paths::new(&cli::user_home()?))?;
+            schedule::resume(&schedule_paths()?)?;
             writer
                 .write_all(b"schedule resumed\n")
                 .map_err(|source| AppError::WriteScheduleOutput { source })
         }
         ScheduleCommand::Remove => {
-            schedule::remove(&Paths::new(&cli::user_home()?))?;
+            schedule::remove(&schedule_paths()?)?;
             writer
                 .write_all(b"schedule removed\n")
                 .map_err(|source| AppError::WriteScheduleOutput { source })
         }
         ScheduleCommand::Run(args) => {
-            let paths = Paths::new(&cli::user_home()?);
+            let paths = schedule_paths()?;
             let schedule_options = args.options();
             schedule::run_scheduled(
                 &paths,
@@ -213,9 +222,29 @@ fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(),
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+#[cfg(target_os = "macos")]
+fn schedule_paths() -> Result<Paths, cli::CliError> {
+    Ok(Paths::new(&cli::user_home()?))
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_paths() -> Result<Paths, cli::CliError> {
+    Ok(Paths::new(&cli::local_app_data()?))
+}
+
+#[cfg(target_os = "macos")]
+fn schedule_install_output(paths: &Paths) -> String {
+    format!("schedule installed: {}\n", paths.plist().display())
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_install_output(_: &Paths) -> String {
+    "schedule registered\n".into()
 }
 
 fn parse_cli() -> Result<Cli, clap::Error> {

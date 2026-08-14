@@ -20,20 +20,20 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     Report(ReportArgs),
     Update(UpdateArgs),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     Schedule(ScheduleArgs),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     Uninstall,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduleArgs {
     #[command(subcommand)]
     pub(crate) command: ScheduleCommand,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Subcommand)]
 pub(crate) enum ScheduleCommand {
     Install(ScheduleInstallArgs),
@@ -44,14 +44,14 @@ pub(crate) enum ScheduleCommand {
     Run(ScheduleRunArgs),
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduleInstallArgs {
     #[command(flatten)]
     options: ScheduledUpdateArgs,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduleRunArgs {
     #[command(flatten)]
@@ -60,7 +60,7 @@ pub(crate) struct ScheduleRunArgs {
     apply: bool,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduledUpdateArgs {
     #[arg(long, default_value_t = 15, value_parser = parse_positive_u64)]
@@ -122,6 +122,9 @@ pub(crate) struct UpdateArgs {
 pub(crate) enum CliError {
     #[error("could not resolve default Codex home: {0}")]
     HomeNotSet(&'static str),
+    #[cfg(any(target_os = "windows", test))]
+    #[error("could not resolve scheduler state: {0}")]
+    SchedulerStateNotSet(&'static str),
 }
 
 impl ReportArgs {
@@ -149,14 +152,14 @@ impl UpdateArgs {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl ScheduleInstallArgs {
     pub(crate) fn options(&self) -> &ScheduledUpdateArgs {
         &self.options
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl ScheduleRunArgs {
     pub(crate) fn options(&self) -> &ScheduledUpdateArgs {
         debug_assert!(self.apply);
@@ -164,7 +167,7 @@ impl ScheduleRunArgs {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl ScheduledUpdateArgs {
     pub(crate) fn codex_home(&self) -> Result<PathBuf, CliError> {
         resolve_codex_home(&self.codex_home)
@@ -307,9 +310,24 @@ fn parse_metrics(value: &str) -> Result<MetricList, String> {
         .map_err(|error| error.to_string())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn parse_metric_text(value: &str) -> Result<String, String> {
     parse_metrics(value).map(|_| value.into())
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_local_app_data(local_app_data: Option<std::ffi::OsString>) -> Result<PathBuf, CliError> {
+    local_app_data
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .ok_or(CliError::SchedulerStateNotSet(
+            "LOCALAPPDATA is not set or empty",
+        ))
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn local_app_data() -> Result<PathBuf, CliError> {
+    windows_local_app_data(env::var_os("LOCALAPPDATA"))
 }
 
 #[cfg(test)]
@@ -318,9 +336,9 @@ mod tests {
 
     use clap::Parser;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     use super::ScheduleCommand;
-    use super::{Cli, Command, UpdateArgs, windows_home};
+    use super::{Cli, Command, UpdateArgs, windows_home, windows_local_app_data};
     use crate::title::MetricList;
 
     fn update(arguments: &[&str]) -> UpdateArgs {
@@ -413,7 +431,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn parses_schedule_commands_and_rejects_unsupported_selection() {
         for arguments in [
@@ -459,7 +477,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn schedule_arguments_preserve_the_installed_update_contract() {
         let parse = |arguments: &[&str]| {
@@ -524,7 +542,7 @@ mod tests {
         assert_eq!(run.options().max_runtime().as_secs(), 240);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
     fn parser_rejects_macos_scheduler_commands() {
         for arguments in [vec!["schedule", "install"], vec!["uninstall"]] {
@@ -569,5 +587,19 @@ mod tests {
             ),
             Some(PathBuf::from(r"D:\Users\Codex")),
         );
+    }
+
+    #[test]
+    fn windows_scheduler_state_requires_nonempty_local_app_data() {
+        assert_eq!(
+            windows_local_app_data(Some(OsString::from(r"C:\Users\Codex\AppData\Local"))).unwrap(),
+            PathBuf::from(r"C:\Users\Codex\AppData\Local")
+        );
+        for value in [Some(OsString::new()), None] {
+            assert_eq!(
+                windows_local_app_data(value).unwrap_err().to_string(),
+                "could not resolve scheduler state: LOCALAPPDATA is not set or empty"
+            );
+        }
     }
 }
