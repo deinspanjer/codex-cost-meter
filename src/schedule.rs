@@ -13,9 +13,15 @@ use crate::update::{self, UpdateError, UpdateOptions};
 
 use crate::update::FailureClass;
 
+#[cfg(target_os = "macos")]
 mod macos;
+#[allow(dead_code)] // Windows lifecycle dispatch is intentionally deferred to Task 3.
+mod windows;
 
+#[cfg(target_os = "macos")]
 pub(crate) use macos::{Inspection, Paths};
+#[cfg(target_os = "windows")]
+pub(crate) use windows::{Inspection, Paths};
 
 const MAX_STATUS_BYTES: u64 = 4096;
 
@@ -107,13 +113,18 @@ pub(crate) enum StatusError {
 
 #[derive(Debug, Error)]
 pub(crate) enum ScheduleError {
+    #[cfg(target_os = "macos")]
     #[error("could not find the current executable")]
     CurrentExecutable {
         #[source]
         source: io::Error,
     },
+    #[cfg(target_os = "macos")]
     #[error(transparent)]
     Lifecycle(#[from] macos::LifecycleError),
+    #[cfg(target_os = "windows")]
+    #[error(transparent)]
+    Lifecycle(#[from] windows::LifecycleError),
 }
 
 #[derive(Debug, Error)]
@@ -128,22 +139,47 @@ pub(crate) enum ScheduledRunError {
     },
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn install(paths: &Paths, options: &InstallOptions) -> Result<(), ScheduleError> {
     macos::install(paths, options).map_err(Into::into)
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn install(paths: &Paths, options: &InstallOptions) -> Result<(), ScheduleError> {
+    windows::install(paths, options).map_err(Into::into)
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn inspect(paths: &Paths) -> Result<Inspection, ScheduleError> {
     macos::inspect(paths).map_err(Into::into)
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn inspect(paths: &Paths) -> Result<Inspection, ScheduleError> {
+    windows::inspect(paths).map_err(Into::into)
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn remove(paths: &Paths) -> Result<(), ScheduleError> {
     macos::remove(paths).map_err(Into::into)
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn remove(paths: &Paths) -> Result<(), ScheduleError> {
+    windows::remove(paths).map_err(Into::into)
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn resume(paths: &Paths) -> Result<(), ScheduleError> {
     macos::resume(paths).map_err(Into::into)
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn resume(paths: &Paths) -> Result<(), ScheduleError> {
+    windows::resume(paths).map_err(Into::into)
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn uninstall(paths: &Paths) -> Result<(), ScheduleError> {
     macos::uninstall(paths).map_err(Into::into)
 }
