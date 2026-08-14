@@ -9,20 +9,64 @@ permissions:
   contents: read
 
 jobs:
-  check:
-    runs-on: macos-15
+  # Required check names must still complete when expensive work is skipped.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
-      - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
-      - run: rustup default 1.97.1
-      - run: cargo fmt --check
-      - run: cargo test
-      - run: python3 -m unittest scripts/test_version.py -v
-      - run: cargo clippy --all-targets --keep-going -- -D warnings
+      - id: classify
+        name: Classify changed files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          changed=false
+          docs_only=true
+          while IFS= read -r path; do
+            changed=true
+            case "$path" in
+              *.md) ;;
+              *) docs_only=false; break ;;
+            esac
+          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          if [ "$changed" = false ]; then docs_only=false; fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: changes
+    if: always()
+    runs-on: ${{ needs.changes.outputs.docs_only == 'true' && 'ubuntu-latest' || 'macos-15' }}
+    steps:
+      - name: Require change classification
+        if: needs.changes.result != 'success'
+        run: exit 1
+      - name: Skip builds for documentation-only changes
+        if: needs.changes.outputs.docs_only == 'true'
+        run: echo "All changed files are Markdown."
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        if: needs.changes.outputs.docs_only != 'true'
+        with:
+          fetch-depth: 0
+      - if: needs.changes.outputs.docs_only != 'true'
+        run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - if: needs.changes.outputs.docs_only != 'true'
+        run: rustup default 1.97.1
+      - if: needs.changes.outputs.docs_only != 'true'
+        run: cargo fmt --check
+      - if: needs.changes.outputs.docs_only != 'true'
+        run: cargo test
+      - if: needs.changes.outputs.docs_only != 'true'
+        run: python3 -m unittest scripts/test_version.py -v
+      - if: needs.changes.outputs.docs_only != 'true'
+        run: cargo clippy --all-targets --keep-going -- -D warnings
 
   windows:
+    needs: changes
+    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -109,6 +153,9 @@ jobs:
           exit 0
 
   build:
+    needs: changes
+    if: always()
+    name: build (${{ matrix.runner }}, ${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
@@ -117,12 +164,23 @@ jobs:
             target: aarch64-apple-darwin
           - runner: macos-15-intel
             target: x86_64-apple-darwin
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ needs.changes.outputs.docs_only == 'true' && 'ubuntu-latest' || matrix.runner }}
     steps:
+      - name: Require change classification
+        if: needs.changes.result != 'success'
+        run: exit 1
+      - name: Skip build for documentation-only changes
+        if: needs.changes.outputs.docs_only == 'true'
+        run: echo "All changed files are Markdown."
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           fetch-depth: 0
-      - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
-      - run: rustup default 1.97.1
-      - run: rustup target add ${{ matrix.target }}
-      - run: cargo build --release --target ${{ matrix.target }}
+      - if: needs.changes.outputs.docs_only != 'true'
+        run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - if: needs.changes.outputs.docs_only != 'true'
+        run: rustup default 1.97.1
+      - if: needs.changes.outputs.docs_only != 'true'
+        run: rustup target add ${{ matrix.target }}
+      - if: needs.changes.outputs.docs_only != 'true'
+        run: cargo build --release --target ${{ matrix.target }}

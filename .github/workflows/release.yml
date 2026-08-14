@@ -3,6 +3,8 @@ name: Release
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
 
 permissions:
   contents: read
@@ -13,15 +15,13 @@ concurrency:
 
 jobs:
   version:
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.version.outputs.changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
-      - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
-      - run: rustup default 1.97.1
       - run: python3 scripts/version.py verify
       - id: version
         run: echo "changed=$(python3 scripts/version.py changed --before '${{ github.event.before }}')" >> "$GITHUB_OUTPUT"
