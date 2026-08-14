@@ -114,8 +114,6 @@ pub(crate) enum ScheduledRunError {
         remediation: String,
         status_unavailable: &'static str,
     },
-    #[error("could not write scheduled output")]
-    Output,
 }
 
 pub(crate) fn install(paths: &Paths, options: &InstallOptions) -> Result<(), ScheduleError> {
@@ -164,9 +162,7 @@ pub(crate) fn run_scheduled(
             )
             .is_err()
             {
-                writer
-                    .write_all(b"update completed; schedule status unavailable\n")
-                    .map_err(|_| ScheduledRunError::Output)?;
+                let _ = writer.write_all(b"update completed; schedule status unavailable\n");
             }
             Ok(())
         }
@@ -336,16 +332,85 @@ fn set_private_permissions(_: &File) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        fs,
+        io::{self, Write},
+    };
 
+    use rusqlite::Connection;
     use tempfile::TempDir;
     use time::{Duration, OffsetDateTime};
 
     use super::{
-        ResultCode, Status, StatusError, after_failure, after_success, read_status, resume_status,
-        write_status,
+        Paths, ResultCode, Status, StatusError, after_failure, after_success, read_status,
+        resume_status, run_scheduled, write_status,
     };
-    use crate::update::FailureClass;
+    use crate::{
+        title::{MetricList, TitleFormat},
+        update::{FailureClass, UpdateOptions},
+    };
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("scheduled output unavailable"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn scheduled_options() -> UpdateOptions {
+        UpdateOptions {
+            thread_ids: Vec::new(),
+            title_matches: Vec::new(),
+            idle_minutes: Some(15),
+            limit: 500,
+            max_runtime: Some(std::time::Duration::from_secs(240)),
+            reprice_before: None,
+            apply: true,
+            title_format: TitleFormat::new(65, MetricList::default()),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_update_ignores_a_failed_status_notice_write() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TempDir::new().unwrap();
+        let paths = Paths::new(directory.path());
+        let codex_home = directory.path().join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        Connection::open(codex_home.join("state_5.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT, history_mode TEXT, updated_at INTEGER, first_user_message TEXT)",
+            )
+            .unwrap();
+        write_status(
+            paths.status(),
+            &after_success(None, OffsetDateTime::UNIX_EPOCH),
+        )
+        .unwrap();
+        let parent = paths.status().parent().unwrap();
+        let original = fs::metadata(parent).unwrap().permissions();
+        let mut denied = original.clone();
+        denied.set_mode(0o500);
+        fs::set_permissions(parent, denied).unwrap();
+
+        let result = run_scheduled(
+            &paths,
+            &codex_home,
+            &scheduled_options(),
+            &mut FailingWriter,
+        );
+
+        fs::set_permissions(parent, original).unwrap();
+        assert!(result.is_ok());
+    }
 
     #[test]
     fn failure_transitions_pause_after_three_ordinary_failures_or_one_severe_failure() {
