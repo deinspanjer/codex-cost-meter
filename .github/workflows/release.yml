@@ -73,6 +73,8 @@ jobs:
           path: artifacts
       - name: Merge, package, and publish
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           binary=target/universal2/release/codex-cost-meter

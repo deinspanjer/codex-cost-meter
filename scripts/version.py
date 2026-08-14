@@ -143,23 +143,9 @@ def tagged(root, version):
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
-def changed(root, before):
+def changed(root, _before):
     _, version = read_package(root)
-    if tagged(root, version):
-        return False
-    result = subprocess.run(
-        ["git", "show", f"{before}:Cargo.toml"],
-        cwd=root,
-        text=True,
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        return True
-    try:
-        _, previous = package_metadata(result.stdout)
-    except ValueError:
-        return True
-    return previous != version
+    return version != "0.0.0" and not tagged(root, version)
 
 
 def package(root, binary, output_dir):

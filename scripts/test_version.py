@@ -107,17 +107,25 @@ class VersionToolTests(unittest.TestCase):
         )
         self.assertEqual(self.run_tool("notes", "1.2.3").stdout, "- Keep this\n")
 
-    def test_changed_compares_previous_commit_and_existing_tag(self):
+    def test_changed_requires_a_nonzero_untagged_version(self):
         self.git("init", "-q")
         self.git("config", "user.email", "test@example.com")
         self.git("config", "user.name", "Test")
         self.git("add", ".")
         self.git("commit", "-qm", "initial")
         before = self.git("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(self.run_tool("changed", "--before", before).stdout.strip(), "false")
         self.run_tool("bump", "minor")
         self.git("add", ".")
         self.git("commit", "-qm", "release")
         self.assertEqual(self.run_tool("changed", "--before", before).stdout.strip(), "true")
+        before_retry = self.git("rev-parse", "HEAD").stdout.strip()
+        (self.root / "README.md").write_text("# Retry\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-qm", "retry")
+        self.assertEqual(
+            self.run_tool("changed", "--before", before_retry).stdout.strip(), "true"
+        )
         self.git("tag", "v0.1.0")
         self.assertEqual(self.run_tool("changed", "--before", before).stdout.strip(), "false")
 
