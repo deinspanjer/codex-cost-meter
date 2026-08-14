@@ -262,7 +262,13 @@ fn build_with_index(
     let mut warnings = index
         .warnings()
         .iter()
-        .map(|warning| format!("rollout scan could not read {}", warning.path.display()))
+        .map(|warning| {
+            format!(
+                "rollout scan could not read {} ({})",
+                warning.path.display(),
+                warning.error
+            )
+        })
         .collect::<Vec<_>>();
 
     if index.malformed_lines_skipped() > 0 {
@@ -531,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_selected_root_is_an_error() {
+    fn selected_file_disappearing_after_discovery_is_an_error() {
         let home = fixture_home();
         let index = RolloutIndex::build(home.path()).unwrap();
         fs::remove_file(home.path().join("sessions/root.jsonl")).unwrap();

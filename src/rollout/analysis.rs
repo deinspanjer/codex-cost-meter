@@ -42,25 +42,6 @@ pub(crate) struct RolloutStats {
     pub incomplete_usage: bool,
 }
 
-impl RolloutStats {
-    pub(crate) fn majority_model(&self) -> Option<&str> {
-        self.majority().map(|(model, _)| model)
-    }
-
-    pub(crate) fn majority_effort(&self) -> Option<&str> {
-        self.majority().map(|(_, effort)| effort)
-    }
-
-    fn majority(&self) -> Option<(&str, &str)> {
-        self.turn_models
-            .iter()
-            .max_by(|(left, left_count), (right, right_count)| {
-                left_count.cmp(right_count).then_with(|| right.cmp(left))
-            })
-            .map(|((model, effort), _)| (model.as_str(), effort.as_str()))
-    }
-}
-
 #[derive(Debug, Error)]
 pub(crate) enum AnalysisError {
     #[error(transparent)]
@@ -610,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn records_turn_durations_and_breaks_model_effort_majority_ties_lexically() {
+    fn records_turn_durations_and_model_effort_contexts() {
         let stats = analyze_fixture(&[
             metadata("2026-08-13T10:00:00Z"),
             context(Some("a"), "gpt-5.6-terra", "high"),
@@ -624,8 +605,11 @@ mod tests {
         assert_eq!(stats.turns, 2);
         assert_eq!(stats.ended_turns, 2);
         assert_eq!(stats.duration.whole_seconds(), 5);
-        assert_eq!(stats.majority_model(), Some("gpt-5.6-sol"));
-        assert_eq!(stats.majority_effort(), Some("low"));
+        assert_eq!(stats.turn_models.len(), 2);
+        assert_eq!(
+            stats.turn_models.get(&("gpt-5.6-sol".into(), "low".into())),
+            Some(&1)
+        );
     }
 
     #[test]

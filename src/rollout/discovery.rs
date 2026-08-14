@@ -32,7 +32,6 @@ pub(crate) struct RolloutRecord {
     pub path: PathBuf,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct DiscoveryWarning {
     pub path: PathBuf,
@@ -63,7 +62,6 @@ impl JsonlReadError {
 pub(crate) struct RolloutIndex {
     records: HashMap<String, RolloutRecord>,
     children: HashMap<String, Vec<String>>,
-    #[allow(dead_code)]
     warnings: Vec<DiscoveryWarning>,
     oversized_lines_skipped: usize,
     malformed_lines_skipped: usize,
@@ -131,7 +129,6 @@ impl RolloutIndex {
         Some(descendants)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn warnings(&self) -> &[DiscoveryWarning] {
         &self.warnings
     }
