@@ -40,8 +40,12 @@ impl Paths {
     }
 
     fn from_homes(home: &Path, config_home: Option<PathBuf>, state_home: Option<PathBuf>) -> Self {
-        let config_home = config_home.unwrap_or_else(|| home.join(".config"));
-        let state_home = state_home.unwrap_or_else(|| home.join(".local/state"));
+        let config_home = config_home
+            .filter(|path| path.is_absolute())
+            .unwrap_or_else(|| home.join(".config"));
+        let state_home = state_home
+            .filter(|path| path.is_absolute())
+            .unwrap_or_else(|| home.join(".local/state"));
         let units = config_home.join("systemd/user");
         Self {
             service: units.join(SERVICE),
@@ -354,6 +358,7 @@ fn systemd_quote(value: &str) -> String {
             '\\' => quoted.push_str("\\\\"),
             '\"' => quoted.push_str("\\\""),
             '$' => quoted.push_str("$$"),
+            '%' => quoted.push_str("%%"),
             '\n' => quoted.push_str("\\n"),
             '\r' => quoted.push_str("\\r"),
             '\t' => quoted.push_str("\\t"),
@@ -487,6 +492,11 @@ mod tests {
     fn paths_fall_back_to_home_or_use_xdg_roots() {
         let directory = TempDir::new().unwrap();
         let fallback = Paths::from_homes(directory.path(), None, None);
+        let relative = Paths::from_homes(
+            directory.path(),
+            Some(PathBuf::from("relative-config")),
+            Some(PathBuf::from("relative-state")),
+        );
         let configured = paths(&directory);
 
         assert_eq!(
@@ -499,6 +509,8 @@ mod tests {
                 .path()
                 .join(".local/state/codex-cost-meter/status.json")
         );
+        assert_eq!(relative.service(), fallback.service());
+        assert_eq!(relative.status(), fallback.status());
         assert_eq!(
             configured.timer(),
             directory.path().join("config/systemd/user").join(TIMER)
@@ -507,6 +519,20 @@ mod tests {
             configured.status(),
             directory.path().join("state/codex-cost-meter/status.json")
         );
+    }
+
+    #[test]
+    fn service_unit_escapes_systemd_specifiers_in_dynamic_arguments() {
+        let directory = TempDir::new().unwrap();
+        let mut options = options(&directory);
+        options.codex_home = PathBuf::from("/tmp/codex%h");
+        options.title_metrics = "cost%u$".into();
+
+        let unit = super::service_unit(&options, Path::new("/tmp/codex%n"));
+
+        assert!(unit.contains("ExecStart=\"/tmp/codex%%n\""));
+        assert!(unit.contains("--codex-home \"/tmp/codex%%h\""));
+        assert!(unit.contains("--title-metrics \"cost%%u$$\""));
     }
 
     #[test]
