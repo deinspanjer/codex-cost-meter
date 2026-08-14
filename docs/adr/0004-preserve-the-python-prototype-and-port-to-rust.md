@@ -179,6 +179,26 @@ The refined v0.2 design adds one bundled SQLite dependency, three focused module
 
 The forecast assumes bundled SQLite builds for both macOS architectures without toolchain intervention, the observed Codex schema still satisfies the required-column contract, disk-full behavior can be tested through bounded I/O failure injection, and scheduling remains outside v0.2. Bounded implementation and review packets should use Terra where available; architectural or unresolved data-integrity decisions remain with Sol.
 
+### v0.2 planning actual and post-plan forecast
+
+The finalized six-task TDD plan produced this cumulative post-plan baseline:
+
+| Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| ---: | ---: | ---: | ---: | ---: |
+| 250 | 5h 21m 11.025s | 238,900,661 | 890,051 | 239,790,712 |
+
+Compared with the v0.2 post-design baseline, detailed planning used 3 turns, 9.938s of summed agent time, 1,994,109 input tokens, and 13,315 output tokens. This planning cost counts against the post-design forecast. The snapshot is the implementation baseline for the post-plan comparison, and total program output remained below the 1,000,000,000-token stop gate.
+
+The plan has five independently reviewable implementation tasks plus documentation, accounting, final review, release-decider, and publication work. Release-persona refresh and release-decider execution remain excluded governance overhead; fixes they request remain delivery work.
+
+| Remaining v0.2 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Shared report/session-index state and title composition | 8–16 | 2–4 hours | 35k–100k |
+| SQLite selection, mutation, lock, and recovery | 14–28 | 3–7 hours | 55k–170k |
+| CLI integration and compatibility hardening | 6–14 | 1.5–4 hours | 25k–80k |
+| Durable docs, validation, review, correction, and release | 10–20 | 1.5–5 hours | 35k–100k |
+| **Remaining v0.2 total** | **38–78** | **8–20 hours** | **150k–450k** |
+
 ## Milestone self-reports
 
 ### v0.1.0 late post-release snapshot
