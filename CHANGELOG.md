@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.5.2]
+
+- Improve first-report onboarding with a visual quick start and session-ID guidance.
+
 ## [0.5.1]
 
 - Add first-report onboarding and self-documenting command help.

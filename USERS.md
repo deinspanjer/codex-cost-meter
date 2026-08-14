@@ -7,7 +7,7 @@ To produce your first report:
 1. Open the [latest stable release](https://github.com/deinspanjer/codex-cost-meter/releases/latest). Download the macOS Universal 2 `.tar.gz` archive for either Apple Silicon or Intel, or the Windows x64 `.zip` archive, plus that archive's matching `.sha256` file.
 2. Verify the download before extracting it. On macOS, run `shasum -a 256 -c codex-cost-meter-v<VERSION>-macos-universal2.tar.gz.sha256`. In PowerShell on Windows, run `& { $archive = 'codex-cost-meter-v<VERSION>-windows-x64.zip'; $expected = (Get-Content "$archive.sha256" -Raw).Trim().Split()[0]; if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw "checksum mismatch" } }`.
 3. Extract the verified archive: `tar -xzf codex-cost-meter-v<VERSION>-macos-universal2.tar.gz` on macOS, or `Expand-Archive codex-cost-meter-v<VERSION>-windows-x64.zip -DestinationPath .\codex-cost-meter` in PowerShell.
-4. Copy the task ID from the URL of the Codex task you want to report, then run `./codex-cost-meter report <TASK_ID>` on macOS or `& .\codex-cost-meter\codex-cost-meter.exe report <TASK_ID>` in PowerShell.
+4. [Copy the session ID from the Codex app](#find-your-session-id), then run `./codex-cost-meter report <THREAD_ID>` on macOS or `& .\codex-cost-meter\codex-cost-meter.exe report <THREAD_ID>` in PowerShell.
 
 Place the binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or `$env:USERPROFILE\.codex\codex-cost-meter.exe` in PowerShell on Windows. The Windows location is a suggestion, not a requirement.
 
@@ -33,11 +33,73 @@ Use the bare executable name only when you place it in an existing directory on 
 
 The macOS archive is ad-hoc signed, not Developer ID signed or notarized. Gatekeeper can therefore require a user decision before first launch. The Windows executable is unsigned, so Windows or organizational controls can also require an explicit trust decision or block it. Verify the downloaded checksum and follow your organization's trust process; the checksum detects transfer corruption or tampering but does not establish publisher identity. Production signing is planned for a later release.
 
+## Find your session ID
+
+The report and explicit `update --thread-id` commands need a Codex session ID. The app offers two convenient ways to copy it:
+
+1. Right-click the task in the sidebar and select **Copy session ID**.
+
+   ![Codex sidebar task menu with Copy session ID selected](https://raw.githubusercontent.com/deinspanjer/codex-cost-meter/main/docs/assets/session-id-sidebar-menu.png)
+
+2. Open the task header's ellipsis menu, select **Copy**, then select **Copy session ID**.
+
+   ![Codex task header menu leading to Copy session ID](https://raw.githubusercontent.com/deinspanjer/codex-cost-meter/main/docs/assets/session-id-header-menu.png)
+
+Paste that value in place of `<THREAD_ID>` or `<SESSION_ID>` in the examples. A session ID is often useful for support and reproducibility, but it can still identify a private task; review it before sharing.
+
+## Ask Codex to run it
+
+If you already have the executable and a copied session ID, you can ask Codex to run the report for you:
+
+```text
+Run <PATH_TO_CODEX_COST_METER> report <SESSION_ID> and explain the result. Do not share the output until I have reviewed it.
+```
+
+Codex follows your normal approval settings for the local command. Review the result yourself before sharing it: reports can include task IDs, titles, project paths, and usage information.
+
+## Codex status display
+
+In an interactive Codex CLI task, `/status` shows the current model, approval settings, and token usage. Run `/statusline` to choose which items Codex keeps in the terminal status line. Those commands display Codex task information; they do not run or replace `codex-cost-meter report <SESSION_ID>`.
+
 ## Read the report
 
 Human output shows root and whole-tree totals, per-model usage, price metadata, and summed agent-turn time. A trailing `+` on a human cost means the displayed amount is only the known partial cost. In JSON, the corresponding complete estimate is `null`; inspect `incomplete_input`, `unpriced_models`, `unattributed_usage_tokens`, and `incomplete_input_warnings` before treating an estimate as complete.
 
 Cost uses the embedded historical catalog and is an API-list-price approximation, not a billing record. Reasoning is included in output usage; cache reads are included in input usage.
+
+### Larger worked example
+
+This deterministic worked example uses a synthetic session ID and fixture data. It shows why the whole-tree row, per-model rows, price metadata, and agent-turn time belong together when a task has descendants.
+
+```text
+$ ./codex-cost-meter report f8b0c8e4-3dfd-4f33-99e7-9eb2d02f7c71
+Codex rollout f8b0c8e4-3dfd-4f33-99e7-9eb2d02f7c71
+Project: codex-cost-meter
+Name: Example release session
+Type: root   Primary: gpt-5.6-terra / high   Descendants: 3
+
+Scope
+Scope       Turns                         Input      Cache read  Output   Reasoning  Duration  Cost
+----------  ----------------------------  ---------  ----------  -------  ---------  --------  -----
+Root        1 (1 complete, 0 incomplete)  125,000    100,000     18,000   12,000     3m 1.0s   $0.29
+Whole tree  4 (4 complete, 0 incomplete)  2,025,000  1,725,000   145,000  100,000    12m 4.0s  $3.89
+
+Models
+Model              Turns                         Input      Cache read  Output   Reasoning  Duration  Cost
+-----------------  ----------------------------  ---------  ----------  -------  ---------  --------  -----
+gpt-5.6-sol        1                             1,000,000  850,000     40,000   28,000     -         $2.38
+gpt-5.6-terra      2                             725,000    600,000     93,000   64,000     -         $1.49
+codex-auto-review  1                             300,000    275,000     12,000   8,000      -         $0.02
+Total              4 (4 complete, 0 incomplete)  2,025,000  1,725,000   145,000  100,000    12m 4.0s  $3.89
+
+Agent-turn time: 9m 3.0s (agent time can overlap).
+Pricing as of: 2026-08-06
+Pricing source: https://developers.openai.com/api/docs/pricing
+Model proxies:
+  codex-auto-review -> gpt-5.6-luna
+  gpt-5.6 -> gpt-5.6-sol
+Notes: cache read is included in input; reasoning is included in output; agent time can overlap.
+```
 
 ## Preview or apply title updates
 
@@ -76,6 +138,11 @@ On Windows PowerShell, invoke the suggested install location as `& "$env:USERPRO
 On Windows, scheduling commands require a nonempty `LOCALAPPDATA`; they store the bounded status at `%LOCALAPPDATA%\codex-cost-meter\status.json`. `--codex-home` and `CODEX_HOME` select Codex storage only and do not replace `LOCALAPPDATA`. Task Scheduler keeps the registered task definition for the current user, including the executable and Codex-home paths. On macOS, `uninstall` removes the schedule and deletes only the currently running executable. On Windows, it removes the schedule first and starts a short-lived cleanup process that deletes the executable after it exits; `executable deletion scheduled` does not mean deletion has already completed. If the executable remains after the process has exited, delete that exact `.exe` manually. Neither platform's uninstall deletes Codex data or a parent directory.
 
 Scheduled runs create no append-only log and are normally silent on success and ordinary lock contention. If an update succeeds but its bounded status cannot be persisted, it prints only `update completed; schedule status unavailable`. They store only fixed result codes and remediation, not task metadata, paths, IDs, titles, prompts, or arbitrary error text. Three consecutive ordinary failures pause the schedule; disk-full, incompatible SQLite schema, and permission-denied failures pause it immediately. Use `schedule status`, correct the local issue, then run `schedule resume`.
+
+## App display limitations
+
+- A scheduled update can write the title successfully without changing an already-open ChatGPT/Codex App window. Restart the app or open **File > New Window** to see the updated title.
+- Opening a task can cause Codex to regenerate its title and temporarily remove the cost suffix. The next successful scheduled update restores it, but its display can still wait for a new window as described above.
 
 ## Privacy and troubleshooting
 
