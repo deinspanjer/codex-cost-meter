@@ -814,14 +814,23 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_failure_does_not_append_to_the_index() {
+    fn later_sqlite_failure_rolls_back_earlier_updates_without_an_index_append() {
         let home = TempDir::new().unwrap();
         let database = database(&home, false, &REQUIRED);
         insert(
             &database,
-            "root",
-            Some("Stored"),
-            Some("Stored"),
+            "first",
+            Some("First title"),
+            Some("First sidebar"),
+            "legacy",
+            0,
+            Some("Prompt"),
+        );
+        insert(
+            &database,
+            "second",
+            Some("Second title"),
+            Some("Second sidebar"),
             "legacy",
             0,
             Some("Prompt"),
@@ -829,47 +838,74 @@ mod tests {
         Connection::open(&database)
             .unwrap()
             .execute_batch(
-                "CREATE TRIGGER reject_title_update BEFORE UPDATE ON threads BEGIN SELECT RAISE(ABORT, 'constraint violation'); END;",
+                "CREATE TRIGGER reject_second_title_update BEFORE UPDATE ON threads WHEN NEW.id = 'second' BEGIN SELECT RAISE(ABORT, 'constraint violation'); END;",
             )
             .unwrap();
-        rollout(&home, "root", None);
+        rollout(&home, "first", None);
+        rollout(&home, "second", None);
         let mut options = options();
-        options.thread_ids = vec!["root".into()];
+        options.thread_ids = vec!["first".into(), "second".into()];
         options.apply = true;
 
         assert!(matches!(
             run(home.path(), &options),
             Err(UpdateError::Database { .. })
         ));
+        let connection = Connection::open(&database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT title, name FROM threads WHERE id = 'first'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .unwrap(),
+            ("First title".into(), "First sidebar".into())
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT title, name FROM threads WHERE id = 'second'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .unwrap(),
+            ("Second title".into(), "Second sidebar".into())
+        );
         assert!(!home.path().join("session_index.jsonl").exists());
     }
 
     #[cfg(unix)]
     #[test]
-    fn append_failure_after_commit_is_repaired_by_a_rerun() {
+    fn append_failure_after_commit_is_repaired_by_an_idle_rerun() {
         use std::os::unix::fs::PermissionsExt;
 
         let home = TempDir::new().unwrap();
         let database = database(&home, false, &REQUIRED);
+        let updated_at = OffsetDateTime::now_utc().unix_timestamp() - 600;
         insert(
             &database,
             "root",
             Some("Stored"),
             Some("Stored"),
             "legacy",
-            0,
+            updated_at,
             Some("Prompt"),
         );
         rollout(&home, "root", None);
         let index_path = home.path().join("session_index.jsonl");
-        fs::write(
-            &index_path,
-            "{\"id\":\"root\",\"thread_name\":\"old\",\"updated_at\":\"2026-08-14T00:00:00Z\"}\n",
-        )
-        .unwrap();
+        index(
+            &home,
+            &[(
+                "root",
+                "Stored · ⇄100",
+                OffsetDateTime::from_unix_timestamp(updated_at - 1).unwrap(),
+            )],
+        );
         fs::set_permissions(&index_path, fs::Permissions::from_mode(0o444)).unwrap();
         let mut options = options();
-        options.thread_ids = vec!["root".into()];
+        options.idle_minutes = Some(1);
+        options.limit = 1;
         options.apply = true;
 
         assert!(matches!(
@@ -885,12 +921,13 @@ mod tests {
         assert_ne!(committed_title, "Stored");
         assert_eq!(
             Snapshot::load(home.path()).entry("root").unwrap().name,
-            "old"
+            "Stored · ⇄100"
         );
 
         fs::set_permissions(&index_path, fs::Permissions::from_mode(0o644)).unwrap();
-        run(home.path(), &options).unwrap();
+        let repaired = run(home.path(), &options).unwrap();
 
+        assert_eq!(proposal_ids(&repaired), ["root"]);
         assert_eq!(
             Snapshot::load(home.path()).entry("root").unwrap().name,
             committed_title

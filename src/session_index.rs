@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
@@ -76,16 +76,11 @@ pub(crate) fn append(
     let timestamp = updated_at
         .format(&Rfc3339)
         .expect("the RFC3339 format description supports all OffsetDateTime values");
-    let mut index = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .map_err(|source| append_error("open", path, source))?;
+    let mut index = open_index(path)?;
     let end = index
         .seek(SeekFrom::End(0))
         .map_err(|source| append_error("seek", path, source))?;
+    let mut bytes = Vec::new();
     if end > 0 {
         index
             .seek(SeekFrom::Start(end - 1))
@@ -95,32 +90,40 @@ pub(crate) fn append(
             .read_exact(&mut final_byte)
             .map_err(|source| append_error("read", path, source))?;
         if final_byte != *b"\n" {
-            index
-                .seek(SeekFrom::End(0))
-                .map_err(|source| append_error("seek", path, source))?;
-            index
-                .write_all(b"\n")
-                .map_err(|source| append_error("write", path, source))?;
+            bytes.push(b'\n');
         }
     }
     for (id, name) in updates {
-        let record = serde_json::to_vec(&IndexRecord {
-            id,
-            thread_name: name,
-            updated_at: &timestamp,
-        })
+        serde_json::to_writer(
+            &mut bytes,
+            &IndexRecord {
+                id,
+                thread_name: name,
+                updated_at: &timestamp,
+            },
+        )
         .expect("serializing string-only session-index records cannot fail");
-        index
-            .write_all(&record)
-            .and_then(|()| index.write_all(b"\n"))
-            .map_err(|source| append_error("write", path, source))?;
+        bytes.push(b'\n');
     }
+    index
+        .write_all(&bytes)
+        .map_err(|source| append_error("write", path, source))?;
     index
         .flush()
         .map_err(|source| append_error("flush", path, source))?;
     index
         .sync_all()
         .map_err(|source| append_error("sync", path, source))
+}
+
+fn open_index(path: &Path) -> Result<File, AppendError> {
+    OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|source| append_error("open", path, source))
 }
 
 fn append_error(operation: &'static str, path: &Path, source: io::Error) -> AppendError {
@@ -232,13 +235,17 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, io, path::Path};
+    use std::{
+        fs,
+        io::{self, Seek, SeekFrom, Write},
+        path::Path,
+    };
 
     use serde_json::json;
     use tempfile::TempDir;
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-    use super::{AppendError, Snapshot, append, append_error};
+    use super::{AppendError, Snapshot, append, append_error, open_index};
 
     #[test]
     fn retains_the_latest_valid_entry_and_counts_malformed_records() {
@@ -319,5 +326,18 @@ mod tests {
         );
 
         assert!(matches!(error, AppendError::DiskFull { .. }));
+    }
+
+    #[test]
+    fn opens_the_index_with_os_append_semantics() {
+        let home = TempDir::new().unwrap();
+        let path = home.path().join("session_index.jsonl");
+        fs::write(&path, b"existing").unwrap();
+        let mut index = open_index(&path).unwrap();
+
+        index.seek(SeekFrom::Start(0)).unwrap();
+        index.write_all(b"-appended").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"existing-appended");
     }
 }
