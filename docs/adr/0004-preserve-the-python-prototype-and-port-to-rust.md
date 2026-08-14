@@ -130,6 +130,19 @@ The detailed v0.1 plan contains nine implementation tasks with one implementatio
 
 Release-persona construction and release-decider execution remain excluded governance overhead. Corrective implementation prompted by any reviewer or decider remains included. Later milestone ranges retain the post-design forecast until their own just-in-time plans provide a narrower baseline.
 
+## v0.1 candidate actuals
+
+The pre-closeout cumulative snapshot was 131 turns, 4h 50m 31.275s of summed agent time, 99,243,397 input tokens, and 462,246 output tokens. Against the post-plan v0.1 baseline of 78 turns, 2h 06m 59s, 40,676,833 input tokens, and 229,747 output tokens, the conservative delivery delta is:
+
+| Delivery delta | Actual |
+| --- | ---: |
+| Agent turns | 53 |
+| Summed agent time | 2h 43m 32.275s |
+| Input tokens | 58,566,564 |
+| Output tokens | 232,499 |
+
+No additional exclusion is claimed: the actual-capture command ran inside a mixed root turn and cannot be isolated reliably. Compared with the post-plan v0.1 forecast (30–66 turns, 6–16 summed hours, 90k–300k output tokens), turns and output are within range; summed agent time is below the forecast range. Input is measured actual only and had no forecast.
+
 ## Evidence
 
-The decision uses the completed prototype work on rollout statistics, persisted title updates, recovery behavior, fleet portability, and the Rust multi-architecture assessment. Private Codex task identifiers are intentionally omitted from the public repository.
+The decision uses the completed prototype work on rollout statistics, persisted title updates, recovery behavior, fleet portability, and the Rust multi-architecture assessment. Private task identifiers are intentionally omitted from the public repository.

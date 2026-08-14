@@ -1,20 +1,14 @@
 # Codex Cost Meter
 
-Estimate the API-list-price equivalent of a Codex task and its descendants, then include that estimate in the persisted root-task title.
+`codex-cost-meter` is a small macOS utility that reports token usage and an estimated API-list-price cost for one exact Codex thread ID and its descendants. It is diagnostic, not a ChatGPT billing record, and v0.1 never changes Codex state.
 
-This repository preserves the working Python prototype while a small, self-contained Rust replacement is developed for macOS and Windows. The estimates are diagnostic approximations, not ChatGPT billing records.
+v0.1 supports macOS 14+ as a Universal 2 archive for Apple Silicon and Intel. Download the release archive and its checksum from the project's releases; it contains only `codex-cost-meter`, this README, and the license. With no preferred install directory, use `~/.codex/codex-cost-meter`; see the [user guide](USERS.md) for details.
 
-## Repository status
+```text
+codex-cost-meter report <THREAD_ID>
+```
 
-- [`python-prototype/`](python-prototype/) contains the archived scripts, their embedded self-tests, and the macOS LaunchAgent used during prototyping.
-- The Rust port has not been scaffolded yet. One crate is the default unless real boundaries justify more.
-
-## Documentation
-
-- [USERS.md](USERS.md) — run the Python prototype and understand its output and risks.
-- [DEVELOPERS.md](DEVELOPERS.md) — architecture, invariants, verification, and documentation rules.
-- [TODO.md](TODO.md) — unfinished Rust-port work.
-- [Architectural decisions](docs/adr/README.md) — the established read, persistence, high-water, and Rust-port decisions.
+Read the [user guide](USERS.md) for installation, privacy, output, and troubleshooting. [Developer guidance](DEVELOPERS.md) covers the architecture and release process; [future work](TODO.md) is kept separately. The [`python-prototype/`](python-prototype/) directory is an archived historical reference.
 
 ## License
 

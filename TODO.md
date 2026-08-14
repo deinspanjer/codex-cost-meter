@@ -1,9 +1,8 @@
 # TODO
 
-- Scaffold the Rust 2024 implementation as one crate and port the behavioral contracts from the Python self-tests.
-- Implement cross-platform rollout discovery, parsing, descendant accounting, historical pricing, and title formatting.
-- Implement safe SQLite and `session_index.jsonl` updates with narrow macOS and Windows locking adapters.
-- Add CI builds and focused tests for macOS arm64, macOS x86_64, and Windows x64.
-- Define packaging, signing, and release artifacts for the supported architectures.
-- Document macOS LaunchAgent/Jamf and Windows Task Scheduler/Intune or MECM deployment after those packages exist.
-- Decide whether Windows arm64 is warranted from deployment inventory.
+- Deliver macOS title updates, then macOS scheduling.
+- Deliver Windows x64 reporting and title updates, then Windows scheduling; decide from deployment evidence whether Windows arm64 is warranted.
+- Deliver Linux musl x86_64 and aarch64 reporting and title updates, then Linux scheduling.
+- Add a complete price-catalog override/export workflow after the reporting contract is stable.
+- Add a privacy-safe, confirmation-gated submit-issue mode using an allowlist only.
+- Improve installation UX and production macOS/Windows signing toward v1.0.
