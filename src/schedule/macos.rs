@@ -9,9 +9,9 @@ use std::{
 };
 
 use thiserror::Error;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::format_description::well_known::Rfc3339;
 
-use super::{Status, StatusError, read_status, resume_status, write_status};
+use super::{InstallOptions, Status, StatusError, read_status, resume_status, write_status};
 
 const LABEL: &str = "io.github.deinspanjer.codex-cost-meter";
 const LAUNCHCTL: &str = "/bin/launchctl";
@@ -46,17 +46,6 @@ impl Paths {
     pub(crate) fn status(&self) -> &Path {
         &self.status
     }
-}
-
-pub(crate) struct InstallOptions {
-    pub(crate) executable: PathBuf,
-    pub(crate) codex_home: PathBuf,
-    pub(crate) idle_minutes: u64,
-    pub(crate) limit: usize,
-    pub(crate) max_runtime: Duration,
-    pub(crate) max_width: usize,
-    pub(crate) title_metrics: String,
-    pub(crate) reprice_before: Option<OffsetDateTime>,
 }
 
 pub(crate) struct Inspection {
