@@ -10,6 +10,8 @@ use time::OffsetDateTime;
 
 use crate::update::FailureClass;
 
+mod macos;
+
 const MAX_STATUS_BYTES: u64 = 4096;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
