@@ -365,6 +365,27 @@ The `0.3.0` candidate binary produced the following additive, deliberately unfil
 
 The binary scan skipped oversized JSONL records, so the whole-tree complete estimate is unavailable and the displayed known cost is a lower bound; no model was unpriced. Its slightly later whole-tree output total remains below the same absolute stop gate. The difference from the independent snapshot is live local task state advancing between read-only scans, not a filtered accounting adjustment.
 
+### v0.3.0 final pre-decider accounting snapshot
+
+This snapshot follows the whole-branch correction, focused validation, and local Universal 2 package verification, and precedes the release-decider, protected merge, and publication. The selected program root and other task metadata are intentionally omitted from this public record.
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.3 post-plan baseline | 321 | 11h 09m 43.512s | 332,613,311 | 1,286,373 | 333,899,684 |
+| Final pre-decider whole tree | 343 | 12h 19m 14.830s | 377,525,260 | 1,489,534 | 379,014,794 |
+| Raw post-plan delta | 22 | 1h 09m 31.318s | 44,911,949 | 203,161 | 45,115,110 |
+
+No separately attributable post-plan governance lifecycle is excluded at this boundary; direct reporter invocations do not create an agent lifecycle, and mixed controller work remains conservatively charged to delivery. Against the post-plan remaining-v0.3 forecast of 14–34 turns, 4.75–13.5 summed hours, and 90k–270k output tokens, the raw delivery actual is within the turn and output ranges and below the time range. The selected tree had complete model-price coverage, 340 complete or aborted turns and 3 incomplete turns, with known estimated cost of $230.17. Its absolute whole-tree output total of 1,489,534 tokens remains below the 1,000,000,000-token program stop gate; autonomous work may continue without this gate requiring owner review.
+
+The rebuilt `0.3.0` candidate binary produced the following additive, deliberately unfiltered root-task report immediately afterwards:
+
+| Scope | Rollouts | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Known estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 1 | 45 (44 complete, 1 incomplete) | 184,325,312 | 180,785,152 | 492,767 | 186,591 | 443m 30.353s | $122.88 |
+| Whole tree | 82 | 343 (340 complete, 3 incomplete) | 377,860,307 | 365,939,456 | 1,490,146 | 588,023 | 739m 14.830s | $230.31+ |
+
+The binary scan skipped oversized JSONL records, so the whole-tree complete estimate is unavailable and the displayed known cost is a lower bound; no model was unpriced. Its slightly later whole-tree output total also remains below the same absolute stop gate. The difference from the independent snapshot is live local task state advancing between read-only scans, not a filtered accounting adjustment.
+
 
 ## Evidence
 
