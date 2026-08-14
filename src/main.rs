@@ -3,6 +3,7 @@ mod output;
 mod pricing;
 mod report;
 mod rollout;
+mod schedule;
 mod session_index;
 mod title;
 mod update;
