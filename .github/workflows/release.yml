@@ -100,9 +100,8 @@ jobs:
             exit "$status"
           }
           trap cleanup EXIT
-          gh release create "$tag" --draft --title "codex-cost-meter v$version" --notes-file "$notes"
+          gh release create "$tag" "$archive" "$checksum" --draft --title "codex-cost-meter v$version" --notes-file "$notes"
           draft_created=true
-          gh release upload "$tag" "$archive" "$checksum"
           test "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true
           test "$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)" = "$(printf '%s\n%s' "$(basename "$archive")" "$(basename "$checksum")" | sort)"
           gh release edit "$tag" --draft=false
