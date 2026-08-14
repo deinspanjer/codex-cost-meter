@@ -1,8 +1,11 @@
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Output},
 };
+
+#[cfg(unix)]
+use std::path::PathBuf;
 
 use serde_json::{Value, json};
 use tempfile::TempDir;

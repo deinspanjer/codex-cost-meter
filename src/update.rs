@@ -86,6 +86,7 @@ pub(crate) enum UpdateError {
     Title(#[from] TitleError),
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FailureClass {
     Ordinary,
@@ -95,6 +96,7 @@ pub(crate) enum FailureClass {
 }
 
 impl UpdateError {
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn failure_class(&self) -> FailureClass {
         match self {
             Self::Schema { .. } => FailureClass::IncompatibleSchema,
