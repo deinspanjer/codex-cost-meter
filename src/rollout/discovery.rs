@@ -357,19 +357,23 @@ fn rollout_kind(source: Option<&Value>) -> RolloutKind {
     let Some(subagent) = source.get("subagent") else {
         return RolloutKind::Root;
     };
-    let Some(subagent) = subagent.as_object() else {
-        return RolloutKind::Subagent;
+    let (kind, label) = match subagent {
+        Value::String(kind) => (kind.as_str(), None),
+        Value::Object(subagent) => {
+            let Some((kind, label)) = subagent.iter().next() else {
+                return RolloutKind::Subagent;
+            };
+            (kind.as_str(), label.as_str())
+        }
+        _ => return RolloutKind::Subagent,
     };
-    let Some((kind, label)) = subagent.iter().next() else {
-        return RolloutKind::Subagent;
-    };
-    match kind.as_str() {
+    match kind {
         "thread_spawn" => RolloutKind::Subagent,
         "review" => RolloutKind::CodeReview,
         "compact" => RolloutKind::Compaction,
         "memory_consolidation" => RolloutKind::MemoryConsolidation,
-        "other" if label.as_str() == Some("guardian") => RolloutKind::SecurityReview,
-        _ => RolloutKind::OtherSubagent(label.as_str().unwrap_or(kind).to_owned()),
+        "other" if label == Some("guardian") => RolloutKind::SecurityReview,
+        _ => RolloutKind::OtherSubagent(label.unwrap_or(kind).to_owned()),
     }
 }
 
@@ -405,7 +409,7 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
-    use super::{RolloutIndex, RolloutKind, RolloutRecord, resolve_duplicates};
+    use super::{RolloutIndex, RolloutKind, RolloutRecord, resolve_duplicates, rollout_kind};
 
     fn write_jsonl(home: &TempDir, relative: &str, rows: &[serde_json::Value]) -> PathBuf {
         let path = home.path().join(relative);
@@ -516,6 +520,22 @@ mod tests {
             index.record("internal").unwrap().kind,
             RolloutKind::MemoryConsolidation
         );
+    }
+
+    #[test]
+    fn classifies_known_string_subagent_kinds() {
+        let cases = [
+            ("review", RolloutKind::CodeReview),
+            ("memory_consolidation", RolloutKind::MemoryConsolidation),
+        ];
+
+        for (kind, expected) in cases {
+            assert_eq!(
+                rollout_kind(Some(&json!({"subagent": kind}))),
+                expected,
+                "{kind}"
+            );
+        }
     }
 
     #[test]
