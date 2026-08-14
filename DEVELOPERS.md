@@ -8,10 +8,10 @@ Exact-ID reporting reads rollout JSONL plus an optional `session_index.jsonl` na
 
 ## Build and test
 
-Local prerequisites are macOS with Xcode Command Line Tools (`lipo` and `codesign`), Rust 1.97.1 through `rustup`, and `just`. Before `just package`, install the Intel target on the Apple Silicon build host:
+Local prerequisites are macOS with Xcode Command Line Tools (`lipo` and `codesign`), Rust 1.97.1 through `rustup`, and `just`. Before `just package`, install both supported targets:
 
 ```text
-rustup target add x86_64-apple-darwin
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ```
 
 Use focused commands while iterating:
