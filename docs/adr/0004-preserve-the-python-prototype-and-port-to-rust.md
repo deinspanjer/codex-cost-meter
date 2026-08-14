@@ -315,6 +315,27 @@ The refined v0.3 design adds a standard-library LaunchAgent lifecycle, one bound
 
 The forecast assumes `/bin/launchctl` and `/usr/bin/id` retain their supported macOS behavior, current-user LaunchAgents remain available on macOS 14 and later, the executable can unlink itself on macOS, and the existing updater errors can be classified without a general error framework. Most implementation and task-review packets should use Terra; Sol remains reserved for the final whole-branch and owner-approval judgments or unresolved safety questions.
 
+### v0.3 planning actual and post-plan forecast
+
+The finalized five-task TDD plan produced this cumulative post-plan baseline:
+
+| Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| ---: | ---: | ---: | ---: | ---: |
+| 321 | 11h 09m 43.512s | 332,613,311 | 1,286,373 | 333,899,684 |
+
+Compared with the v0.3 post-design baseline, detailed planning and its accounting capture used no additional completed agent lifecycle or summed agent time, 3,068,086 input tokens, and 10,248 output tokens. The root turn remained open across both snapshots, so this is measured token work without a new turn-duration boundary. It counts against the post-design forecast. Total program output remained below the 1,000,000,000-token stop gate.
+
+The plan has four implementation tasks plus candidate documentation, accounting, validation, final review, release-decider, and publication work. Stable-persona construction will not recur; only release-decider execution is excluded governance overhead unless new owner evidence requires a durable rubric refinement.
+
+| Remaining v0.3 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Updater failure classification | 2–4 | 0.5–1.5 hours | 10k–30k |
+| Bounded status and circuit breaker | 2–4 | 0.75–2 hours | 15k–40k |
+| macOS LaunchAgent lifecycle and uninstall | 2–6 | 1–3 hours | 20k–60k |
+| CLI integration and scheduled-run hardening | 2–6 | 1–3 hours | 20k–60k |
+| Durable docs, validation, final review, correction, and release | 6–14 | 1.5–4 hours | 25k–80k |
+| **Remaining v0.3 total** | **14–34** | **4.75–13.5 hours** | **90k–270k** |
+
 
 ## Evidence
 
