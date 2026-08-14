@@ -20,7 +20,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo test
       - run: python3 -m unittest scripts/test_version.py -v
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --keep-going -- -D warnings
 
   windows:
     runs-on: windows-latest
@@ -34,7 +34,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo test
       - run: python -m unittest scripts/test_version.py -v
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --keep-going -- -D warnings
       - run: cargo build --release --target x86_64-pc-windows-msvc
       - name: Package and inspect Windows archive
         shell: pwsh
