@@ -245,24 +245,59 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_negative_rate() {
-        let prices = r#"{"histories":{"model":[{"effective_from":"2026-01-01","input":-1.0,"cached_input":null,"cache_write_input":null,"output":null}]},"proxies":{},"undated_proxies":[]}"#;
+    fn rejects_invalid_catalogs() {
+        enum ExpectedError {
+            NegativeRate,
+            NonIncreasingDate,
+            UnresolvedProxy,
+            InvalidUndatedProxy,
+        }
 
-        assert!(Catalog::parse(prices).is_err());
-    }
+        let cases = [
+            (
+                "negative rate",
+                r#"{"histories":{"model":[{"effective_from":"2026-01-01","input":-1.0,"cached_input":null,"cache_write_input":null,"output":null}]},"proxies":{},"undated_proxies":[]}"#,
+                ExpectedError::NegativeRate,
+            ),
+            (
+                "equal effective dates",
+                r#"{"histories":{"model":[{"effective_from":"2026-01-01","input":1.0,"cached_input":null,"cache_write_input":null,"output":null},{"effective_from":"2026-01-01","input":2.0,"cached_input":null,"cache_write_input":null,"output":null}]},"proxies":{},"undated_proxies":[]}"#,
+                ExpectedError::NonIncreasingDate,
+            ),
+            (
+                "unresolved proxy",
+                r#"{"histories":{},"proxies":{"alias":"missing"},"undated_proxies":[]}"#,
+                ExpectedError::UnresolvedProxy,
+            ),
+            (
+                "undated non-proxy",
+                r#"{"histories":{},"proxies":{},"undated_proxies":["alias"]}"#,
+                ExpectedError::InvalidUndatedProxy,
+            ),
+        ];
 
-    #[test]
-    fn rejects_equal_effective_dates() {
-        let prices = r#"{"histories":{"model":[{"effective_from":"2026-01-01","input":1.0,"cached_input":null,"cache_write_input":null,"output":null},{"effective_from":"2026-01-01","input":2.0,"cached_input":null,"cache_write_input":null,"output":null}]},"proxies":{},"undated_proxies":[]}"#;
-
-        assert!(Catalog::parse(prices).is_err());
-    }
-
-    #[test]
-    fn rejects_a_proxy_without_a_history() {
-        let prices = r#"{"histories":{},"proxies":{"alias":"missing"},"undated_proxies":[]}"#;
-
-        assert!(Catalog::parse(prices).is_err());
+        for (name, prices, expected) in cases {
+            let error = Catalog::parse(prices).err().unwrap();
+            assert!(
+                matches!(
+                    (expected, error),
+                    (
+                        ExpectedError::NegativeRate,
+                        PricingError::NegativeRate { .. }
+                    ) | (
+                        ExpectedError::NonIncreasingDate,
+                        PricingError::NonIncreasingEffectiveDate { .. }
+                    ) | (
+                        ExpectedError::UnresolvedProxy,
+                        PricingError::UnresolvedProxy { .. }
+                    ) | (
+                        ExpectedError::InvalidUndatedProxy,
+                        PricingError::InvalidUndatedProxy(_)
+                    )
+                ),
+                "{name}"
+            );
+        }
     }
 
     #[test]
