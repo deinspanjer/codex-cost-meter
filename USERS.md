@@ -2,7 +2,7 @@
 
 ## Install and run
 
-Download the archive for your platform and its `.sha256` checksum from the release, verify the checksum, and extract the archive. Place the binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or `%USERPROFILE%\.codex\codex-cost-meter.exe` on Windows.
+Download the archive for your platform and its `.sha256` checksum from the release, verify the checksum, and extract the archive. Place the binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or `$env:USERPROFILE\.codex\codex-cost-meter.exe` in PowerShell on Windows.
 
 On macOS, verify the download with `shasum -a 256 -c <CHECKSUM_FILE>`. On Windows, compare `(Get-FileHash <ZIP_FILE> -Algorithm SHA256).Hash` with the hash at the start of the downloaded checksum file. The Windows ZIP contains `codex-cost-meter.exe`, `README.md`, and `LICENSE`.
 
@@ -14,11 +14,12 @@ macOS examples:
 ~/.codex/codex-cost-meter report <THREAD_ID> --codex-home <PATH>
 ```
 
-Windows uses the same `report` and `update` arguments with `codex-cost-meter.exe`. For example:
+Windows uses the same `report` and `update` arguments with `codex-cost-meter.exe`. In PowerShell, replace the placeholder before running:
 
 ```text
-%USERPROFILE%\.codex\codex-cost-meter.exe report <THREAD_ID>
-%USERPROFILE%\.codex\codex-cost-meter.exe update --thread-id <THREAD_ID>
+$threadId = "<THREAD_ID>"
+& "$env:USERPROFILE\.codex\codex-cost-meter.exe" report $threadId
+& "$env:USERPROFILE\.codex\codex-cost-meter.exe" update --thread-id $threadId
 ```
 
 Use the bare executable name only when you place it in an existing directory on `PATH`; v0.4 does not create or use a `bin` directory under the Codex home. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then the platform home plus `.codex`. `report` is read-only and reports that exact ID and its linked descendants without SQLite; `update` is dry-run by default and reads the supported local SQLite state only for title-update selection or application (details below).
