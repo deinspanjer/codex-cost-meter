@@ -130,18 +130,29 @@ The detailed v0.1 plan contains nine implementation tasks with one implementatio
 
 Release-persona construction and release-decider execution remain excluded governance overhead. Corrective implementation prompted by any reviewer or decider remains included. Later milestone ranges retain the post-design forecast until their own just-in-time plans provide a narrower baseline.
 
-## v0.1 candidate actuals
+## v0.1 actuals
 
-The pre-closeout cumulative snapshot was 131 turns, 4h 50m 31.275s of summed agent time, 99,243,397 input tokens, and 462,246 output tokens. Against the post-plan v0.1 baseline of 78 turns, 2h 06m 59s, 40,676,833 input tokens, and 229,747 output tokens, the conservative delivery delta is:
+The release-candidate snapshot was taken after the release decider approved its requested compatibility fix and before the mechanical `0.1.0` version bump:
 
-| Delivery delta | Actual |
-| --- | ---: |
-| Agent turns | 53 |
-| Summed agent time | 2h 43m 32.275s |
-| Input tokens | 58,566,564 |
-| Output tokens | 232,499 |
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens |
+| --- | ---: | ---: | ---: | ---: |
+| Post-plan baseline | 78 | 2h 06m 59s | 40,676,833 | 229,747 |
+| Approved v0.1 candidate | 208 | 5h 08m 57.136s | 202,517,653 | 804,248 |
+| Raw delta | 130 | 3h 01m 58.136s | 161,840,820 | 574,501 |
 
-No additional exclusion is claimed: the actual-capture command ran inside a mixed root turn and cannot be isolated reliably. Compared with the post-plan v0.1 forecast (30–66 turns, 6–16 summed hours, 90k–300k output tokens), turns and output are within range; summed agent time is below the forecast range. Input is measured actual only and had no forecast.
+The raw delta contains the explicitly excluded governance work:
+
+| Excluded governance work | Agent turns | Summed agent time | Input tokens | Output tokens |
+| --- | ---: | ---: | ---: | ---: |
+| Owner-persona construction | 10 | 2m 47.073s | 514,576 | 4,202 |
+| Release-decider evaluation and re-evaluation | 44 | 3m 18.489s | 84,915,802 | 285,180 |
+| **Excluded total** | **54** | **6m 05.562s** | **85,430,378** | **289,382** |
+
+After those exclusions, v0.1 delivery used **76 turns, 2h 55m 52.574s of summed agent time, 76,410,442 input tokens, and 285,119 output tokens**. This includes implementation, ordinary reviews, tests, CI diagnosis, documentation, release preparation, and the decider-requested compatibility fix. No separate exclusion is claimed for actual-capture commands because they ran inside mixed root turns and cannot be isolated reliably.
+
+Compared with the post-plan forecast of 30–66 turns, 6–16 summed hours, and 90k–300k output tokens, delivery exceeded the turn ceiling by 10 turns, completed below the time range, and used 95% of the output-token ceiling. Input remains measured actual only and had no forecast. The original pre-design estimate described a different, broader cross-platform outcome with an informal turn definition, so it remains historical evidence rather than a like-for-like v0.1 comparator.
+
+Total program output at this snapshot was 804,248 tokens, below the 1,000,000,000-token stop gate.
 
 ## Evidence
 
