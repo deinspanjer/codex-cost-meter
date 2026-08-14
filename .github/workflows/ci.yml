@@ -16,6 +16,7 @@ jobs:
         with:
           fetch-depth: 0
       - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - run: rustup default 1.97.1
       - run: just check
 
   build:
@@ -33,5 +34,6 @@ jobs:
         with:
           fetch-depth: 0
       - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - run: rustup default 1.97.1
       - run: rustup target add ${{ matrix.target }}
       - run: cargo build --release --target ${{ matrix.target }}

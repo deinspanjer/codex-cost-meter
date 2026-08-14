@@ -21,6 +21,7 @@ jobs:
         with:
           fetch-depth: 0
       - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - run: rustup default 1.97.1
       - run: python3 scripts/version.py verify
       - id: version
         run: echo "changed=$(python3 scripts/version.py changed --before '${{ github.event.before }}')" >> "$GITHUB_OUTPUT"
@@ -42,6 +43,7 @@ jobs:
         with:
           fetch-depth: 0
       - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - run: rustup default 1.97.1
       - run: rustup target add ${{ matrix.target }}
       - run: just check
       - run: cargo build --release --target ${{ matrix.target }}
@@ -61,6 +63,7 @@ jobs:
         with:
           fetch-depth: 0
       - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - run: rustup default 1.97.1
       - run: rustup target add x86_64-apple-darwin
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -83,10 +86,10 @@ jobs:
           tag="v$version"
           notes=$(mktemp)
           python3 scripts/version.py notes "$version" > "$notes"
-          published=false
+          draft_created=false
           cleanup() {
             status=$?
-            if [ "$published" = false ]; then
+            if [ "$draft_created" = true ]; then
               gh release delete "$tag" --yes || true
               git push origin ":refs/tags/$tag" || true
             fi
@@ -94,8 +97,10 @@ jobs:
             exit "$status"
           }
           trap cleanup EXIT
-          gh release create "$tag" "$archive" "$checksum" --draft --title "codex-cost-meter v$version" --notes-file "$notes"
+          gh release create "$tag" --draft --title "codex-cost-meter v$version" --notes-file "$notes"
+          draft_created=true
+          gh release upload "$tag" "$archive" "$checksum"
           test "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true
           test "$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)" = "$(printf '%s\n%s' "$(basename "$archive")" "$(basename "$checksum")" | sort)"
           gh release edit "$tag" --draft=false
-          published=true
+          draft_created=false
