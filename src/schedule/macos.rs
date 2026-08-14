@@ -16,7 +16,8 @@ use super::{Status, StatusError, read_status, resume_status, write_status};
 const LABEL: &str = "io.github.deinspanjer.codex-cost-meter";
 const LAUNCHCTL: &str = "/bin/launchctl";
 const ID: &str = "/usr/bin/id";
-const MISSING_JOB_EXIT_CODE: i32 = 3;
+const MISSING_BOOTOUT_EXIT_CODE: i32 = 3;
+const MISSING_PRINT_EXIT_CODES: [i32; 2] = [3, 113];
 
 pub(crate) struct Paths {
     plist: PathBuf,
@@ -213,7 +214,8 @@ fn inspect_with_runner(
 ) -> Result<Inspection, LifecycleError> {
     let uid = current_uid(runner)?;
     let output = run(runner, LAUNCHCTL, ["print".into(), job_target(&uid).into()])?;
-    if !output.success && output.exit_code != Some(MISSING_JOB_EXIT_CODE) {
+    if !output.success && !MISSING_PRINT_EXIT_CODES.contains(&output.exit_code.unwrap_or_default())
+    {
         return Err(LifecycleError::Inspect);
     }
     Ok(Inspection {
@@ -227,9 +229,6 @@ fn remove_with_runner(
     paths: &Paths,
     runner: &mut impl CommandRunner,
 ) -> Result<(), LifecycleError> {
-    if !paths.plist.is_file() && !paths.status.is_file() {
-        return Ok(());
-    }
     let uid = current_uid(runner)?;
     bootout(runner, &uid)?;
     remove_file_if_present(&paths.plist)
@@ -343,7 +342,7 @@ fn bootout(runner: &mut impl CommandRunner, uid: &str) -> Result<(), LifecycleEr
         LAUNCHCTL,
         ["bootout".into(), job_target(uid).into()],
     )?;
-    if output.success || output.exit_code == Some(MISSING_JOB_EXIT_CODE) {
+    if output.success || output.exit_code == Some(MISSING_BOOTOUT_EXIT_CODE) {
         Ok(())
     } else {
         Err(LifecycleError::Bootout)
@@ -463,14 +462,26 @@ mod tests {
     }
 
     #[test]
-    fn absent_schedule_files_short_circuit_removal_without_running_a_command() {
+    fn remove_attempts_exact_label_bootout_when_schedule_files_are_absent() {
         let directory = TempDir::new().unwrap();
         let paths = paths(&directory);
-        let mut runner = FakeRunner::default();
+        let mut runner = FakeRunner::with_outputs([output(true, "501\n"), failed_output(3)]);
 
         remove_with_runner(&paths, &mut runner).unwrap();
 
-        assert!(runner.calls.is_empty());
+        assert_eq!(
+            runner.calls,
+            [
+                (PathBuf::from(ID), vec![OsString::from("-u")]),
+                (
+                    PathBuf::from(LAUNCHCTL),
+                    vec![
+                        OsString::from("bootout"),
+                        OsString::from("gui/501/io.github.deinspanjer.codex-cost-meter"),
+                    ],
+                ),
+            ]
+        );
         assert_eq!(
             paths.status(),
             directory
@@ -632,6 +643,39 @@ mod tests {
     }
 
     #[test]
+    fn inspect_treats_launchctl_print_exit_113_as_missing_without_reading_output() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+        let mut runner = FakeRunner::with_outputs([
+            output(true, "501\n"),
+            CommandOutput {
+                success: false,
+                exit_code: Some(113),
+                stdout: b"private scheduler output".to_vec(),
+            },
+        ]);
+
+        let inspection = inspect_with_runner(&paths, &mut runner).unwrap();
+
+        assert!(!inspection.installed);
+        assert!(!inspection.loaded);
+        assert_eq!(inspection.status, None);
+        assert_eq!(
+            runner.calls,
+            [
+                (PathBuf::from(ID), vec![OsString::from("-u")]),
+                (
+                    PathBuf::from(LAUNCHCTL),
+                    vec![
+                        OsString::from("print"),
+                        OsString::from("gui/501/io.github.deinspanjer.codex-cost-meter"),
+                    ],
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn remove_is_idempotent_and_deletes_only_schedule_files() {
         let directory = TempDir::new().unwrap();
         let paths = paths(&directory);
@@ -655,7 +699,7 @@ mod tests {
         let mut second_runner =
             FakeRunner::with_outputs([output(true, "501\n"), output(false, "")]);
         remove_with_runner(&paths, &mut second_runner).unwrap();
-        assert!(second_runner.calls.is_empty());
+        assert_eq!(second_runner.calls.len(), 2);
     }
 
     #[test]

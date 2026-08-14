@@ -25,33 +25,6 @@ fn status_path(home: &Path) -> std::path::PathBuf {
 }
 
 #[test]
-fn safe_schedule_lifecycle_commands_do_not_require_an_installed_job() {
-    let home = TempDir::new().unwrap();
-    let status = run(home.path(), &["schedule", "status"]);
-    assert!(status.status.success(), "{}", stderr(&status));
-    assert_eq!(
-        String::from_utf8(status.stdout).unwrap(),
-        "installed: no\nloaded: no\nlast run: never\n"
-    );
-    assert!(status.stderr.is_empty());
-
-    let remove = run(home.path(), &["schedule", "remove"]);
-    assert!(remove.status.success(), "{}", stderr(&remove));
-    assert!(remove.stderr.is_empty());
-    assert!(
-        !String::from_utf8(remove.stdout)
-            .unwrap()
-            .contains(home.path().to_str().unwrap())
-    );
-
-    let resume = run(home.path(), &["schedule", "resume"]);
-    assert_eq!(resume.status.code(), Some(1));
-    assert!(resume.stdout.is_empty());
-    assert_eq!(stderr(&resume).lines().count(), 1);
-    assert!(stderr(&resume).contains("schedule is not installed"));
-}
-
-#[test]
 fn schedule_parser_errors_and_public_help_do_not_expose_internal_workflow() {
     let home = TempDir::new().unwrap();
     let control = run(

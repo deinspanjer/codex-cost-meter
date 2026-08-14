@@ -102,9 +102,9 @@ impl UpdateError {
                 source: rusqlite::Error::SqliteFailure(error, _),
             } => match error.code {
                 rusqlite::ErrorCode::DiskFull => FailureClass::DiskFull,
-                rusqlite::ErrorCode::PermissionDenied | rusqlite::ErrorCode::ReadOnly => {
-                    FailureClass::PermissionDenied
-                }
+                rusqlite::ErrorCode::CannotOpen
+                | rusqlite::ErrorCode::PermissionDenied
+                | rusqlite::ErrorCode::ReadOnly => FailureClass::PermissionDenied,
                 _ => FailureClass::Ordinary,
             },
             Self::SessionIndexUnreadable {
@@ -580,6 +580,18 @@ mod tests {
                     source: rusqlite::Error::SqliteFailure(
                         ffi::Error {
                             code: ErrorCode::PermissionDenied,
+                            extended_code: 0,
+                        },
+                        None,
+                    ),
+                },
+                FailureClass::PermissionDenied,
+            ),
+            (
+                UpdateError::Database {
+                    source: rusqlite::Error::SqliteFailure(
+                        ffi::Error {
+                            code: ErrorCode::CannotOpen,
                             extended_code: 0,
                         },
                         None,

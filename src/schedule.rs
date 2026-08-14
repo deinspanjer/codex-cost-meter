@@ -121,14 +121,6 @@ pub(crate) fn install(paths: &Paths, options: &InstallOptions) -> Result<(), Sch
 }
 
 pub(crate) fn inspect(paths: &Paths) -> Result<Inspection, ScheduleError> {
-    if !paths.plist().is_file() {
-        return Ok(Inspection {
-            installed: false,
-            loaded: false,
-            status: read_status(paths.status())
-                .map_err(|source| macos::LifecycleError::Status { source })?,
-        });
-    }
     macos::inspect(paths).map_err(Into::into)
 }
 
