@@ -35,7 +35,7 @@ The macOS archive is ad-hoc signed, not Developer ID signed or notarized. Gateke
 
 ## Find your session ID
 
-The report and explicit `update --thread-id` commands need a Codex session ID. The app offers two convenient ways to copy it:
+The report and explicit `update --thread-id` commands need a Codex session ID. If the root thread ID is not already in the Codex CLI status line, run `/status` to show it. To keep it visible between commands, run `/statusline` and add **Current thread identifier**. The app also offers two convenient ways to copy it:
 
 1. Right-click the task in the sidebar and select **Copy session ID**.
 
@@ -52,14 +52,10 @@ Paste that value in place of `<THREAD_ID>` or `<SESSION_ID>` in the examples. A 
 If you already have the executable and a copied session ID, you can ask Codex to run the report for you:
 
 ```text
-Run <PATH_TO_CODEX_COST_METER> report <SESSION_ID> and explain the result. Do not share the output until I have reviewed it.
+Run <PATH_TO_CODEX_COST_METER> report <SESSION_ID> and explain the result.
 ```
 
 Codex follows your normal approval settings for the local command. Review the result yourself before sharing it: reports can include task IDs, titles, project paths, and usage information.
-
-## Codex status display
-
-In an interactive Codex CLI task, `/status` shows the current model, approval settings, and token usage. Run `/statusline` to choose which items Codex keeps in the terminal status line. Those commands display Codex task information; they do not run or replace `codex-cost-meter report <SESSION_ID>`.
 
 ## Read the report
 

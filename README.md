@@ -12,7 +12,7 @@ v0.5 supports macOS 14+ as a Universal 2 archive for Apple Silicon and Intel, pl
 
 1. Download the archive for your platform and its matching checksum from the [latest stable release](https://github.com/deinspanjer/codex-cost-meter/releases/latest).
 2. Verify the checksum before extracting the archive.
-3. [Copy a session ID](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#find-your-session-id) from the Codex app.
+3. [Find your session ID](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#find-your-session-id).
 4. Run `./codex-cost-meter report <SESSION_ID>` on macOS, or `& .\codex-cost-meter\codex-cost-meter.exe report <SESSION_ID>` in PowerShell.
 
 For platform-specific download, checksum, extraction, and trust guidance, see [install and run](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#install-and-run).
@@ -33,7 +33,7 @@ Root        1 (1 complete, 0 incomplete)  125,000    100,000     18,000   12,000
 Whole tree  4 (4 complete, 0 incomplete)  2,025,000  1,725,000   145,000  100,000    12m 4.0s  $3.89
 ```
 
-You can also [ask Codex to run the downloaded tool](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#ask-codex-to-run-it). The [user guide](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#codex-status-display) also explains Codex's `/status` and `/statusline` displays.
+You can also [ask Codex to run the downloaded tool](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#ask-codex-to-run-it). The [user guide](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#find-your-session-id) explains how `/status` shows the session ID and `/statusline` keeps it visible.
 
 ## Documentation
 
