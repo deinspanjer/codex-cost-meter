@@ -2,6 +2,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 
@@ -142,6 +143,38 @@ class VersionToolTests(unittest.TestCase):
         archive = output / "codex-cost-meter-v0.0.0-macos-universal2.tar.gz"
         with tarfile.open(archive, "r:gz") as package:
             self.assertEqual(package.getnames(), ["codex-cost-meter", "README.md", "LICENSE"])
+
+    def test_package_windows_contains_only_the_executable_and_documents(self):
+        self.write_project(name="codex-cost-meter")
+        binary = self.root / "codex-cost-meter.exe"
+        binary.write_bytes(b"fixture binary")
+        (self.root / "Cargo.lock").write_text(
+            "version = 4\n\n[[package]]\nname = \"codex-cost-meter\"\nversion = \"0.0.0\"\n",
+            encoding="utf-8",
+        )
+        output = self.root / "output"
+        self.run_tool("package-windows", "--binary", binary, "--output-dir", output)
+        archive = output / "codex-cost-meter-v0.0.0-windows-x64.zip"
+        with zipfile.ZipFile(archive) as package:
+            self.assertEqual(
+                package.namelist(), ["codex-cost-meter.exe", "README.md", "LICENSE"]
+            )
+            self.assertEqual(
+                [
+                    (info.date_time, info.create_system, info.external_attr >> 16)
+                    for info in package.infolist()
+                ],
+                [
+                    ((1980, 1, 1, 0, 0, 0), 3, 0o100755),
+                    ((1980, 1, 1, 0, 0, 0), 3, 0o100644),
+                    ((1980, 1, 1, 0, 0, 0), 3, 0o100644),
+                ],
+            )
+        checksum = archive.with_suffix(".zip.sha256").read_text(encoding="utf-8")
+        self.assertRegex(
+            checksum,
+            r"^[0-9a-f]{64}  codex-cost-meter-v0\.0\.0-windows-x64\.zip\n$",
+        )
 
     def git(self, *arguments):
         return subprocess.run(

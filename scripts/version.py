@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import zipfile
 
 
 VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
@@ -190,6 +191,45 @@ def package(root, binary, output_dir):
     return archive
 
 
+def package_windows(root, binary, output_dir):
+    name, version = read_package(root)
+    verify(root)
+    binary = binary.resolve()
+    if binary.name != f"{name}.exe":
+        raise ValueError(f"binary must be named {name}.exe")
+    if not binary.is_file():
+        raise ValueError(f"binary does not exist: {binary}")
+
+    files = (
+        (binary, f"{name}.exe", 0o755),
+        (root / "README.md", "README.md", 0o644),
+        (root / "LICENSE", "LICENSE", 0o644),
+    )
+    for source, _, _ in files:
+        if not source.is_file():
+            raise ValueError(f"package input does not exist: {source}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    archive = output_dir / f"{name}-v{version}-windows-x64.zip"
+    checksum = archive.with_suffix(archive.suffix + ".sha256")
+    with zipfile.ZipFile(archive, "w") as package_file:
+        for source, member, mode in files:
+            info = zipfile.ZipInfo(member, date_time=(1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            info.external_attr = (0o100000 | mode) << 16
+            package_file.writestr(
+                info,
+                source.read_bytes(),
+                compress_type=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+            )
+    checksum.write_text(
+        f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
+        encoding="utf-8",
+    )
+    return archive
+
+
 def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -203,6 +243,9 @@ def main():
     package_parser = commands.add_parser("package")
     package_parser.add_argument("--binary", type=Path, required=True)
     package_parser.add_argument("--output-dir", type=Path, required=True)
+    package_windows_parser = commands.add_parser("package-windows")
+    package_windows_parser.add_argument("--binary", type=Path, required=True)
+    package_windows_parser.add_argument("--output-dir", type=Path, required=True)
     commands.add_parser("verify")
     arguments = parser.parse_args()
     root = Path.cwd()
@@ -217,6 +260,8 @@ def main():
             print(str(changed(root, arguments.before)).lower())
         elif arguments.command == "package":
             print(package(root, arguments.binary, arguments.output_dir))
+        elif arguments.command == "package-windows":
+            print(package_windows(root, arguments.binary, arguments.output_dir))
         else:
             verify(root)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

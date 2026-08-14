@@ -22,6 +22,41 @@ jobs:
       - run: python3 -m unittest scripts/test_version.py -v
       - run: cargo clippy --all-targets -- -D warnings
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+      - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - run: rustup default 1.97.1
+      - run: rustup target add x86_64-pc-windows-msvc
+      - run: cargo fmt --check
+      - run: cargo test
+      - run: python -m unittest scripts/test_version.py -v
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build --release --target x86_64-pc-windows-msvc
+      - name: Package and inspect Windows archive
+        shell: pwsh
+        run: |
+          $archive = python scripts/version.py package-windows --binary target/x86_64-pc-windows-msvc/release/codex-cost-meter.exe --output-dir target/release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $archive = $archive.Trim()
+          $package = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $archive).Path)
+          try {
+            $members = @($package.Entries | ForEach-Object FullName)
+            $expected = @("codex-cost-meter.exe", "README.md", "LICENSE")
+            if (($members -join "`n") -cne ($expected -join "`n")) {
+              throw "unexpected ZIP members: $($members -join ', ')"
+            }
+          } finally {
+            $package.Dispose()
+          }
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksum = (Get-Content "$archive.sha256" -Raw).Trim()
+          $expectedChecksum = "$hash  $([IO.Path]::GetFileName($archive))"
+          if ($checksum -ne $expectedChecksum) { throw "checksum mismatch" }
+
   build:
     strategy:
       fail-fast: false
