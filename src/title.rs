@@ -142,6 +142,10 @@ impl TitleFormat {
         metrics.reverse();
         metrics == self.metrics.0
     }
+
+    pub(crate) fn width(&self) -> usize {
+        self.width
+    }
 }
 
 fn strip_canonical_suffix(mut title: &str) -> &str {

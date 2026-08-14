@@ -5,6 +5,7 @@ mod report;
 mod rollout;
 mod session_index;
 mod title;
+mod update;
 
 use std::{
     error::Error,
