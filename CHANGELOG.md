@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.5.0]
+
+- Add current-user Windows Task Scheduler lifecycle management for idle title updates, including bounded status, safe removal, and deferred self-uninstall.
+
 ## [0.4.0]
 
 - Add native Windows x64 reporting and title updates with a checksummed release archive.
