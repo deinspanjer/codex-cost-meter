@@ -1,10 +1,10 @@
 # Developer guide
 
-## v0.2 architecture
+## v0.3 architecture
 
-One Rust 2024 crate produces one `codex-cost-meter` binary. `cli` parses `report` and `update`; `rollout::discovery` bounds and indexes JSONL without following directory symlinks; `rollout::analysis` attributes usage and preserves ambiguity; `pricing` embeds date-aware rates; `report` reuses one rollout/catalog context; `session_index` owns bounded snapshots and durable index appends; `title` owns pure metric parsing and bounded composition; `update` owns SQLite selection, the process lock, and the SQLite-then-JSONL recovery sequence; and `output` renders sanitized report output. `data/model-prices.json` is the built-in catalog.
+One Rust 2024 crate produces one `codex-cost-meter` binary. `cli` parses `report`, `update`, and public scheduling commands; `rollout::discovery` bounds and indexes JSONL without following directory symlinks; `rollout::analysis` attributes usage and preserves ambiguity; `pricing` embeds date-aware rates; `report` reuses one rollout/catalog context; `session_index` owns bounded snapshots and durable index appends; `title` owns pure metric parsing and bounded composition; `update` owns SQLite selection, the process lock, and the SQLite-then-JSONL recovery sequence; `schedule` owns bounded status, result transitions, and scheduled-run orchestration; `schedule::macos` owns the current-user LaunchAgent lifecycle; and `output` renders sanitized report output. `data/model-prices.json` is the built-in catalog.
 
-Exact-ID reporting reads rollout JSONL plus an optional `session_index.jsonl` name. Title updates additionally read the supported `state_5.sqlite` `threads` contract documented in the user guide. `rusqlite` uses its bundled SQLite build so the Universal 2 executable has no separately installed SQLite dependency; the standard-library file lock avoids another locking dependency. The [`python-prototype/`](python-prototype/) directory is historical reference only, not the active architecture.
+Exact-ID reporting reads rollout JSONL plus an optional `session_index.jsonl` name. Title updates additionally read the supported `state_5.sqlite` `threads` contract documented in the user guide. `rusqlite` uses its bundled SQLite build so the Universal 2 executable has no separately installed SQLite dependency; the standard-library file lock avoids another locking dependency. The scheduler writes one bounded, atomically replaced `0600` status record with allowlisted remediation only; it pauses after three ordinary failures or immediately for disk-full, schema, and permission failures. The macOS lifecycle uses fixed tool paths and a private fake-runner seam, so tests cover command plans without registering a real job. The [`python-prototype/`](python-prototype/) directory is historical reference only, not the active architecture.
 
 ## Build and test
 
@@ -22,14 +22,17 @@ just test-filter output::tests
 just test-version
 just test-filter title::tests
 just test-filter update::tests
+cargo test schedule::tests
+cargo test schedule::macos::tests
+cargo test --test schedule_cli
 cargo test --test update_cli
 just check
 just package
 ```
 
-`just check` runs formatting, tests, version-tool tests, and warnings-denied Clippy. `just package` builds both macOS slices, creates a Universal 2 binary, verifies its architectures and ad-hoc signature, and writes a deterministic archive plus checksum under `target/release/`.
+`just check` runs formatting, tests, version-tool tests, and warnings-denied Clippy. `just package` builds both macOS slices, creates a Universal 2 binary, verifies its architectures and ad-hoc signature, and writes a deterministic archive plus checksum under `target/release/`. Before release, inspect the archive list, verify the Universal 2 architectures, verify the signature, and check the checksum.
 
-Unit tests live beside the behavior they protect; `tests/report_cli.rs` covers reporting dispatch, home resolution, output, errors, and hardening, while `tests/update_cli.rs` covers the update command contract. Title, session-index, and update tests use temporary Codex homes and cover metric boundaries, root-only selection, dry-run immutability, dual-store apply/recovery, schema compatibility, and lock/error handling. Keep tests focused on behavioral invariants, parallel-safe where possible, and input handling non-panicking and bounded.
+Unit tests live beside the behavior they protect; `tests/report_cli.rs` covers reporting dispatch, home resolution, output, errors, and hardening, while `tests/update_cli.rs` and `tests/schedule_cli.rs` cover the update and safe scheduling command contracts. Title, session-index, update, and scheduling tests use temporary homes and cover metric boundaries, root-only selection, dry-run immutability, dual-store apply/recovery, schema compatibility, lock/error handling, circuit-breaker transitions, and status bounds. Keep tests focused on behavioral invariants, parallel-safe where possible, and input handling non-panicking and bounded.
 
 ## Release and phase gates
 

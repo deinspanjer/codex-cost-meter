@@ -290,6 +290,102 @@ The rebuilt v0.2.0 candidate binary produced this additive, deliberately unfilte
 
 The application again marked whole-tree input incomplete because the rollout scan skipped oversized JSONL records, so the displayed known cost is a lower bound. No model was unpriced. The absolute whole-tree output total of 1,229,735 tokens includes excluded governance work and remains far below the 1,000,000,000-token program-stop gate.
 
+## v0.3 post-design baseline and forecast
+
+The v0.3 design boundary was captured after the v0.2 protected merge, the owner's requested execution-timeline report, and the just-in-time macOS scheduling design, but before v0.3 implementation planning:
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.2 approved pre-release baseline | 308 | 9h 27m 34.397s | 310,532,497 | 1,228,371 | 311,760,868 |
+| v0.3 post-design whole tree | 321 | 11h 09m 43.512s | 329,545,225 | 1,276,125 | 330,821,350 |
+| Excluded release/report/design delta | 13 | 1h 42m 09.115s | 19,012,728 | 47,754 | 19,060,482 |
+
+The mixed delta is excluded from v0.3 feature delivery rather than guessing apart v0.2 publication mechanics, the owner-requested report, and v0.3 design work inside shared root-turn boundaries. The cumulative output total remains below the 1,000,000,000-token program stop gate.
+
+The refined v0.3 design adds a standard-library LaunchAgent lifecycle, one bounded atomic status record, failure classification and circuit-breaker transitions, schedule status/resume/remove commands, self-uninstall, focused CLI integration, durable documentation, and the existing release gates. It adds no daemon, runtime dependency, empty future-platform module, or real-user scheduler mutation in automated tests.
+
+| Remaining v0.3 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Detailed implementation planning | 4–8 | 0.5–1.5 hours | 15k–45k |
+| Status model, failure classification, and circuit breaker | 8–16 | 1.5–4 hours | 30k–90k |
+| macOS LaunchAgent lifecycle and uninstall | 8–18 | 2–5 hours | 35k–100k |
+| CLI integration and compatibility hardening | 4–10 | 1–3 hours | 20k–60k |
+| Durable docs, validation, review, correction, and release | 8–18 | 2–5 hours | 35k–100k |
+| **Remaining v0.3 total** | **32–70** | **7–18.5 hours** | **135k–395k** |
+
+The forecast assumes `/bin/launchctl` and `/usr/bin/id` retain their supported macOS behavior, current-user LaunchAgents remain available on macOS 14 and later, the executable can unlink itself on macOS, and the existing updater errors can be classified without a general error framework. Most implementation and task-review packets should use Terra; Sol remains reserved for the final whole-branch and owner-approval judgments or unresolved safety questions.
+
+### v0.3 planning actual and post-plan forecast
+
+The finalized five-task TDD plan produced this cumulative post-plan baseline:
+
+| Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| ---: | ---: | ---: | ---: | ---: |
+| 321 | 11h 09m 43.512s | 332,613,311 | 1,286,373 | 333,899,684 |
+
+Compared with the v0.3 post-design baseline, detailed planning and its accounting capture used no additional completed agent lifecycle or summed agent time, 3,068,086 input tokens, and 10,248 output tokens. The root turn remained open across both snapshots, so this is measured token work without a new turn-duration boundary. It counts against the post-design forecast. Total program output remained below the 1,000,000,000-token stop gate.
+
+The plan has four implementation tasks plus candidate documentation, accounting, validation, final review, release-decider, and publication work. Stable-persona construction will not recur; only release-decider execution is excluded governance overhead unless new owner evidence requires a durable rubric refinement.
+
+| Remaining v0.3 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Updater failure classification | 2–4 | 0.5–1.5 hours | 10k–30k |
+| Bounded status and circuit breaker | 2–4 | 0.75–2 hours | 15k–40k |
+| macOS LaunchAgent lifecycle and uninstall | 2–6 | 1–3 hours | 20k–60k |
+| CLI integration and scheduled-run hardening | 2–6 | 1–3 hours | 20k–60k |
+| Durable docs, validation, final review, correction, and release | 6–14 | 1.5–4 hours | 25k–80k |
+| **Remaining v0.3 total** | **14–34** | **4.75–13.5 hours** | **90k–270k** |
+
+### v0.3.0 candidate-prep accounting snapshot
+
+This snapshot was taken after the `0.3.0` version bump and before final whole-branch review, release-decider work, protected merge, and publication. The selected program root, task title, prompt, local paths, and other task metadata are intentionally omitted from this public record.
+
+The independent prototype reporter measured the whole tree as follows:
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.3 post-plan baseline | 321 | 11h 09m 43.512s | 332,613,311 | 1,286,373 | 333,899,684 |
+| Candidate-prep whole tree | 337 | 11h 52m 52.894s | 359,947,292 | 1,425,901 | 361,373,193 |
+| Raw post-plan delta | 16 | 43m 09.382s | 27,333,981 | 139,528 | 27,473,509 |
+
+No separately attributable post-plan governance lifecycle is excluded at this candidate-prep boundary. Mixed root work is conservatively charged to delivery rather than guessed apart. Against the post-plan remaining-v0.3 forecast of 14–34 turns, 4.75–13.5 summed hours, and 90k–270k output tokens, the raw delivery actual is within the turn and output ranges and below the time range. The selected tree had complete model-price coverage, 334 complete or aborted turns, and 3 incomplete turns; its known estimated cost was $220.61. Its absolute whole-tree output total, 1,425,901 tokens, remains below the 1,000,000,000-output-token program stop gate.
+
+The `0.3.0` candidate binary produced the following additive, deliberately unfiltered root-task report immediately afterwards:
+
+| Scope | Rollouts | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Known estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 1 | 45 (44 complete, 1 incomplete) | 177,976,163 | 174,504,704 | 483,183 | 182,874 | 443m 30.353s | $119.11 |
+| Whole tree | 77 | 337 (334 complete, 3 incomplete) | 360,468,101 | 349,047,040 | 1,427,029 | 557,220 | 712m 52.894s | $220.82+ |
+
+| Model | Turns | Output tokens | Known estimated cost |
+| --- | ---: | ---: | ---: |
+| `gpt-5.6-sol` | 102 | 866,771 | $193.56 |
+| `gpt-5.6-terra` | 71 | 543,162 | $26.70 |
+| `codex-auto-review` | 164 | 17,096 | $0.57 |
+
+The binary scan skipped oversized JSONL records, so the whole-tree complete estimate is unavailable and the displayed known cost is a lower bound; no model was unpriced. Its slightly later whole-tree output total remains below the same absolute stop gate. The difference from the independent snapshot is live local task state advancing between read-only scans, not a filtered accounting adjustment.
+
+### v0.3.0 final pre-decider accounting snapshot
+
+This snapshot follows the whole-branch correction, focused validation, and local Universal 2 package verification, and precedes the release-decider, protected merge, and publication. The selected program root and other task metadata are intentionally omitted from this public record.
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.3 post-plan baseline | 321 | 11h 09m 43.512s | 332,613,311 | 1,286,373 | 333,899,684 |
+| Final pre-decider whole tree | 343 | 12h 19m 14.830s | 377,525,260 | 1,489,534 | 379,014,794 |
+| Raw post-plan delta | 22 | 1h 09m 31.318s | 44,911,949 | 203,161 | 45,115,110 |
+
+No separately attributable post-plan governance lifecycle is excluded at this boundary; direct reporter invocations do not create an agent lifecycle, and mixed controller work remains conservatively charged to delivery. Against the post-plan remaining-v0.3 forecast of 14–34 turns, 4.75–13.5 summed hours, and 90k–270k output tokens, the raw delivery actual is within the turn and output ranges and below the time range. The selected tree had complete model-price coverage, 340 complete or aborted turns and 3 incomplete turns, with known estimated cost of $230.17. Its absolute whole-tree output total of 1,489,534 tokens remains below the 1,000,000,000-token program stop gate; autonomous work may continue without this gate requiring owner review.
+
+The rebuilt `0.3.0` candidate binary produced the following additive, deliberately unfiltered root-task report immediately afterwards:
+
+| Scope | Rollouts | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Known estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 1 | 45 (44 complete, 1 incomplete) | 184,325,312 | 180,785,152 | 492,767 | 186,591 | 443m 30.353s | $122.88 |
+| Whole tree | 82 | 343 (340 complete, 3 incomplete) | 377,860,307 | 365,939,456 | 1,490,146 | 588,023 | 739m 14.830s | $230.31+ |
+
+The binary scan skipped oversized JSONL records, so the whole-tree complete estimate is unavailable and the displayed known cost is a lower bound; no model was unpriced. Its slightly later whole-tree output total also remains below the same absolute stop gate. The difference from the independent snapshot is live local task state advancing between read-only scans, not a filtered accounting adjustment.
+
 
 ## Evidence
 

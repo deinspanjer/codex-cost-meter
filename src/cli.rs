@@ -20,6 +20,56 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     Report(ReportArgs),
     Update(UpdateArgs),
+    Schedule(ScheduleArgs),
+    Uninstall,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ScheduleArgs {
+    #[command(subcommand)]
+    pub(crate) command: ScheduleCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum ScheduleCommand {
+    Install(ScheduleInstallArgs),
+    Status,
+    Resume,
+    Remove,
+    #[command(hide = true)]
+    Run(ScheduleRunArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ScheduleInstallArgs {
+    #[command(flatten)]
+    options: ScheduledUpdateArgs,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ScheduleRunArgs {
+    #[command(flatten)]
+    options: ScheduledUpdateArgs,
+    #[arg(long, required = true)]
+    apply: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ScheduledUpdateArgs {
+    #[arg(long, default_value_t = 15, value_parser = parse_positive_u64)]
+    idle_minutes: u64,
+    #[arg(long, default_value_t = 500, value_parser = parse_positive_usize)]
+    limit: usize,
+    #[arg(long, default_value = "4m", value_parser = parse_runtime)]
+    max_runtime: Duration,
+    #[arg(long, value_parser = parse_reprice_before)]
+    reprice_before: Option<OffsetDateTime>,
+    #[arg(long, default_value_t = 65, value_parser = parse_positive_usize)]
+    max_width: usize,
+    #[arg(long, default_value = "cost,total-tokens", value_parser = parse_metric_text)]
+    title_metrics: String,
+    #[arg(long)]
+    codex_home: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -91,6 +141,72 @@ impl UpdateArgs {
         }
     }
 }
+
+impl ScheduleInstallArgs {
+    pub(crate) fn options(&self) -> &ScheduledUpdateArgs {
+        &self.options
+    }
+}
+
+impl ScheduleRunArgs {
+    pub(crate) fn options(&self) -> &ScheduledUpdateArgs {
+        debug_assert!(self.apply);
+        &self.options
+    }
+}
+
+impl ScheduledUpdateArgs {
+    pub(crate) fn codex_home(&self) -> Result<PathBuf, CliError> {
+        resolve_codex_home(&self.codex_home)
+    }
+
+    pub(crate) fn update_options(&self) -> UpdateOptions {
+        UpdateOptions {
+            thread_ids: Vec::new(),
+            title_matches: Vec::new(),
+            idle_minutes: Some(self.idle_minutes),
+            limit: self.limit,
+            max_runtime: Some(self.max_runtime),
+            reprice_before: self.reprice_before,
+            apply: true,
+            title_format: TitleFormat::new(
+                self.max_width,
+                parse_metrics(&self.title_metrics).expect("clap validates title metrics"),
+            ),
+        }
+    }
+
+    pub(crate) fn idle_minutes(&self) -> u64 {
+        self.idle_minutes
+    }
+
+    pub(crate) fn limit(&self) -> usize {
+        self.limit
+    }
+
+    pub(crate) fn max_runtime(&self) -> Duration {
+        self.max_runtime
+    }
+
+    pub(crate) fn max_width(&self) -> usize {
+        self.max_width
+    }
+
+    pub(crate) fn title_metrics(&self) -> &str {
+        &self.title_metrics
+    }
+
+    pub(crate) fn reprice_before(&self) -> Option<OffsetDateTime> {
+        self.reprice_before
+    }
+}
+
+pub(crate) fn user_home() -> Result<PathBuf, CliError> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or(CliError::HomeNotSet)
+}
+
 fn resolve_codex_home(codex_home: &Option<PathBuf>) -> Result<PathBuf, CliError> {
     if let Some(home) = codex_home {
         return Ok(home.clone());
@@ -98,8 +214,7 @@ fn resolve_codex_home(codex_home: &Option<PathBuf>) -> Result<PathBuf, CliError>
     if let Some(home) = env::var_os("CODEX_HOME") {
         return Ok(home.into());
     }
-    let home = env::var_os("HOME").ok_or(CliError::HomeNotSet)?;
-    Ok(PathBuf::from(home).join(".codex"))
+    Ok(user_home()?.join(".codex"))
 }
 
 fn parse_positive_u64(value: &str) -> Result<u64, String> {
@@ -153,11 +268,15 @@ fn parse_metrics(value: &str) -> Result<MetricList, String> {
         .map_err(|error| error.to_string())
 }
 
+fn parse_metric_text(value: &str) -> Result<String, String> {
+    parse_metrics(value).map(|_| value.into())
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Command, UpdateArgs};
+    use super::{Cli, Command, ScheduleCommand, UpdateArgs};
     use crate::title::MetricList;
 
     fn update(arguments: &[&str]) -> UpdateArgs {
@@ -248,5 +367,114 @@ mod tests {
             command.extend(arguments.iter().copied());
             assert!(Cli::try_parse_from(command).is_err(), "{arguments:?}");
         }
+    }
+
+    #[test]
+    fn parses_schedule_commands_and_rejects_unsupported_selection() {
+        for arguments in [
+            vec!["schedule", "install"],
+            vec![
+                "schedule",
+                "install",
+                "--idle-minutes",
+                "7",
+                "--limit",
+                "3",
+                "--max-runtime",
+                "90",
+                "--max-width",
+                "80",
+                "--title-metrics",
+                "output-tokens,cost",
+                "--reprice-before",
+                "2026-08-13",
+                "--codex-home",
+                "/tmp/codex",
+            ],
+            vec!["schedule", "run", "--idle-minutes", "15", "--apply"],
+        ] {
+            let mut command = vec!["codex-cost-meter"];
+            command.extend(arguments.iter().copied());
+            assert!(Cli::try_parse_from(command).is_ok(), "{arguments:?}");
+        }
+
+        for arguments in [
+            vec!["schedule", "install", "--thread-id", "root"],
+            vec!["schedule", "install", "--match-title", "billing"],
+            vec!["schedule", "install", "--idle-minutes", "0"],
+            vec!["schedule", "install", "--limit", "0"],
+            vec!["schedule", "install", "--max-width", "0"],
+            vec!["schedule", "install", "--title-metrics", "unknown"],
+            vec!["schedule", "run", "--idle-minutes", "15"],
+            vec!["schedule", "unknown"],
+        ] {
+            let mut command = vec!["codex-cost-meter"];
+            command.extend(arguments.iter().copied());
+            assert!(Cli::try_parse_from(command).is_err(), "{arguments:?}");
+        }
+    }
+
+    #[test]
+    fn schedule_arguments_preserve_the_installed_update_contract() {
+        let parse = |arguments: &[&str]| {
+            let mut command = vec!["codex-cost-meter", "schedule"];
+            command.extend_from_slice(arguments);
+            match Cli::try_parse_from(command).unwrap().command {
+                Command::Schedule(arguments) => arguments.command,
+                _ => panic!("expected schedule arguments"),
+            }
+        };
+
+        let ScheduleCommand::Install(defaults) = parse(&["install"]) else {
+            panic!("expected install arguments");
+        };
+        let defaults = defaults.options();
+        assert_eq!(defaults.idle_minutes, 15);
+        assert_eq!(defaults.limit, 500);
+        assert_eq!(defaults.max_runtime.as_secs(), 240);
+        assert_eq!(defaults.max_width, 65);
+        assert_eq!(defaults.title_metrics, "cost,total-tokens");
+        assert_eq!(defaults.reprice_before, None);
+        assert_eq!(defaults.codex_home, None);
+
+        let ScheduleCommand::Install(overrides) = parse(&[
+            "install",
+            "--idle-minutes",
+            "7",
+            "--limit",
+            "3",
+            "--max-runtime",
+            "90",
+            "--max-width",
+            "80",
+            "--title-metrics",
+            "output-tokens,cost",
+            "--reprice-before",
+            "2026-08-13",
+            "--codex-home",
+            "/tmp/codex",
+        ]) else {
+            panic!("expected install arguments");
+        };
+        let overrides = overrides.options();
+        assert_eq!(overrides.idle_minutes, 7);
+        assert_eq!(overrides.limit, 3);
+        assert_eq!(overrides.max_runtime.as_secs(), 90);
+        assert_eq!(overrides.max_width, 80);
+        assert_eq!(overrides.title_metrics, "output-tokens,cost");
+        assert_eq!(
+            overrides.reprice_before.unwrap().date().to_string(),
+            "2026-08-13"
+        );
+        assert_eq!(
+            overrides.codex_home.as_deref(),
+            Some(std::path::Path::new("/tmp/codex"))
+        );
+
+        let ScheduleCommand::Run(run) = parse(&["run", "--idle-minutes", "15", "--apply"]) else {
+            panic!("expected internal run arguments");
+        };
+        assert!(run.apply);
+        assert_eq!(run.options().max_runtime().as_secs(), 240);
     }
 }

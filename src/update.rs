@@ -68,8 +68,8 @@ pub(crate) enum UpdateError {
     },
     #[error("threads schema is missing required column: {column}")]
     Schema { column: String },
-    #[error("session index could not be read")]
-    SessionIndexUnreadable,
+    #[error("session index could not be read: {kind}")]
+    SessionIndexUnreadable { kind: io::ErrorKind },
     #[error("root thread id not found: {id}")]
     RootNotFound { id: String },
     #[error("title substring {query:?} resolved to {matches}")]
@@ -84,6 +84,45 @@ pub(crate) enum UpdateError {
     Report(#[from] ReportError),
     #[error(transparent)]
     Title(#[from] TitleError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FailureClass {
+    Ordinary,
+    DiskFull,
+    IncompatibleSchema,
+    PermissionDenied,
+}
+
+impl UpdateError {
+    pub(crate) fn failure_class(&self) -> FailureClass {
+        match self {
+            Self::Schema { .. } => FailureClass::IncompatibleSchema,
+            Self::Database {
+                source: rusqlite::Error::SqliteFailure(error, _),
+            } => match error.code {
+                rusqlite::ErrorCode::DiskFull => FailureClass::DiskFull,
+                rusqlite::ErrorCode::CannotOpen
+                | rusqlite::ErrorCode::PermissionDenied
+                | rusqlite::ErrorCode::ReadOnly => FailureClass::PermissionDenied,
+                _ => FailureClass::Ordinary,
+            },
+            Self::SessionIndexUnreadable {
+                kind: io::ErrorKind::PermissionDenied,
+            } => FailureClass::PermissionDenied,
+            Self::Lock { source, .. }
+            | Self::SessionIndex(
+                AppendError::Open { source, .. }
+                | AppendError::Seek { source, .. }
+                | AppendError::Read { source, .. }
+                | AppendError::Write { source, .. }
+                | AppendError::Flush { source, .. }
+                | AppendError::Sync { source, .. },
+            ) if source.kind() == io::ErrorKind::PermissionDenied => FailureClass::PermissionDenied,
+            Self::SessionIndex(AppendError::DiskFull { .. }) => FailureClass::DiskFull,
+            _ => FailureClass::Ordinary,
+        }
+    }
 }
 
 struct ThreadRow {
@@ -102,8 +141,8 @@ pub(crate) fn run(home: &Path, options: &UpdateOptions) -> Result<UpdateResult, 
     let rows = read_rows(&connection)?;
     let context = ReportContext::new(home)?;
     let snapshot = context.session_index();
-    if snapshot.read_error().is_some() {
-        return Err(UpdateError::SessionIndexUnreadable);
+    if let Some(source) = snapshot.read_error() {
+        return Err(UpdateError::SessionIndexUnreadable { kind: source });
     }
     let selected = select_rows(&rows, &context, snapshot, options)?;
     let deadline = options
@@ -377,16 +416,16 @@ fn normalize_whitespace(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, time::Duration};
+    use std::{fs, io, time::Duration};
 
-    use rusqlite::{Connection, params};
+    use rusqlite::{Connection, ErrorCode, ffi, params};
     use serde_json::json;
     use tempfile::TempDir;
     use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
 
-    use super::{UpdateError, UpdateOptions, run};
+    use super::{FailureClass, UpdateError, UpdateOptions, run};
     use crate::{
-        session_index::Snapshot,
+        session_index::{AppendError, Snapshot},
         title::{MetricList, TitleFormat},
     };
 
@@ -501,6 +540,113 @@ mod tests {
             .iter()
             .map(|proposal| proposal.id.as_str())
             .collect()
+    }
+
+    #[test]
+    fn classifies_failures_for_scheduled_circuit_breaking() {
+        for (error, expected) in [
+            (
+                UpdateError::Schema {
+                    column: "name".into(),
+                },
+                FailureClass::IncompatibleSchema,
+            ),
+            (
+                UpdateError::SessionIndexUnreadable {
+                    kind: io::ErrorKind::PermissionDenied,
+                },
+                FailureClass::PermissionDenied,
+            ),
+            (
+                UpdateError::RootNotFound {
+                    id: "missing".into(),
+                },
+                FailureClass::Ordinary,
+            ),
+            (
+                UpdateError::Database {
+                    source: rusqlite::Error::SqliteFailure(
+                        ffi::Error {
+                            code: ErrorCode::DiskFull,
+                            extended_code: 0,
+                        },
+                        None,
+                    ),
+                },
+                FailureClass::DiskFull,
+            ),
+            (
+                UpdateError::Database {
+                    source: rusqlite::Error::SqliteFailure(
+                        ffi::Error {
+                            code: ErrorCode::PermissionDenied,
+                            extended_code: 0,
+                        },
+                        None,
+                    ),
+                },
+                FailureClass::PermissionDenied,
+            ),
+            (
+                UpdateError::Database {
+                    source: rusqlite::Error::SqliteFailure(
+                        ffi::Error {
+                            code: ErrorCode::CannotOpen,
+                            extended_code: 0,
+                        },
+                        None,
+                    ),
+                },
+                FailureClass::PermissionDenied,
+            ),
+            (
+                UpdateError::Database {
+                    source: rusqlite::Error::SqliteFailure(
+                        ffi::Error {
+                            code: ErrorCode::ReadOnly,
+                            extended_code: 0,
+                        },
+                        None,
+                    ),
+                },
+                FailureClass::PermissionDenied,
+            ),
+            (
+                UpdateError::Database {
+                    source: rusqlite::Error::SqliteFailure(
+                        ffi::Error {
+                            code: ErrorCode::DatabaseBusy,
+                            extended_code: 0,
+                        },
+                        None,
+                    ),
+                },
+                FailureClass::Ordinary,
+            ),
+            (
+                UpdateError::SessionIndex(AppendError::DiskFull {
+                    operation: "write",
+                    source: io::Error::from_raw_os_error(28),
+                }),
+                FailureClass::DiskFull,
+            ),
+            (
+                UpdateError::SessionIndex(AppendError::Open {
+                    path: "session_index.jsonl".into(),
+                    source: io::Error::from(io::ErrorKind::PermissionDenied),
+                }),
+                FailureClass::PermissionDenied,
+            ),
+            (
+                UpdateError::Lock {
+                    path: "thread-cost-title-updater.lock".into(),
+                    source: io::Error::from(io::ErrorKind::PermissionDenied),
+                },
+                FailureClass::PermissionDenied,
+            ),
+        ] {
+            assert_eq!(error.failure_class(), expected);
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@ Download the macOS Universal 2 archive and its `.sha256` checksum from the relea
 ~/.codex/codex-cost-meter report <THREAD_ID> --codex-home <PATH>
 ```
 
-Use bare `codex-cost-meter` only when you place the binary in an existing directory on `PATH`; v0.2 does not create or use `~/.codex/bin`. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then `~/.codex`. `report` is read-only and reports that exact ID and its linked descendants without SQLite; `update` is dry-run by default and reads the supported local SQLite state only for title-update selection or application (details below).
+Use bare `codex-cost-meter` only when you place the binary in an existing directory on `PATH`; v0.3 does not create or use `~/.codex/bin`. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then `~/.codex`. `report` is read-only and reports that exact ID and its linked descendants without SQLite; `update` is dry-run by default and reads the supported local SQLite state only for title-update selection or application (details below).
 
 The archive is ad-hoc signed, not Developer ID signed or notarized. Gatekeeper can therefore require a user decision before first launch. Verify the downloaded checksum and use your organization's macOS trust process; production signing is planned for a later release.
 
@@ -37,7 +37,24 @@ Titles default to `--title-metrics cost,total-tokens` and `--max-width 65`. Choo
 
 For dry runs, the tool opens Codex's state database read-only. With `--apply`, it locks one updater process, updates both `title` and `name` in a single SQLite transaction, then appends durable JSONL entries to `session_index.jsonl`. It supports `state_5.sqlite` directly under the selected Codex home or under `sqlite/`, and requires the `threads` columns `id`, `title`, `name`, `history_mode`, `updated_at`, and `first_user_message`; extra schema is accepted. SQLite and JSONL are deliberately not cross-store atomic: if index writing fails after a committed transaction, the command fails and a later identical `--apply` remains eligible to repair both stores. A busy updater, database/schema problem, or unreadable index is a safe actionable failure.
 
-v0.2 does not install, inspect, or run scheduling. Keep periodic execution outside this release; macOS scheduling remains planned for v0.3.
+## Schedule idle title updates
+
+On macOS, `schedule install` creates one current-user LaunchAgent. It runs when loaded and every five minutes, and it applies updates only to eligible idle root tasks. It uses these defaults: `--idle-minutes 15`, `--limit 500`, `--max-runtime 4m`, `--max-width 65`, and `--title-metrics cost,total-tokens`.
+
+```text
+~/.codex/codex-cost-meter schedule install
+~/.codex/codex-cost-meter schedule install --idle-minutes 30 --limit 100 --max-runtime 2m
+~/.codex/codex-cost-meter schedule status
+~/.codex/codex-cost-meter schedule resume
+~/.codex/codex-cost-meter schedule remove
+~/.codex/codex-cost-meter uninstall
+```
+
+`schedule install` accepts the displayed defaults as overrides, plus `--reprice-before` and `--codex-home`; the scheduled command always applies updates and does not accept explicit thread or title selection. The job stores the canonical path of the executable. Moving or deleting that binary breaks the installed job; run `schedule remove` before moving it, then install again from its new location.
+
+`schedule status` reports whether the property list is installed, whether launchd reports the job as loaded, and the bounded status record. When a run has occurred, its fields are `last run`, stable `result`, `consecutive failures`, `paused`, and fixed remediation; otherwise it reports `last run: never`. `schedule resume` clears a pause without re-registering the job. `schedule remove` is idempotent and removes only this tool's LaunchAgent and bounded status record. `uninstall` first performs that removal, then deletes only the currently running executable; it does not delete Codex data or a parent directory.
+
+Scheduled runs create no append-only log and are silent on success and ordinary lock contention. They store only fixed result codes and remediation, not task metadata, paths, IDs, titles, prompts, or arbitrary error text. Three consecutive ordinary failures pause the schedule; disk-full, incompatible SQLite schema, and permission-denied failures pause it immediately. Use `schedule status`, correct the local issue, then run `schedule resume`.
 
 ## Privacy and troubleshooting
 
@@ -47,4 +64,6 @@ Reports read local Codex JSONL files. Reports, update previews, warnings, and ru
 - **Partial cost or warnings** — retain the result as incomplete. Unknown prices, ambiguous history, malformed or oversized JSONL, and unreadable nonselected inputs are intentionally not guessed.
 - **`another title updater is already running`** — wait for the other updater to finish, then rerun the dry run or apply command.
 - **Database, schema, or session-index error** — do not edit Codex storage by hand. Resolve the local access issue and rerun; a failed index append after commit is intentionally recoverable by rerunning the same selection with `--apply`.
+- **Scheduled updates are paused** — use `schedule status` for the fixed remediation, correct the reported storage, schema, or permission problem, then run `schedule resume`.
+- **Scheduled job no longer starts** — if the binary was moved or deleted, run `schedule remove` if possible and install again from its new location.
 - **macOS blocks execution** — recheck the archive checksum, then follow your organization’s Gatekeeper policy. The ad-hoc signature does not establish publisher identity.
