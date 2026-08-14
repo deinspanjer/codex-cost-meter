@@ -132,14 +132,19 @@ pub(crate) fn read_status(path: &Path) -> Result<Option<Status>, StatusError> {
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(source) => return Err(StatusError::Read { source }),
     };
-    let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take(MAX_STATUS_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|source| StatusError::Read { source })?;
-    if bytes.len() as u64 > MAX_STATUS_BYTES {
+    if file
+        .metadata()
+        .map_err(|source| StatusError::Read { source })?
+        .len()
+        > MAX_STATUS_BYTES
+    {
         return Err(StatusError::TooLarge);
     }
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(MAX_STATUS_BYTES)
+        .read_to_end(&mut bytes)
+        .map_err(|source| StatusError::Read { source })?;
     let status = serde_json::from_slice(&bytes).map_err(|_| StatusError::Malformed)?;
     validate(&status)?;
     Ok(Some(status))
