@@ -8,14 +8,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, params};
 use thiserror::Error;
 use time::OffsetDateTime;
 
 use crate::{
     pricing::PricingError,
     report::{ReportContext, ReportError},
-    session_index::Snapshot,
+    session_index::{AppendError, Snapshot, append},
     title::{TitleError, TitleFormat},
 };
 
@@ -76,8 +76,10 @@ pub(crate) enum UpdateError {
     RootNotFound { id: String },
     #[error("title substring {query:?} resolved to {matches}")]
     TitleMatch { query: String, matches: String },
-    #[error("SQLite writes are not implemented yet")]
-    ApplyUnsupported,
+    #[error("SQLite update for {id} affected {affected} rows")]
+    AffectedRows { id: String, affected: usize },
+    #[error(transparent)]
+    SessionIndex(#[from] AppendError),
     #[error(transparent)]
     Pricing(#[from] PricingError),
     #[error(transparent)]
@@ -97,7 +99,7 @@ struct ThreadRow {
 
 pub(crate) fn run(home: &Path, options: &UpdateOptions) -> Result<UpdateResult, UpdateError> {
     let _lock = acquire_lock(home)?;
-    let connection = open_database(home, options.apply)?;
+    let mut connection = open_database(home, options.apply)?;
     validate_schema(&connection)?;
     let rows = read_rows(&connection)?;
     let context = ReportContext::new(home)?;
@@ -124,9 +126,44 @@ pub(crate) fn run(home: &Path, options: &UpdateOptions) -> Result<UpdateResult, 
         });
     }
     if options.apply {
-        return Err(UpdateError::ApplyUnsupported);
+        apply(&mut connection, &proposals)?;
+        let index_path = home.join("session_index.jsonl");
+        append(
+            &index_path,
+            &proposals
+                .iter()
+                .map(|proposal| (proposal.id.clone(), proposal.new_title.clone()))
+                .collect::<Vec<_>>(),
+            OffsetDateTime::now_utc(),
+        )?;
     }
     Ok(UpdateResult { proposals })
+}
+
+fn apply(connection: &mut Connection, proposals: &[ProposedUpdate]) -> Result<(), UpdateError> {
+    if proposals.is_empty() {
+        return Ok(());
+    }
+    let transaction = connection
+        .transaction()
+        .map_err(|source| UpdateError::Database { source })?;
+    for proposal in proposals {
+        let affected = transaction
+            .execute(
+                "UPDATE threads SET title = ?1, name = ?1 WHERE id = ?2",
+                params![proposal.new_title, proposal.id],
+            )
+            .map_err(|source| UpdateError::Database { source })?;
+        if affected != 1 {
+            return Err(UpdateError::AffectedRows {
+                id: proposal.id.clone(),
+                affected,
+            });
+        }
+    }
+    transaction
+        .commit()
+        .map_err(|source| UpdateError::Database { source })
 }
 
 fn acquire_lock(home: &Path) -> Result<File, UpdateError> {
@@ -350,7 +387,10 @@ mod tests {
     use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
 
     use super::{UpdateError, UpdateOptions, run};
-    use crate::title::{MetricList, TitleFormat};
+    use crate::{
+        session_index::Snapshot,
+        title::{MetricList, TitleFormat},
+    };
 
     const REQUIRED: [&str; 6] = [
         "id",
@@ -734,5 +774,172 @@ mod tests {
             )
             .unwrap();
         assert_eq!(after_row, before_row);
+    }
+
+    #[test]
+    fn apply_updates_both_sqlite_title_columns_and_the_latest_index_entry() {
+        let home = TempDir::new().unwrap();
+        let database = database(&home, false, &REQUIRED);
+        insert(
+            &database,
+            "root",
+            Some("Stored"),
+            Some("Stored"),
+            "legacy",
+            0,
+            Some("Prompt"),
+        );
+        rollout(&home, "root", None);
+        let mut options = options();
+        options.thread_ids = vec!["root".into()];
+        options.apply = true;
+
+        let result = run(home.path(), &options).unwrap();
+        let new_title = &result.proposals[0].new_title;
+        let row: (String, String) = Connection::open(&database)
+            .unwrap()
+            .query_row(
+                "SELECT title, name FROM threads WHERE id = 'root'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(row.0, *new_title);
+        assert_eq!(row.1, *new_title);
+        assert_eq!(
+            Snapshot::load(home.path()).entry("root").unwrap().name,
+            *new_title
+        );
+    }
+
+    #[test]
+    fn sqlite_failure_does_not_append_to_the_index() {
+        let home = TempDir::new().unwrap();
+        let database = database(&home, false, &REQUIRED);
+        insert(
+            &database,
+            "root",
+            Some("Stored"),
+            Some("Stored"),
+            "legacy",
+            0,
+            Some("Prompt"),
+        );
+        Connection::open(&database)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_title_update BEFORE UPDATE ON threads BEGIN SELECT RAISE(ABORT, 'constraint violation'); END;",
+            )
+            .unwrap();
+        rollout(&home, "root", None);
+        let mut options = options();
+        options.thread_ids = vec!["root".into()];
+        options.apply = true;
+
+        assert!(matches!(
+            run(home.path(), &options),
+            Err(UpdateError::Database { .. })
+        ));
+        assert!(!home.path().join("session_index.jsonl").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn append_failure_after_commit_is_repaired_by_a_rerun() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = TempDir::new().unwrap();
+        let database = database(&home, false, &REQUIRED);
+        insert(
+            &database,
+            "root",
+            Some("Stored"),
+            Some("Stored"),
+            "legacy",
+            0,
+            Some("Prompt"),
+        );
+        rollout(&home, "root", None);
+        let index_path = home.path().join("session_index.jsonl");
+        fs::write(
+            &index_path,
+            "{\"id\":\"root\",\"thread_name\":\"old\",\"updated_at\":\"2026-08-14T00:00:00Z\"}\n",
+        )
+        .unwrap();
+        fs::set_permissions(&index_path, fs::Permissions::from_mode(0o444)).unwrap();
+        let mut options = options();
+        options.thread_ids = vec!["root".into()];
+        options.apply = true;
+
+        assert!(matches!(
+            run(home.path(), &options),
+            Err(UpdateError::SessionIndex(_))
+        ));
+        let committed_title: String = Connection::open(&database)
+            .unwrap()
+            .query_row("SELECT title FROM threads WHERE id = 'root'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_ne!(committed_title, "Stored");
+        assert_eq!(
+            Snapshot::load(home.path()).entry("root").unwrap().name,
+            "old"
+        );
+
+        fs::set_permissions(&index_path, fs::Permissions::from_mode(0o644)).unwrap();
+        run(home.path(), &options).unwrap();
+
+        assert_eq!(
+            Snapshot::load(home.path()).entry("root").unwrap().name,
+            committed_title
+        );
+    }
+
+    #[test]
+    fn a_busy_lock_prevents_sqlite_and_index_mutation() {
+        let home = TempDir::new().unwrap();
+        let database = database(&home, false, &REQUIRED);
+        insert(
+            &database,
+            "root",
+            Some("Stored"),
+            Some("Stored"),
+            "legacy",
+            0,
+            Some("Prompt"),
+        );
+        rollout(&home, "root", None);
+        let before_row: (String, String) = Connection::open(&database)
+            .unwrap()
+            .query_row(
+                "SELECT title, name FROM threads WHERE id = 'root'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let lock = super::acquire_lock(home.path()).unwrap();
+        let mut options = options();
+        options.thread_ids = vec!["root".into()];
+        options.apply = true;
+
+        assert!(matches!(
+            run(home.path(), &options),
+            Err(UpdateError::LockBusy)
+        ));
+        assert_eq!(
+            Connection::open(&database)
+                .unwrap()
+                .query_row(
+                    "SELECT title, name FROM threads WHERE id = 'root'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?))
+                )
+                .unwrap(),
+            before_row
+        );
+        assert!(!home.path().join("session_index.jsonl").exists());
+        drop(lock);
     }
 }

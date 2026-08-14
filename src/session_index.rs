@@ -1,9 +1,143 @@
-use std::{collections::HashMap, io, path::Path};
+use std::{
+    collections::HashMap,
+    fs::OpenOptions,
+    io::{self, Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+};
 
+use serde::Serialize;
 use serde_json::Value;
+use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::rollout::discovery::read_jsonl;
+
+#[derive(Debug, Error)]
+pub(crate) enum AppendError {
+    #[error("session index storage is full while attempting to {operation}: {source}")]
+    DiskFull {
+        operation: &'static str,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not open session index {path}: {source}")]
+    Open {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not seek session index {path}: {source}")]
+    Seek {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not read session index {path}: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not write session index {path}: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not flush session index {path}: {source}")]
+    Flush {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not sync session index {path}: {source}")]
+    Sync {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+}
+
+#[derive(Serialize)]
+struct IndexRecord<'a> {
+    id: &'a str,
+    thread_name: &'a str,
+    updated_at: &'a str,
+}
+
+pub(crate) fn append(
+    path: &Path,
+    updates: &[(String, String)],
+    updated_at: OffsetDateTime,
+) -> Result<(), AppendError> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+    let timestamp = updated_at
+        .format(&Rfc3339)
+        .expect("the RFC3339 format description supports all OffsetDateTime values");
+    let mut index = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|source| append_error("open", path, source))?;
+    let end = index
+        .seek(SeekFrom::End(0))
+        .map_err(|source| append_error("seek", path, source))?;
+    if end > 0 {
+        index
+            .seek(SeekFrom::Start(end - 1))
+            .map_err(|source| append_error("seek", path, source))?;
+        let mut final_byte = [0];
+        index
+            .read_exact(&mut final_byte)
+            .map_err(|source| append_error("read", path, source))?;
+        if final_byte != *b"\n" {
+            index
+                .seek(SeekFrom::End(0))
+                .map_err(|source| append_error("seek", path, source))?;
+            index
+                .write_all(b"\n")
+                .map_err(|source| append_error("write", path, source))?;
+        }
+    }
+    for (id, name) in updates {
+        let record = serde_json::to_vec(&IndexRecord {
+            id,
+            thread_name: name,
+            updated_at: &timestamp,
+        })
+        .expect("serializing string-only session-index records cannot fail");
+        index
+            .write_all(&record)
+            .and_then(|()| index.write_all(b"\n"))
+            .map_err(|source| append_error("write", path, source))?;
+    }
+    index
+        .flush()
+        .map_err(|source| append_error("flush", path, source))?;
+    index
+        .sync_all()
+        .map_err(|source| append_error("sync", path, source))
+}
+
+fn append_error(operation: &'static str, path: &Path, source: io::Error) -> AppendError {
+    if matches!(source.raw_os_error(), Some(28 | 112)) {
+        return AppendError::DiskFull { operation, source };
+    }
+    let path = path.to_path_buf();
+    match operation {
+        "open" => AppendError::Open { path, source },
+        "seek" => AppendError::Seek { path, source },
+        "read" => AppendError::Read { path, source },
+        "write" => AppendError::Write { path, source },
+        "flush" => AppendError::Flush { path, source },
+        "sync" => AppendError::Sync { path, source },
+        _ => unreachable!("all append operations are classified"),
+    }
+}
 
 pub(crate) struct Entry {
     pub(crate) name: String,
@@ -98,12 +232,13 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, io, path::Path};
 
     use serde_json::json;
     use tempfile::TempDir;
+    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-    use super::Snapshot;
+    use super::{AppendError, Snapshot, append, append_error};
 
     #[test]
     fn retains_the_latest_valid_entry_and_counts_malformed_records() {
@@ -140,5 +275,49 @@ mod tests {
         assert_eq!(snapshot.entry("root").unwrap().name, "newest");
         assert_eq!(snapshot.malformed_records(), 2);
         assert!(!snapshot.is_complete());
+    }
+
+    #[test]
+    fn append_repairs_a_partial_final_record_and_uses_one_timestamp_for_the_batch() {
+        let home = TempDir::new().unwrap();
+        let path = home.path().join("session_index.jsonl");
+        fs::write(&path, br#"{"id":"root","thread_name":"truncated"#).unwrap();
+        let updated_at = OffsetDateTime::parse("2026-08-14T12:34:56Z", &Rfc3339).unwrap();
+
+        append(
+            &path,
+            &[
+                ("root".into(), "fresh".into()),
+                ("next".into(), "new".into()),
+            ],
+            updated_at,
+        )
+        .unwrap();
+
+        let bytes = fs::read(&path).unwrap();
+        let rendered_timestamp = updated_at.format(&Rfc3339).unwrap();
+        assert!(bytes.starts_with(b"{\"id\":\"root\",\"thread_name\":\"truncated\n"));
+        assert!(bytes.ends_with(b"\n"));
+        assert_eq!(
+            bytes
+                .windows(rendered_timestamp.len())
+                .filter(|window| *window == rendered_timestamp.as_bytes())
+                .count(),
+            2
+        );
+        let snapshot = Snapshot::load(home.path());
+        assert_eq!(snapshot.entry("root").unwrap().name, "fresh");
+        assert_eq!(snapshot.entry("next").unwrap().name, "new");
+    }
+
+    #[test]
+    fn classifies_enospc_as_an_actionable_disk_full_error() {
+        let error = append_error(
+            "write",
+            Path::new("session_index.jsonl"),
+            io::Error::from_raw_os_error(28),
+        );
+
+        assert!(matches!(error, AppendError::DiskFull { .. }));
     }
 }
