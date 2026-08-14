@@ -15,7 +15,7 @@ use crate::update::FailureClass;
 
 #[cfg(target_os = "macos")]
 mod macos;
-#[allow(dead_code)] // Windows lifecycle dispatch is intentionally deferred to Task 3.
+#[cfg(any(target_os = "windows", test))]
 mod windows;
 
 #[cfg(target_os = "macos")]
@@ -113,7 +113,7 @@ pub(crate) enum StatusError {
 
 #[derive(Debug, Error)]
 pub(crate) enum ScheduleError {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[error("could not find the current executable")]
     CurrentExecutable {
         #[source]
@@ -182,6 +182,11 @@ pub(crate) fn resume(paths: &Paths) -> Result<(), ScheduleError> {
 #[cfg(target_os = "macos")]
 pub(crate) fn uninstall(paths: &Paths) -> Result<(), ScheduleError> {
     macos::uninstall(paths).map_err(Into::into)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn uninstall(paths: &Paths) -> Result<(), ScheduleError> {
+    windows::uninstall(paths).map_err(Into::into)
 }
 
 pub(crate) fn run_scheduled(
