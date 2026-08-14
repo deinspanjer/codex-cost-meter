@@ -70,6 +70,8 @@ For all new forecasts and actuals:
 - agent time is summed task/turn duration and can overlap during parallel work, so it is not wall-clock elapsed time; and
 - cumulative snapshots include descendant agents but public documentation omits task identifiers.
 
+After each milestone, run that milestone's built or published `codex-cost-meter` binary against the program root task and record its sanitized, unfiltered report here beside the rollout-based estimate and actual. This self-report is independent evidence rather than a replacement for the prototype accounting used for exclusions and estimate comparisons.
+
 Implementation, ordinary review, validation, durable documentation, release preparation, and corrective rework count toward actuals. Re-estimation, actual capture, release-persona construction or refresh, and release-decider execution are measured separately as excluded governance overhead. Fixes requested by the decider count as implementation work.
 
 ## Pre-implementation background and design actual
@@ -154,6 +156,25 @@ After those exclusions, v0.1 delivery used **103 turns, 3h 07m 21.268s of summed
 Compared with the post-plan forecast of 30–66 turns, 6–16 summed hours, and 90k–300k output tokens, delivery exceeded the turn ceiling by 37 turns, completed below the time range, and exceeded the output-token ceiling by 33,723 tokens (11%). Input remains measured actual only and had no forecast. The original pre-design estimate described a different, broader cross-platform outcome with an informal turn definition, so it remains historical evidence rather than a like-for-like v0.1 comparator.
 
 Total program output at this snapshot was 852,852 tokens, below the 1,000,000,000-token stop gate.
+
+## Milestone self-reports
+
+### v0.1.0 late post-release snapshot
+
+The published v0.1.0 Universal 2 binary produced this report after release verification and the final accounting merge, so it is intentionally later than the v0.1 boundary. The task identifier, local project path, and task title are omitted from the public record.
+
+| Scope | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 42 (41 complete, 1 incomplete) | 108,481,952 | 106,291,200 | 316,266 | 125,137 | 209m 49.4s | $73.59 |
+| Whole tree | 244 (242 complete, 2 incomplete) | 233,738,986 | 226,580,224 | 861,128 | 344,656 | 320m 52.5s | $151.20+ |
+
+| Model | Turns | Output tokens | Estimated cost |
+| --- | ---: | ---: | ---: |
+| `gpt-5.6-sol` | 93 | 645,434 | $141.47 |
+| `gpt-5.6-terra` | 35 | 204,402 | $9.32 |
+| `codex-auto-review` | 116 | 11,292 | $0.41 |
+
+The report also measured 111m 03.1s of descendant agent-turn time, which can overlap. It marked the whole-tree input incomplete because the rollout scan skipped oversized JSONL records; therefore the trailing `+` means the reported whole-tree cost is a lower bound. Pricing was effective 2026-08-06 and used the embedded model proxies recorded by the application.
 
 ## Evidence
 
