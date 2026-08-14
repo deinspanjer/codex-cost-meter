@@ -41,6 +41,10 @@ impl Paths {
     pub(crate) fn plist(&self) -> &Path {
         &self.plist
     }
+
+    pub(crate) fn status(&self) -> &Path {
+        &self.status
+    }
 }
 
 pub(crate) struct InstallOptions {
@@ -223,6 +227,9 @@ fn remove_with_runner(
     paths: &Paths,
     runner: &mut impl CommandRunner,
 ) -> Result<(), LifecycleError> {
+    if !paths.plist.is_file() && !paths.status.is_file() {
+        return Ok(());
+    }
     let uid = current_uid(runner)?;
     bootout(runner, &uid)?;
     remove_file_if_present(&paths.plist)
@@ -291,7 +298,7 @@ fn xml_text(value: &str) -> String {
 
 fn runtime_argument(runtime: Duration) -> String {
     let seconds = runtime.as_secs();
-    if seconds % 60 == 0 {
+    if seconds.is_multiple_of(60) {
         format!("{}m", seconds / 60)
     } else {
         seconds.to_string()
@@ -406,7 +413,6 @@ mod tests {
     use crate::update::FailureClass;
     use time::OffsetDateTime;
 
-    const LABEL: &str = "io.github.deinspanjer.codex-cost-meter";
     const LAUNCHCTL: &str = "/bin/launchctl";
     const ID: &str = "/usr/bin/id";
 
@@ -454,6 +460,23 @@ mod tests {
 
     fn paths(directory: &TempDir) -> Paths {
         Paths::new(directory.path())
+    }
+
+    #[test]
+    fn absent_schedule_files_short_circuit_removal_without_running_a_command() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+        let mut runner = FakeRunner::default();
+
+        remove_with_runner(&paths, &mut runner).unwrap();
+
+        assert!(runner.calls.is_empty());
+        assert_eq!(
+            paths.status(),
+            directory
+                .path()
+                .join("Library/Application Support/codex-cost-meter/status.json")
+        );
     }
 
     fn options(directory: &TempDir) -> InstallOptions {
@@ -632,7 +655,7 @@ mod tests {
         let mut second_runner =
             FakeRunner::with_outputs([output(true, "501\n"), output(false, "")]);
         remove_with_runner(&paths, &mut second_runner).unwrap();
-        assert_eq!(second_runner.calls.len(), 2);
+        assert!(second_runner.calls.is_empty());
     }
 
     #[test]

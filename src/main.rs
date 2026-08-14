@@ -18,8 +18,9 @@ use clap::{Parser, error::ErrorKind};
 use thiserror::Error as ThisError;
 
 use crate::{
-    cli::{Cli, Command},
+    cli::{Cli, Command, ScheduleCommand},
     report::ReportError,
+    schedule::{InstallOptions, Paths, ScheduleError, ScheduledRunError},
 };
 
 #[derive(Debug, ThisError)]
@@ -30,6 +31,10 @@ enum AppError {
     Report(#[from] ReportError),
     #[error(transparent)]
     Update(#[from] update::UpdateError),
+    #[error(transparent)]
+    Schedule(#[from] ScheduleError),
+    #[error(transparent)]
+    Scheduled(#[from] ScheduledRunError),
     #[error("could not render report: {0}")]
     Render(#[from] serde_json::Error),
     #[error("could not write report")]
@@ -45,6 +50,11 @@ enum AppError {
     #[error("update applied successfully to {updated} task(s), but could not write update output")]
     UpdateOutputAfterApply {
         updated: usize,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not write schedule output")]
+    WriteScheduleOutput {
         #[source]
         source: io::Error,
     },
@@ -101,7 +111,97 @@ fn run_with_writer(cli: Cli, writer: &mut impl Write) -> Result<(), AppError> {
             write_update_output(writer, &result, options.apply)?;
             Ok(())
         }
+        Command::Schedule(args) => run_schedule(args.command, writer),
+        Command::Uninstall => {
+            let paths = Paths::new(&cli::user_home()?);
+            schedule::uninstall(&paths)?;
+            writer
+                .write_all(b"schedule state and current executable removed\n")
+                .map_err(|source| AppError::WriteScheduleOutput { source })
+        }
     }
+}
+
+fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(), AppError> {
+    match command {
+        ScheduleCommand::Install(args) => {
+            let schedule_options = args.options();
+            let paths = Paths::new(&cli::user_home()?);
+            let options = InstallOptions {
+                executable: std::env::current_exe()
+                    .map_err(|source| ScheduleError::CurrentExecutable { source })?,
+                codex_home: schedule_options.codex_home()?,
+                idle_minutes: schedule_options.idle_minutes(),
+                limit: schedule_options.limit(),
+                max_runtime: schedule_options.max_runtime(),
+                max_width: schedule_options.max_width(),
+                title_metrics: schedule_options.title_metrics().into(),
+                reprice_before: schedule_options.reprice_before(),
+            };
+            schedule::install(&paths, &options)?;
+            writer
+                .write_all(format!("schedule installed: {}\n", paths.plist().display()).as_bytes())
+                .map_err(|source| AppError::WriteScheduleOutput { source })
+        }
+        ScheduleCommand::Status => {
+            let inspection = schedule::inspect(&Paths::new(&cli::user_home()?))?;
+            let mut output = format!(
+                "installed: {}\nloaded: {}\n",
+                yes_no(inspection.installed),
+                yes_no(inspection.loaded),
+            );
+            if let Some(status) = inspection.status {
+                let last_run = status
+                    .last_run_at
+                    .map(|timestamp| {
+                        timestamp
+                            .format(&time::format_description::well_known::Rfc3339)
+                            .expect("OffsetDateTime always formats as RFC 3339")
+                    })
+                    .unwrap_or_else(|| "never".into());
+                output.push_str(&format!(
+                    "last run: {}\nresult: {}\nconsecutive failures: {}\npaused: {}\nremediation: {}\n",
+                    last_run,
+                    schedule::result_code(status.result),
+                    status.consecutive_failures,
+                    yes_no(status.paused),
+                    status.remediation,
+                ));
+            } else {
+                output.push_str("last run: never\n");
+            }
+            writer
+                .write_all(output.as_bytes())
+                .map_err(|source| AppError::WriteScheduleOutput { source })
+        }
+        ScheduleCommand::Resume => {
+            schedule::resume(&Paths::new(&cli::user_home()?))?;
+            writer
+                .write_all(b"schedule resumed\n")
+                .map_err(|source| AppError::WriteScheduleOutput { source })
+        }
+        ScheduleCommand::Remove => {
+            schedule::remove(&Paths::new(&cli::user_home()?))?;
+            writer
+                .write_all(b"schedule removed\n")
+                .map_err(|source| AppError::WriteScheduleOutput { source })
+        }
+        ScheduleCommand::Run(args) => {
+            let paths = Paths::new(&cli::user_home()?);
+            let schedule_options = args.options();
+            schedule::run_scheduled(
+                &paths,
+                &schedule_options.codex_home()?,
+                &schedule_options.update_options(),
+                writer,
+            )?;
+            Ok(())
+        }
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }
 
 fn parse_cli() -> Result<Cli, clap::Error> {

@@ -8,9 +8,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
 
+use crate::update::{self, UpdateError, UpdateOptions};
+
 use crate::update::FailureClass;
 
 mod macos;
+
+pub(crate) use macos::{Inspection, InstallOptions, Paths};
 
 const MAX_STATUS_BYTES: u64 = 4096;
 
@@ -87,6 +91,100 @@ pub(crate) enum StatusError {
     },
     #[error("could not serialize schedule status")]
     Serialize,
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum ScheduleError {
+    #[error("could not find the current executable")]
+    CurrentExecutable {
+        #[source]
+        source: io::Error,
+    },
+    #[error(transparent)]
+    Lifecycle(#[from] macos::LifecycleError),
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum ScheduledRunError {
+    #[error("schedule status unavailable")]
+    StatusUnavailable,
+    #[error("{result}: {remediation}{status_unavailable}")]
+    Failure {
+        result: &'static str,
+        remediation: String,
+        status_unavailable: &'static str,
+    },
+    #[error("could not write scheduled output")]
+    Output,
+}
+
+pub(crate) fn install(paths: &Paths, options: &InstallOptions) -> Result<(), ScheduleError> {
+    macos::install(paths, options).map_err(Into::into)
+}
+
+pub(crate) fn inspect(paths: &Paths) -> Result<Inspection, ScheduleError> {
+    if !paths.plist().is_file() {
+        return Ok(Inspection {
+            installed: false,
+            loaded: false,
+            status: read_status(paths.status())
+                .map_err(|source| macos::LifecycleError::Status { source })?,
+        });
+    }
+    macos::inspect(paths).map_err(Into::into)
+}
+
+pub(crate) fn remove(paths: &Paths) -> Result<(), ScheduleError> {
+    macos::remove(paths).map_err(Into::into)
+}
+
+pub(crate) fn resume(paths: &Paths) -> Result<(), ScheduleError> {
+    macos::resume(paths).map_err(Into::into)
+}
+
+pub(crate) fn uninstall(paths: &Paths) -> Result<(), ScheduleError> {
+    macos::uninstall(paths).map_err(Into::into)
+}
+
+pub(crate) fn run_scheduled(
+    paths: &Paths,
+    codex_home: &Path,
+    options: &UpdateOptions,
+    writer: &mut impl Write,
+) -> Result<(), ScheduledRunError> {
+    let previous = read_status(paths.status()).map_err(|_| ScheduledRunError::StatusUnavailable)?;
+    if previous.as_ref().is_some_and(|status| status.paused) {
+        return Ok(());
+    }
+    match update::run(codex_home, options) {
+        Ok(_) => {
+            if write_status(
+                paths.status(),
+                &after_success(previous, OffsetDateTime::now_utc()),
+            )
+            .is_err()
+            {
+                writer
+                    .write_all(b"update completed; schedule status unavailable\n")
+                    .map_err(|_| ScheduledRunError::Output)?;
+            }
+            Ok(())
+        }
+        Err(UpdateError::LockBusy) => Ok(()),
+        Err(error) => {
+            let status = after_failure(previous, error.failure_class(), OffsetDateTime::now_utc());
+            let status_unavailable = if write_status(paths.status(), &status).is_err() {
+                "; schedule status unavailable"
+            } else {
+                ""
+            };
+            Err(ScheduledRunError::Failure {
+                result: result_code(status.result),
+                remediation: status.remediation,
+                status_unavailable,
+            })
+        }
+    }
 }
 
 pub(crate) fn after_failure(
@@ -211,6 +309,16 @@ fn remediation(result: ResultCode) -> &'static str {
         ResultCode::PermissionDenied => {
             "Restore access to Codex storage, then resume the schedule."
         }
+    }
+}
+
+pub(crate) fn result_code(result: ResultCode) -> &'static str {
+    match result {
+        ResultCode::Success => "success",
+        ResultCode::OrdinaryFailure => "ordinary_failure",
+        ResultCode::DiskFull => "disk_full",
+        ResultCode::IncompatibleSchema => "incompatible_schema",
+        ResultCode::PermissionDenied => "permission_denied",
     }
 }
 
