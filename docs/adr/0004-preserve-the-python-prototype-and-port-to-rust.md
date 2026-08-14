@@ -442,7 +442,22 @@ The raw delta is a conservative candidate delivery comparison because no separat
 
 The separately recorded post-design-to-post-plan planning and re-estimation delta was 3 turns, 5m 58.358s, 2,566,909 input tokens, and 9,811 output tokens. Accountant capture, re-estimation, and later fixed-rubric release-decider work remain excluded where their lifecycles can be attributed separately; the absolute stop gate includes all work. Candidate cumulative output was 4,183,846 tokens, below the 1,000,000,000-token stop gate.
 
-The published v0.4 binary's additive, unfiltered self-report remains a post-publication milestone artifact rather than being guessed into this pre-review candidate boundary.
+### v0.4.0 published-binary milestone report
+
+After publication, the checksummed Universal 2 binary downloaded from the public `v0.4.0` release produced this additive, deliberately unfiltered report for the same program root. Identifiers, titles, prompts, and local paths remain omitted.
+
+| Scope | Rollouts | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Known estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 1 | 45 (44 complete, 1 incomplete) | 222,481,727 | 218,369,280 | 536,682 | 199,334 | 443m 30.4s | $145.85 |
+| Whole tree | 99 | 756 (746 complete, 10 incomplete) | 2,065,807,954 | 2,020,649,984 | 5,813,660 | 2,202,060 | 814m 20.9s | $1,343.27+ |
+
+| Model | Turns | Output tokens | Known estimated cost |
+| --- | ---: | ---: | ---: |
+| `gpt-5.6-sol` | 472 | 5,157,229 | $1,309.07 |
+| `gpt-5.6-terra` | 91 | 636,738 | $33.49 |
+| `codex-auto-review` | 193 | 19,693 | $0.71 |
+
+The report measured 370m 50.5s of summed agent-turn time. Its scan skipped oversized JSONL records, so the whole-tree cost is a known lower bound rather than a complete estimate; no model was unpriced. This post-publication snapshot intentionally includes later review, CI, release, and reporting activity and is not substituted into the pre-review estimate comparison. Its 5,813,660 cumulative output tokens remain below the 1,000,000,000-token program stop gate.
 
 ## Evidence
 
