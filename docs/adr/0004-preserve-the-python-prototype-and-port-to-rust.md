@@ -507,6 +507,23 @@ No separately attributable candidate accountant or release-decider lifecycle is 
 
 The separately recorded post-design-to-post-plan planning and re-estimation delta of 4 turns, 10m 27.118s, 9,204,016 input tokens, and 23,898 output tokens remains excluded governance overhead where attribution is possible. The candidate cumulative output total of 5,971,557 is below the 1,000,000,000-token stop gate, so autonomous work may continue without owner review under that gate.
 
+### v0.5.0 published-binary milestone report
+
+After publication, the checksummed Universal 2 binary downloaded from the public `v0.5.0` release produced this additive, deliberately unfiltered report for the same program root. Identifiers, titles, prompts, and local paths remain omitted.
+
+| Scope | Rollouts | Turns | Input tokens | Cache-read tokens | Output tokens | Reasoning tokens | Summed duration | Known estimated cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Root | 1 | 47 (46 complete, 1 incomplete) | 298,987,158 | 294,158,080 | 613,941 | 222,658 | 752m 45.7s | $189.64 |
+| Whole tree | 116 | 851 (841 complete, 10 incomplete) | 2,199,612,768 | 2,149,140,480 | 6,078,251 | 2,293,625 | 1,226m 42.5s | $1,406.59+ |
+
+| Model | Turns | Output tokens | Known estimated cost |
+| --- | ---: | ---: | ---: |
+| `gpt-5.6-sol` | 479 | 5,253,897 | $1,356.64 |
+| `gpt-5.6-terra` | 131 | 800,539 | $48.71 |
+| `codex-auto-review` | 241 | 23,815 | $1.23 |
+
+The report measured 473m 56.7s of summed agent-turn time. Its scan skipped oversized JSONL records, so the whole-tree cost is a known lower bound rather than a complete estimate; no model was unpriced. This post-publication snapshot intentionally includes later review, native CI diagnosis and correction, release, and reporting activity and is not substituted into the pre-review estimate comparison. Its 6,078,251 cumulative output tokens remain 993,921,749 below the 1,000,000,000-token program stop gate.
+
 ## Evidence
 
 The decision uses the completed prototype work on rollout statistics, persisted title updates, recovery behavior, fleet portability, and the Rust multi-architecture assessment. Private task identifiers are intentionally omitted from the public repository.
