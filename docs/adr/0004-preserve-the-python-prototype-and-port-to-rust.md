@@ -132,13 +132,14 @@ Release-persona construction and release-decider execution remain excluded gover
 
 ## v0.1 actuals
 
-The release-candidate snapshot was taken after the release decider approved its requested compatibility fix and before the mechanical `0.1.0` version bump:
+The release-candidate snapshot was taken after the release decider approved its requested compatibility fix and before the mechanical `0.1.0` version bump. The final snapshot was taken after the protected merge, a failed publication attempt, the release-workflow correction, the successful retry, and independent verification of the downloaded public artifact. It precedes this accounting-only documentation update:
 
 | Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens |
 | --- | ---: | ---: | ---: | ---: |
 | Post-plan baseline | 78 | 2h 06m 59s | 40,676,833 | 229,747 |
 | Approved v0.1 candidate | 208 | 5h 08m 57.136s | 202,517,653 | 804,248 |
-| Raw delta | 130 | 3h 01m 58.136s | 161,840,820 | 574,501 |
+| Published and verified v0.1 milestone | 235 | 5h 20m 25.830s | 230,815,209 | 852,852 |
+| Final raw delta from post-plan baseline | 157 | 3h 13m 26.830s | 190,138,376 | 623,105 |
 
 The raw delta contains the explicitly excluded governance work:
 
@@ -148,11 +149,11 @@ The raw delta contains the explicitly excluded governance work:
 | Release-decider evaluation and re-evaluation | 44 | 3m 18.489s | 84,915,802 | 285,180 |
 | **Excluded total** | **54** | **6m 05.562s** | **85,430,378** | **289,382** |
 
-After those exclusions, v0.1 delivery used **76 turns, 2h 55m 52.574s of summed agent time, 76,410,442 input tokens, and 285,119 output tokens**. This includes implementation, ordinary reviews, tests, CI diagnosis, documentation, release preparation, and the decider-requested compatibility fix. No separate exclusion is claimed for actual-capture commands because they ran inside mixed root turns and cannot be isolated reliably.
+After those exclusions, v0.1 delivery used **103 turns, 3h 07m 21.268s of summed agent time, 104,707,998 input tokens, and 333,723 output tokens**. This includes implementation, ordinary reviews, tests, CI diagnosis, documentation, release preparation, publication recovery, artifact verification, and the decider-requested compatibility fix. No separate exclusion is claimed for actual-capture commands because they ran inside mixed root turns and cannot be isolated reliably; conservatively charging those mixed turns to delivery avoids understating implementation cost.
 
-Compared with the post-plan forecast of 30–66 turns, 6–16 summed hours, and 90k–300k output tokens, delivery exceeded the turn ceiling by 10 turns, completed below the time range, and used 95% of the output-token ceiling. Input remains measured actual only and had no forecast. The original pre-design estimate described a different, broader cross-platform outcome with an informal turn definition, so it remains historical evidence rather than a like-for-like v0.1 comparator.
+Compared with the post-plan forecast of 30–66 turns, 6–16 summed hours, and 90k–300k output tokens, delivery exceeded the turn ceiling by 37 turns, completed below the time range, and exceeded the output-token ceiling by 33,723 tokens (11%). Input remains measured actual only and had no forecast. The original pre-design estimate described a different, broader cross-platform outcome with an informal turn definition, so it remains historical evidence rather than a like-for-like v0.1 comparator.
 
-Total program output at this snapshot was 804,248 tokens, below the 1,000,000,000-token stop gate.
+Total program output at this snapshot was 852,852 tokens, below the 1,000,000,000-token stop gate.
 
 ## Evidence
 
