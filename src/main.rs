@@ -27,6 +27,8 @@ enum AppError {
     Cli(#[from] cli::CliError),
     #[error(transparent)]
     Report(#[from] ReportError),
+    #[error(transparent)]
+    Update(#[from] update::UpdateError),
     #[error("could not render report: {0}")]
     Render(#[from] serde_json::Error),
     #[error("could not write report: {0}")]
@@ -55,7 +57,36 @@ fn run(cli: Cli) -> Result<(), AppError> {
             io::stdout().lock().write_all(rendered.as_bytes())?;
             Ok(())
         }
+        Command::Update(args) => {
+            let home = args.codex_home()?;
+            let options = args.options();
+            let result = update::run(&home, &options)?;
+            let rendered = update_output(&result, options.apply);
+            io::stdout().lock().write_all(rendered.as_bytes())?;
+            Ok(())
+        }
     }
+}
+
+fn update_output(result: &update::UpdateResult, apply: bool) -> String {
+    let mut rendered = result
+        .proposals
+        .iter()
+        .fold(String::new(), |mut output, proposal| {
+            output.push_str(&format!(
+                "{}: {} -> {}\n",
+                sanitize(proposal.id.clone()),
+                sanitize(proposal.old_title.clone()),
+                sanitize(proposal.new_title.clone())
+            ));
+            output
+        });
+    if apply {
+        rendered.push_str(&format!("updated {} task(s)\n", result.proposals.len()));
+    } else {
+        rendered.push_str("dry run; pass --apply to write\n");
+    }
+    rendered
 }
 
 fn error_chain(error: &dyn Error) -> String {
