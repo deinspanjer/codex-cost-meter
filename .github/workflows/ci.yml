@@ -17,7 +17,10 @@ jobs:
           fetch-depth: 0
       - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
       - run: rustup default 1.97.1
-      - run: just check
+      - run: cargo fmt --check
+      - run: cargo test
+      - run: python3 -m unittest scripts/test_version.py -v
+      - run: cargo clippy --all-targets -- -D warnings
 
   build:
     strategy:
