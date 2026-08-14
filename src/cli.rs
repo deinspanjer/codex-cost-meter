@@ -38,9 +38,7 @@ impl ReportArgs {
         if let Some(home) = env::var_os("CODEX_HOME") {
             return Ok(home.into());
         }
-        let home = env::var_os("HOME")
-            .or_else(|| env::var_os("USERPROFILE"))
-            .ok_or(CliError::HomeNotSet)?;
+        let home = env::var_os("HOME").ok_or(CliError::HomeNotSet)?;
         Ok(PathBuf::from(home).join(".codex"))
     }
 }

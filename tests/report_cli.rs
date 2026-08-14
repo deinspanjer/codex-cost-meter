@@ -117,6 +117,23 @@ fn report_uses_home_codex_directory_as_the_final_default() {
 }
 
 #[test]
+fn report_does_not_use_userprofile_as_a_codex_home_fallback() {
+    let root = TempDir::new().unwrap();
+    fixture_home_at(&root.path().join(".codex"));
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "root", "--json"])
+        .env_remove("CODEX_HOME")
+        .env_remove("HOME")
+        .env("USERPROFILE", root.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(stderr(&output).contains("HOME is not set"));
+}
+
+#[test]
 fn missing_thread_id_is_a_clap_usage_error() {
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .arg("report")

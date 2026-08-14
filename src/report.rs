@@ -493,6 +493,35 @@ mod tests {
         home
     }
 
+    #[cfg(unix)]
+    struct PermissionsGuard {
+        path: std::path::PathBuf,
+        original: fs::Permissions,
+    }
+
+    #[cfg(unix)]
+    impl PermissionsGuard {
+        fn remove(path: &std::path::Path) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+
+            let original = fs::metadata(path).unwrap().permissions();
+            let mut denied = original.clone();
+            denied.set_mode(0o000);
+            fs::set_permissions(path, denied).unwrap();
+            Self {
+                path: path.to_path_buf(),
+                original,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for PermissionsGuard {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.path, self.original.clone());
+        }
+    }
+
     #[test]
     fn aggregates_root_and_descendant_usage_with_latest_name() {
         let home = fixture_home();
@@ -542,6 +571,26 @@ mod tests {
         let index = RolloutIndex::build(home.path()).unwrap();
         fs::remove_file(home.path().join("sessions/root.jsonl")).unwrap();
 
+        let error = build_with_index("root", home.path(), &index, &Catalog::embedded().unwrap())
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ReportError::SelectedRolloutUnreadable { .. }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_file_becoming_unreadable_after_discovery_is_an_error() {
+        let home = fixture_home();
+        let index = RolloutIndex::build(home.path()).unwrap();
+        let selected = home.path().join("sessions/root.jsonl");
+        let _guard = PermissionsGuard::remove(&selected);
+
+        if fs::File::open(&selected).is_ok() {
+            return;
+        }
         let error = build_with_index("root", home.path(), &index, &Catalog::embedded().unwrap())
             .unwrap_err();
 
