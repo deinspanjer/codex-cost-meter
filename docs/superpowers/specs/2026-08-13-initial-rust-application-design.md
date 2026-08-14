@@ -387,7 +387,7 @@ After written design approval:
 
 Use cumulative snapshots from the preserved Python reporter so the measurement method remains independent of the Rust implementation being evaluated. Include descendant agents. Public documentation records totals, not task identifiers. Summed agent-turn duration can overlap when agents run concurrently and is not wall-clock duration.
 
-For this ledger, one agent turn is one recorded task/turn lifecycle. Total tokens are input plus output tokens; cached input is already included in input, and reasoning is already included in output. The ledger may show input and output separately for auditability while comparing the total.
+For this ledger, one agent turn is one recorded task/turn lifecycle. Actual input and output are recorded separately; cached input is already included in input, and reasoning is already included in output. Forecasts estimate output only because future input depends on context growth, cache behavior, and harness mechanics. Input remains visible in actuals but is not forced into a speculative estimate-versus-actual comparison.
 
 Comparison boundaries are explicit:
 

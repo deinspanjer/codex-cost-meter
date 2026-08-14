@@ -9,13 +9,16 @@ No public Codex API exposes the complete combination needed by the title-cost to
 
 The local stores serve different purposes:
 
-- `state_5.sqlite` contains the task rows used for selection and naming, including ID, title, name, history mode, first user message, and `updated_at`.
+- `state_5.sqlite` contains the task rows used for update selection and persisted-name mutation, including ID, title, name, history mode, first user message, and `updated_at`.
 - Active and archived rollout JSONL contain session metadata, parent relationships, token events, model changes, and event timestamps needed to calculate cost.
+- `session_index.jsonl` contains the optional latest display name needed by an exact-ID read-only report.
 - UI or terminal visibility is not reliable evidence of persisted usage or identity.
 
 ## Decision
 
-Read task selection and persisted naming metadata from `state_5.sqlite`. Read usage, model, timing, root/descendant identity, and active/archive coverage from rollout JSONL.
+For title updates, read task selection and persisted naming metadata from `state_5.sqlite`. Read usage, model, timing, root/descendant identity, and active/archive coverage from rollout JSONL.
+
+An exact-ID read-only report does not need SQLite selection, history-mode naming, or update state. It reads identity and usage from rollout JSONL and may read the latest display name from `session_index.jsonl`. This narrower path is an exception for reporting, not a second source of truth for title mutation.
 
 Build one rollout index per run across both `sessions` and `archived_sessions`. If the same rollout ID appears more than once, use the newest file by modification time. Derive root eligibility from rollout metadata rather than treating every SQLite task row as a sidebar root.
 
@@ -24,7 +27,8 @@ Convert cumulative token counters into deltas and attribute each delta to the mo
 ## Alternatives considered
 
 - Read SQLite alone: rejected because it does not contain the event-level token and descendant data needed for pricing.
-- Read rollouts alone: rejected because persisted task naming, history mode, and update state come from SQLite.
+- Read rollouts alone for title updates: rejected because persisted task naming, history mode, and update state come from SQLite.
+- Require SQLite for an exact-ID report: rejected because it adds a failure dependency without supplying data required by that report.
 - Infer state from visible UI or terminal output: rejected because missing tool output was previously mistaken for zero usage.
 - Guess ambiguous legacy attribution: rejected because an incomplete estimate is safer than double-counting.
 
