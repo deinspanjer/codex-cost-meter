@@ -20,16 +20,20 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     Report(ReportArgs),
     Update(UpdateArgs),
+    #[cfg(target_os = "macos")]
     Schedule(ScheduleArgs),
+    #[cfg(target_os = "macos")]
     Uninstall,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduleArgs {
     #[command(subcommand)]
     pub(crate) command: ScheduleCommand,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Subcommand)]
 pub(crate) enum ScheduleCommand {
     Install(ScheduleInstallArgs),
@@ -40,12 +44,14 @@ pub(crate) enum ScheduleCommand {
     Run(ScheduleRunArgs),
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduleInstallArgs {
     #[command(flatten)]
     options: ScheduledUpdateArgs,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduleRunArgs {
     #[command(flatten)]
@@ -54,6 +60,7 @@ pub(crate) struct ScheduleRunArgs {
     apply: bool,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduledUpdateArgs {
     #[arg(long, default_value_t = 15, value_parser = parse_positive_u64)]
@@ -113,8 +120,8 @@ pub(crate) struct UpdateArgs {
 
 #[derive(Debug, Error)]
 pub(crate) enum CliError {
-    #[error("could not resolve default Codex home: HOME is not set")]
-    HomeNotSet,
+    #[error("could not resolve default Codex home: {0}")]
+    HomeNotSet(&'static str),
 }
 
 impl ReportArgs {
@@ -142,12 +149,14 @@ impl UpdateArgs {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl ScheduleInstallArgs {
     pub(crate) fn options(&self) -> &ScheduledUpdateArgs {
         &self.options
     }
 }
 
+#[cfg(target_os = "macos")]
 impl ScheduleRunArgs {
     pub(crate) fn options(&self) -> &ScheduledUpdateArgs {
         debug_assert!(self.apply);
@@ -155,6 +164,7 @@ impl ScheduleRunArgs {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl ScheduledUpdateArgs {
     pub(crate) fn codex_home(&self) -> Result<PathBuf, CliError> {
         resolve_codex_home(&self.codex_home)
@@ -201,10 +211,39 @@ impl ScheduledUpdateArgs {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn user_home() -> Result<PathBuf, CliError> {
     env::var_os("HOME")
         .map(PathBuf::from)
-        .ok_or(CliError::HomeNotSet)
+        .ok_or(CliError::HomeNotSet("HOME is not set"))
+}
+
+#[cfg(target_os = "windows")]
+fn user_home() -> Result<PathBuf, CliError> {
+    windows_home(
+        env::var_os("USERPROFILE"),
+        env::var_os("HOMEDRIVE"),
+        env::var_os("HOMEPATH"),
+    )
+    .ok_or(CliError::HomeNotSet(
+        "USERPROFILE or both HOMEDRIVE and HOMEPATH are not set; pass --codex-home or set CODEX_HOME",
+    ))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_home(
+    userprofile: Option<std::ffi::OsString>,
+    home_drive: Option<std::ffi::OsString>,
+    home_path: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    userprofile
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            let mut home = home_drive.filter(|value| !value.is_empty())?;
+            home.push(home_path.filter(|value| !value.is_empty())?);
+            Some(PathBuf::from(home))
+        })
 }
 
 fn resolve_codex_home(codex_home: &Option<PathBuf>) -> Result<PathBuf, CliError> {
@@ -268,15 +307,20 @@ fn parse_metrics(value: &str) -> Result<MetricList, String> {
         .map_err(|error| error.to_string())
 }
 
+#[cfg(target_os = "macos")]
 fn parse_metric_text(value: &str) -> Result<String, String> {
     parse_metrics(value).map(|_| value.into())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{ffi::OsString, path::PathBuf};
+
     use clap::Parser;
 
-    use super::{Cli, Command, ScheduleCommand, UpdateArgs};
+    #[cfg(target_os = "macos")]
+    use super::ScheduleCommand;
+    use super::{Cli, Command, UpdateArgs, windows_home};
     use crate::title::MetricList;
 
     fn update(arguments: &[&str]) -> UpdateArgs {
@@ -369,6 +413,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn parses_schedule_commands_and_rejects_unsupported_selection() {
         for arguments in [
@@ -414,6 +459,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn schedule_arguments_preserve_the_installed_update_contract() {
         let parse = |arguments: &[&str]| {
@@ -476,5 +522,52 @@ mod tests {
         };
         assert!(run.apply);
         assert_eq!(run.options().max_runtime().as_secs(), 240);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn parser_rejects_macos_scheduler_commands() {
+        for arguments in [vec!["schedule", "install"], vec!["uninstall"]] {
+            let mut command = vec!["codex-cost-meter"];
+            command.extend(arguments.iter().copied());
+            assert!(Cli::try_parse_from(command).is_err(), "{arguments:?}");
+        }
+    }
+
+    #[test]
+    fn windows_home_prefers_userprofile() {
+        assert_eq!(
+            windows_home(
+                Some(OsString::from(r"C:\Users\Codex")),
+                Some(OsString::from("D:")),
+                Some(OsString::from(r"\Users\Ignored")),
+            ),
+            Some(PathBuf::from(r"C:\Users\Codex")),
+        );
+    }
+
+    #[test]
+    fn windows_home_requires_a_complete_drive_and_path_fallback() {
+        assert_eq!(
+            windows_home(
+                None,
+                Some(OsString::from("D:")),
+                Some(OsString::from(r"\Users\Codex")),
+            ),
+            Some(PathBuf::from(r"D:\Users\Codex")),
+        );
+        assert_eq!(windows_home(None, Some(OsString::from("D:")), None), None);
+        assert_eq!(
+            windows_home(None, None, Some(OsString::from(r"\Users\Codex"))),
+            None
+        );
+        assert_eq!(
+            windows_home(
+                Some(OsString::new()),
+                Some(OsString::from("D:")),
+                Some(OsString::from(r"\Users\Codex")),
+            ),
+            Some(PathBuf::from(r"D:\Users\Codex")),
+        );
     }
 }

@@ -3,6 +3,7 @@ mod output;
 mod pricing;
 mod report;
 mod rollout;
+#[cfg(target_os = "macos")]
 mod schedule;
 mod session_index;
 mod title;
@@ -17,10 +18,14 @@ use std::{
 use clap::{Parser, error::ErrorKind};
 use thiserror::Error as ThisError;
 
+#[cfg(target_os = "macos")]
 use crate::{
-    cli::{Cli, Command, ScheduleCommand},
-    report::ReportError,
+    cli::ScheduleCommand,
     schedule::{InstallOptions, Paths, ScheduleError, ScheduledRunError},
+};
+use crate::{
+    cli::{Cli, Command},
+    report::ReportError,
 };
 
 #[derive(Debug, ThisError)]
@@ -31,8 +36,10 @@ enum AppError {
     Report(#[from] ReportError),
     #[error(transparent)]
     Update(#[from] update::UpdateError),
+    #[cfg(target_os = "macos")]
     #[error(transparent)]
     Schedule(#[from] ScheduleError),
+    #[cfg(target_os = "macos")]
     #[error(transparent)]
     Scheduled(#[from] ScheduledRunError),
     #[error("could not render report: {0}")]
@@ -53,6 +60,7 @@ enum AppError {
         #[source]
         source: io::Error,
     },
+    #[cfg(target_os = "macos")]
     #[error("could not write schedule output")]
     WriteScheduleOutput {
         #[source]
@@ -111,7 +119,9 @@ fn run_with_writer(cli: Cli, writer: &mut impl Write) -> Result<(), AppError> {
             write_update_output(writer, &result, options.apply)?;
             Ok(())
         }
+        #[cfg(target_os = "macos")]
         Command::Schedule(args) => run_schedule(args.command, writer),
+        #[cfg(target_os = "macos")]
         Command::Uninstall => {
             let paths = Paths::new(&cli::user_home()?);
             schedule::uninstall(&paths)?;
@@ -122,6 +132,7 @@ fn run_with_writer(cli: Cli, writer: &mut impl Write) -> Result<(), AppError> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(), AppError> {
     match command {
         ScheduleCommand::Install(args) => {
@@ -200,6 +211,7 @@ fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(),
     }
 }
 
+#[cfg(target_os = "macos")]
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }

@@ -1,3 +1,5 @@
+#![cfg(target_os = "macos")]
+
 use std::{
     fs::{self, OpenOptions},
     path::Path,
@@ -41,6 +43,24 @@ fn schedule_parser_errors_and_public_help_do_not_expose_internal_workflow() {
     assert!(help.status.success());
     assert!(!String::from_utf8(help.stdout).unwrap().contains("run"));
     assert!(help.stderr.is_empty());
+}
+
+#[test]
+fn schedule_status_requires_home_even_when_codex_home_is_set() {
+    let codex_home = TempDir::new().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["schedule", "status"])
+        .env_remove("HOME")
+        .env("CODEX_HOME", codex_home.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        stderr(&output),
+        "could not resolve default Codex home: HOME is not set\n"
+    );
 }
 
 #[test]
