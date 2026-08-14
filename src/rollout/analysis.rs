@@ -137,6 +137,7 @@ impl TokenUsage {
 pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisError> {
     let mut session_meta_count = 0;
     let mut session_at = None;
+    let mut malformed_timestamp = false;
     let mut valid_turns = HashSet::new();
     let mut turn_contexts = HashMap::new();
 
@@ -147,7 +148,11 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
         match item.get("type").and_then(Value::as_str) {
             Some("session_meta") => {
                 session_meta_count += 1;
-                session_at = timestamp(&item).or(session_at);
+                match timestamp(&item) {
+                    Ok(Some(at)) => session_at = Some(at),
+                    Ok(None) => {}
+                    Err(()) => malformed_timestamp = true,
+                }
             }
             Some("turn_context") => {
                 let Some(payload) = item.get("payload").and_then(Value::as_object) else {
@@ -163,7 +168,10 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
         }
     })?;
 
-    let mut stats = RolloutStats::default();
+    let mut stats = RolloutStats {
+        incomplete_usage: malformed_timestamp,
+        ..RolloutStats::default()
+    };
     let mut starts = HashMap::new();
     let mut started_turns = Vec::new();
     let mut active_turn = None::<String>;
@@ -200,7 +208,7 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
             if let Some(turn_id) = &active_turn {
                 legacy_model = None;
                 started_turns.push(turn_id.clone());
-                if let Some(at) = timestamp(&item) {
+                if let Some(at) = timestamp_or_incomplete(&item, &mut stats) {
                     starts.insert(turn_id.clone(), at);
                 }
             }
@@ -211,11 +219,12 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
             "task_complete" | "turn_complete" | "task_aborted" | "turn_aborted"
         ) {
             let turn_id = event_turn_id(payload).or_else(|| active_turn.clone());
+            let ended_at = timestamp_or_incomplete(&item, &mut stats);
             if let Some(turn_id) = &turn_id
                 && let Some(started_at) = starts.remove(turn_id)
             {
                 stats.ended_turns += 1;
-                if let Some(ended_at) = timestamp(&item) {
+                if let Some(ended_at) = ended_at {
                     stats.duration += ended_at - started_at;
                 }
             }
@@ -269,7 +278,7 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
             .and_then(|turn_id| turn_contexts.get(turn_id).map(|(model, _)| model.clone()))
             .or_else(|| legacy_model.clone())
         else {
-            if valid_turns.is_empty() && session_meta_count > 1 {
+            if session_meta_count > 1 {
                 add_unattributed(&mut stats, normalized.total_tokens);
             }
             stats.incomplete_usage = true;
@@ -280,9 +289,10 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
             stats.incomplete_usage = true;
             return;
         }
+        let at = timestamp_or_incomplete(&item, &mut stats).or(session_at);
         stats.events.push(UsageEvent {
             model,
-            at: timestamp(&item).or(session_at),
+            at,
             usage: normalized.usage,
             reasoning_output: normalized.reasoning_output,
         });
@@ -326,10 +336,26 @@ fn event_turn_id(payload: &Map<String, Value>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn timestamp(item: &Value) -> Option<OffsetDateTime> {
-    item.get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+fn timestamp(item: &Value) -> Result<Option<OffsetDateTime>, ()> {
+    let Some(value) = item.get("timestamp") else {
+        return Ok(None);
+    };
+    let Some(value) = value.as_str() else {
+        return Err(());
+    };
+    OffsetDateTime::parse(value, &Rfc3339)
+        .map(Some)
+        .map_err(|_| ())
+}
+
+fn timestamp_or_incomplete(item: &Value, stats: &mut RolloutStats) -> Option<OffsetDateTime> {
+    match timestamp(item) {
+        Ok(at) => at,
+        Err(()) => {
+            stats.incomplete_usage = true;
+            None
+        }
+    }
 }
 
 fn add_unattributed(stats: &mut RolloutStats, tokens: u64) {
@@ -570,6 +596,20 @@ mod tests {
     }
 
     #[test]
+    fn marks_unbound_usage_unattributed_when_embedded_history_also_has_valid_turns() {
+        let stats = analyze_fixture(&[
+            metadata("2026-08-13T10:00:00Z"),
+            metadata("2026-08-13T10:00:01Z"),
+            context(Some("turn-1"), "gpt-5.6-terra", "high"),
+            token_event(usage(6, 2, 3), usage(6, 2, 3)),
+        ]);
+
+        assert_eq!(stats.known_usage, Usage::default());
+        assert_eq!(stats.unattributed_tokens, 9);
+        assert!(stats.incomplete_usage);
+    }
+
+    #[test]
     fn records_turn_durations_and_breaks_model_effort_majority_ties_lexically() {
         let stats = analyze_fixture(&[
             metadata("2026-08-13T10:00:00Z"),
@@ -613,6 +653,25 @@ mod tests {
         assert_eq!(stats.known_usage.output, 9);
         assert_eq!(stats.reasoning_output, 4);
         assert_eq!(stats.events[0].at, Some(datetime!(2026-08-13 10:00 UTC)));
+        assert!(stats.incomplete_usage);
+    }
+
+    #[test]
+    fn absent_event_timestamps_still_fall_back_without_making_usage_incomplete() {
+        let stats = analyze_fixture(&[
+            metadata("2026-08-13T10:00:00Z"),
+            context(None, "gpt-5.6-terra", "high"),
+            json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {"last_token_usage": {"input_tokens": 1, "total_tokens": 1}},
+                },
+            }),
+        ]);
+
+        assert_eq!(stats.events[0].at, Some(datetime!(2026-08-13 10:00 UTC)));
+        assert!(!stats.incomplete_usage);
     }
 
     #[test]
