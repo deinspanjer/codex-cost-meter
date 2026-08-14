@@ -34,6 +34,6 @@ Preserve the existing Python Codex task-cost tools for reference while developin
 - Do not add a manual owner gate merely because an agent workflow normally requests design or plan approval when the work remains within that standing authorization.
 - Stop for owner review only under ADR 0004's program-stop conditions or when external authority is required. Keep dependent work stopped after an unresolved shared-foundation rejection; isolated branch investigation may continue only when it cannot compound the finding.
 - Stop all autonomous work for owner review if cumulative output usage for the program's root task and descendants exceeds 1,000,000,000 tokens. This threshold includes governance overhead and cannot be bypassed with isolated branch work.
-- Self-review, task review, final review, validation, documentation uplift, accounting, release-decider review, and removal of mechanical specifications and plans remain mandatory.
+- Self-review, task review, final review, validation, documentation uplift, accounting, and removal of mechanical specifications and plans remain mandatory.
 
 Future temporary Superpowers specifications, plans, SDD evidence, and accounting scratch live only under ignored `.superpowers/` paths and never under `docs/superpowers/`.
