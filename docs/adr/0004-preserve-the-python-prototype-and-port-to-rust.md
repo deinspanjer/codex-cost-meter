@@ -105,6 +105,31 @@ At current list prices, the forecast output alone would be about $33–$102 if e
 
 The wide range reflects platform scheduling, CI, internal Codex storage compatibility, and signing uncertainty rather than speculative feature scope. It assumes no major Codex storage rewrite, that hosted CI can exercise non-macOS builds, and that required signing credentials become available without counting external wait time. Milestone actuals and the post-plan forecast will refine the remaining range without rewriting this baseline.
 
+## Planning actual and post-plan execution baseline
+
+The cumulative snapshot taken immediately before v0.1 SDD execution was:
+
+| Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| ---: | ---: | ---: | ---: | ---: |
+| 78 | 2h 06m 59s | 40,676,833 | 229,747 | 40,906,580 |
+
+Compared with the post-design baseline, implementation planning and its adjacent governance updates added 3 recorded turns, 23m 54s of summed agent time, 8,092,962 input tokens, and 56,091 output tokens. Those activities occurred inside mixed root-turn boundaries that cannot be divided reliably after the fact. To avoid understating delivery cost, the full delta is conservatively charged to planning for the post-design comparison; no additional exclusion is claimed for the governance portion of those mixed turns.
+
+This cumulative snapshot is also the post-plan baseline for v0.1 implementation actuals. At the threshold check, total program output was 229,747 tokens, below the 1,000,000,000-token program stop gate.
+
+## Post-plan v0.1 forecast
+
+The detailed v0.1 plan contains nine implementation tasks with one implementation turn and one review turn as the normal minimum, plus integration, fix-loop, and whole-branch review capacity. Direct build and test commands do not consume separate model turns. Most bounded implementation and review work uses Terra; Sol remains reserved for architectural ambiguity, unresolved failures, and final judgment.
+
+| Remaining v0.1 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Core reporting and CLI, Tasks 1–6 | 18–36 | 3.5–9 hours | 55k–170k |
+| Versioning and release pipeline, Tasks 7–8 | 6–16 | 1.5–4 hours | 20k–70k |
+| Closeout, final review, and bounded corrective work | 6–14 | 1–3 hours | 15k–60k |
+| **Remaining v0.1 total** | **30–66** | **6–16 hours** | **90k–300k** |
+
+Release-persona construction and release-decider execution remain excluded governance overhead. Corrective implementation prompted by any reviewer or decider remains included. Later milestone ranges retain the post-design forecast until their own just-in-time plans provide a narrower baseline.
+
 ## Evidence
 
 The decision uses the completed prototype work on rollout statistics, persisted title updates, recovery behavior, fleet portability, and the Rust multi-architecture assessment. Private Codex task identifiers are intentionally omitted from the public repository.
