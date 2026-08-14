@@ -640,9 +640,14 @@ mod tests {
         assert_eq!(
             fs::read_to_string(paths.service()).unwrap(),
             format!(
-                "[Unit]\nDescription=Codex Cost Meter scheduled update\n\n[Service]\nType=oneshot\nExecStart=\"{}\" schedule run --codex-home \"{}\" --idle-minutes \"15\" --limit \"500\" --max-runtime \"4m\" --max-width \"65\" --title-metrics \"tokens,cost\" --reprice-before \"1970-01-01T00:00:00Z\" --apply\nStandardOutput=null\nStandardError=null\n",
-                fs::canonicalize(&options.executable).unwrap().display(),
-                options.codex_home.display(),
+                "[Unit]\nDescription=Codex Cost Meter scheduled update\n\n[Service]\nType=oneshot\nExecStart={} schedule run --codex-home {} --idle-minutes \"15\" --limit \"500\" --max-runtime \"4m\" --max-width \"65\" --title-metrics \"tokens,cost\" --reprice-before \"1970-01-01T00:00:00Z\" --apply\nStandardOutput=null\nStandardError=null\n",
+                super::systemd_quote(
+                    fs::canonicalize(&options.executable)
+                        .unwrap()
+                        .to_str()
+                        .unwrap(),
+                ),
+                super::systemd_quote(options.codex_home.to_str().unwrap()),
             )
         );
         assert_eq!(
