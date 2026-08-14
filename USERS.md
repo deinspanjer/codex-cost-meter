@@ -4,16 +4,16 @@
 
 To produce your first report:
 
-1. Open the [latest stable release](https://github.com/deinspanjer/codex-cost-meter/releases/latest). Download the macOS Universal 2 `.tar.gz` archive for either Apple Silicon or Intel, or the Windows x64 `.zip` archive, plus that archive's matching `.sha256` file.
-2. Verify the download before extracting it. On macOS, run `shasum -a 256 -c codex-cost-meter-v<VERSION>-macos-universal2.tar.gz.sha256`. In PowerShell on Windows, run `& { $archive = 'codex-cost-meter-v<VERSION>-windows-x64.zip'; $expected = (Get-Content "$archive.sha256" -Raw).Trim().Split()[0]; if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw "checksum mismatch" } }`.
-3. Extract the verified archive: `tar -xzf codex-cost-meter-v<VERSION>-macos-universal2.tar.gz` on macOS, or `Expand-Archive codex-cost-meter-v<VERSION>-windows-x64.zip -DestinationPath .\codex-cost-meter` in PowerShell.
-4. [Copy the session ID from the Codex app](#find-your-session-id), then run `./codex-cost-meter report <THREAD_ID>` on macOS or `& .\codex-cost-meter\codex-cost-meter.exe report <THREAD_ID>` in PowerShell.
+1. Open the [latest stable release](https://github.com/deinspanjer/codex-cost-meter/releases/latest). Download the macOS Universal 2 `.tar.gz` archive, Windows x64 `.zip` archive, Linux x86_64 musl `.tar.gz` archive, or Linux aarch64 musl `.tar.gz` archive, plus that archive's matching `.sha256` file.
+2. Verify the download before extracting it. On macOS, run `shasum -a 256 -c codex-cost-meter-v<VERSION>-macos-universal2.tar.gz.sha256`. On Linux, run `sha256sum -c codex-cost-meter-v<VERSION>-linux-x86_64-musl.tar.gz.sha256` or `sha256sum -c codex-cost-meter-v<VERSION>-linux-aarch64-musl.tar.gz.sha256`. In PowerShell on Windows, run `& { $archive = 'codex-cost-meter-v<VERSION>-windows-x64.zip'; $expected = (Get-Content "$archive.sha256" -Raw).Trim().Split()[0]; if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw "checksum mismatch" } }`.
+3. Extract the verified archive: `tar -xzf codex-cost-meter-v<VERSION>-macos-universal2.tar.gz` on macOS, `tar -xzf codex-cost-meter-v<VERSION>-linux-x86_64-musl.tar.gz` or `tar -xzf codex-cost-meter-v<VERSION>-linux-aarch64-musl.tar.gz` on Linux, or `Expand-Archive codex-cost-meter-v<VERSION>-windows-x64.zip -DestinationPath .\codex-cost-meter` in PowerShell.
+4. [Copy the session ID from the Codex app](#find-your-session-id), then run `./codex-cost-meter report <THREAD_ID>` on macOS or Linux, or `& .\codex-cost-meter\codex-cost-meter.exe report <THREAD_ID>` in PowerShell.
 
-Place the binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or `$env:USERPROFILE\.codex\codex-cost-meter.exe` in PowerShell on Windows. The Windows location is a suggestion, not a requirement.
+Place the binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or Linux, or `$env:USERPROFILE\.codex\codex-cost-meter.exe` in PowerShell on Windows. The Windows location is a suggestion, not a requirement.
 
 The Windows ZIP contains `codex-cost-meter.exe`, `README.md`, and `LICENSE`.
 
-macOS examples:
+macOS and Linux examples:
 
 ```text
 ~/.codex/codex-cost-meter report <THREAD_ID>
@@ -116,7 +116,7 @@ For dry runs, the tool opens Codex's state database read-only. With `--apply`, i
 
 ## Schedule idle title updates
 
-On macOS, `schedule install` creates one current-user LaunchAgent. On Windows, it registers one current-user Task Scheduler task named `Codex Cost Meter`. Each starts once when registered or loaded and then runs every five minutes. It applies updates only to eligible idle root tasks and uses these defaults: `--idle-minutes 15`, `--limit 500`, `--max-runtime 4m`, `--max-width 65`, and `--title-metrics cost,total-tokens`.
+Linux scheduling and uninstall are not yet available; use explicit `update` commands instead. On macOS, `schedule install` creates one current-user LaunchAgent. On Windows, it registers one current-user Task Scheduler task named `Codex Cost Meter`. Each starts once when registered or loaded and then runs every five minutes. It applies updates only to eligible idle root tasks and uses these defaults: `--idle-minutes 15`, `--limit 500`, `--max-runtime 4m`, `--max-width 65`, and `--title-metrics cost,total-tokens`.
 
 ```text
 <PATH_TO_BINARY> schedule install
