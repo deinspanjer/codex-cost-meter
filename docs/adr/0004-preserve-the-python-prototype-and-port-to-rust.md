@@ -290,6 +290,31 @@ The rebuilt v0.2.0 candidate binary produced this additive, deliberately unfilte
 
 The application again marked whole-tree input incomplete because the rollout scan skipped oversized JSONL records, so the displayed known cost is a lower bound. No model was unpriced. The absolute whole-tree output total of 1,229,735 tokens includes excluded governance work and remains far below the 1,000,000,000-token program-stop gate.
 
+## v0.3 post-design baseline and forecast
+
+The v0.3 design boundary was captured after the v0.2 protected merge, the owner's requested execution-timeline report, and the just-in-time macOS scheduling design, but before v0.3 implementation planning:
+
+| Snapshot | Agent turns | Summed agent time | Input tokens | Output tokens | Total tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.2 approved pre-release baseline | 308 | 9h 27m 34.397s | 310,532,497 | 1,228,371 | 311,760,868 |
+| v0.3 post-design whole tree | 321 | 11h 09m 43.512s | 329,545,225 | 1,276,125 | 330,821,350 |
+| Excluded release/report/design delta | 13 | 1h 42m 09.115s | 19,012,728 | 47,754 | 19,060,482 |
+
+The mixed delta is excluded from v0.3 feature delivery rather than guessing apart v0.2 publication mechanics, the owner-requested report, and v0.3 design work inside shared root-turn boundaries. The cumulative output total remains below the 1,000,000,000-token program stop gate.
+
+The refined v0.3 design adds a standard-library LaunchAgent lifecycle, one bounded atomic status record, failure classification and circuit-breaker transitions, schedule status/resume/remove commands, self-uninstall, focused CLI integration, durable documentation, and the existing release gates. It adds no daemon, runtime dependency, empty future-platform module, or real-user scheduler mutation in automated tests.
+
+| Remaining v0.3 work | Agent turns | Summed agent time | Output tokens |
+| --- | ---: | ---: | ---: |
+| Detailed implementation planning | 4–8 | 0.5–1.5 hours | 15k–45k |
+| Status model, failure classification, and circuit breaker | 8–16 | 1.5–4 hours | 30k–90k |
+| macOS LaunchAgent lifecycle and uninstall | 8–18 | 2–5 hours | 35k–100k |
+| CLI integration and compatibility hardening | 4–10 | 1–3 hours | 20k–60k |
+| Durable docs, validation, review, correction, and release | 8–18 | 2–5 hours | 35k–100k |
+| **Remaining v0.3 total** | **32–70** | **7–18.5 hours** | **135k–395k** |
+
+The forecast assumes `/bin/launchctl` and `/usr/bin/id` retain their supported macOS behavior, current-user LaunchAgents remain available on macOS 14 and later, the executable can unlink itself on macOS, and the existing updater errors can be classified without a general error framework. Most implementation and task-review packets should use Terra; Sol remains reserved for the final whole-branch and owner-approval judgments or unresolved safety questions.
+
 
 ## Evidence
 
