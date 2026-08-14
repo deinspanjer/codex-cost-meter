@@ -4,6 +4,7 @@ mod pricing;
 mod report;
 mod rollout;
 mod session_index;
+mod title;
 
 use std::{
     error::Error,
