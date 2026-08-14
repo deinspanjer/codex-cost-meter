@@ -22,7 +22,7 @@ Cost uses the embedded historical catalog and is an API-list-price approximation
 
 ## Privacy and troubleshooting
 
-Reports read local Codex JSONL files. JSON output can include a thread name, thread ID, and local project path, so review it before sharing. Human output and runtime errors sanitize control characters and whitespace to prevent terminal or line-injection output; JSON stays structured for programmatic use.
+Reports read local Codex JSONL files. Human and JSON reports, warnings, and runtime errors can include thread names, thread IDs, and local project paths, so review all output before sharing. Human output and runtime errors sanitize control characters and whitespace to prevent terminal or line injection; sanitization does not remove private values. JSON stays structured for programmatic use.
 
 - **`rollout not found`** — confirm the exact ID and the selected Codex home; active and archived sessions are scanned.
 - **Partial cost or warnings** — retain the result as incomplete. Unknown prices, ambiguous history, malformed or oversized JSONL, and unreadable nonselected inputs are intentionally not guessed.
