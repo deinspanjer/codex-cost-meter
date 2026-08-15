@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.7.1]
+
+- Document current unsigned-release guidance and the Linux systemd scheduler decision.
+
 ## [0.7.0]
 
 - Add current-user Linux systemd scheduling for idle title updates.
