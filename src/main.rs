@@ -1,6 +1,7 @@
 mod cli;
 mod output;
 mod pricing;
+mod project;
 mod report;
 mod rollout;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -34,6 +35,8 @@ enum AppError {
     Cli(#[from] cli::CliError),
     #[error(transparent)]
     Report(#[from] ReportError),
+    #[error(transparent)]
+    Project(#[from] project::ProjectError),
     #[error(transparent)]
     Update(#[from] update::UpdateError),
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -101,11 +104,28 @@ fn run(cli: Cli) -> Result<(), AppError> {
 fn run_with_writer(cli: Cli, writer: &mut impl Write) -> Result<(), AppError> {
     match cli.command {
         Command::Report(args) => {
-            let report = report::build(&args.thread_id, &args.codex_home()?)?;
-            let rendered = if args.json {
-                format!("{}\n", output::json(&report)?)
+            let home = args.codex_home()?;
+            let rendered = if let Some(project_ref) = args.project {
+                let report = project::build(&home, args.thread_id.as_deref(), &project_ref)?;
+                if args.json {
+                    format!("{}\n", output::json(&report)?)
+                } else {
+                    output::project_human(&report)
+                }
+            } else if let Some(thread_id) = args.thread_id {
+                let report = report::build(&thread_id, &home)?;
+                if args.json {
+                    format!("{}\n", output::json(&report)?)
+                } else {
+                    output::human(&report)
+                }
             } else {
-                output::human(&report)
+                let report = project::build(&home, None, "")?;
+                if args.json {
+                    format!("{}\n", output::json(&report)?)
+                } else {
+                    output::project_human(&report)
+                }
             };
             writer
                 .write_all(rendered.as_bytes())

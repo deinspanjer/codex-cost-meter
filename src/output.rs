@@ -1,6 +1,8 @@
 use std::fmt::Write;
 
-use crate::report::{ModelReport, Report, StatsReport};
+use serde::Serialize;
+
+use crate::report::{ModelReport, ProjectReport, Report, StatsReport};
 
 pub(crate) fn human(report: &Report) -> String {
     let rollout = &report.rollout;
@@ -83,7 +85,59 @@ pub(crate) fn human(report: &Report) -> String {
     rendered
 }
 
-pub(crate) fn json(report: &Report) -> Result<String, serde_json::Error> {
+pub(crate) fn project_human(report: &ProjectReport) -> String {
+    let selection = &report.selection;
+    let show_cache_write = report.tree.input_cache_write_tokens > 0
+        || report
+            .by_model
+            .values()
+            .any(|model| model.input_cache_write_tokens > 0);
+    let mut rendered = format!(
+        "Codex project report\nProject: {}\nResolver: {}\nThreads: {} direct, {} workspace fallback, {} projectless, {} projectless excluded, {} other-project excluded\n",
+        safe_text(&selection.target),
+        safe_text(selection.resolver),
+        human_number(selection.direct_assignments as u64),
+        human_number(selection.workspace_fallbacks as u64),
+        human_number(selection.projectless_threads as u64),
+        human_number(selection.projectless_exclusions as u64),
+        human_number(selection.other_project_exclusions as u64),
+    );
+    rendered.push_str("\nLifetime\n");
+    rendered.push_str(&stats_table(show_cache_write, [("Project", &report.tree)]));
+    rendered.push_str("\nModels\n");
+    rendered.push_str(&model_table_from_models(
+        &report.by_model,
+        &report.tree,
+        show_cache_write,
+    ));
+    let _ = writeln!(
+        rendered,
+        "\nPricing as of: {}",
+        safe_text(&report.pricing.as_of)
+    );
+    let _ = writeln!(
+        rendered,
+        "Pricing source: {}",
+        safe_text(&report.pricing.source)
+    );
+    if selection.incomplete_threads > 0 || selection.unpriced_threads > 0 {
+        let _ = writeln!(
+            rendered,
+            "Incomplete threads: {}   Unpriced threads: {}",
+            human_number(selection.incomplete_threads as u64),
+            human_number(selection.unpriced_threads as u64),
+        );
+    }
+    if !report.incomplete_input_warnings.is_empty() {
+        rendered.push_str("Input warnings:\n");
+        for warning in &report.incomplete_input_warnings {
+            let _ = writeln!(rendered, "  - {}", safe_text(warning));
+        }
+    }
+    rendered
+}
+
+pub(crate) fn json(report: &impl Serialize) -> Result<String, serde_json::Error> {
     serde_json::to_string(report)
 }
 
@@ -100,7 +154,15 @@ fn stats_table<'a>(
 }
 
 fn model_table(report: &Report, show_cache_write: bool) -> String {
-    let mut models = report.by_model.iter().collect::<Vec<_>>();
+    model_table_from_models(&report.by_model, &report.tree, show_cache_write)
+}
+
+fn model_table_from_models(
+    by_model: &std::collections::BTreeMap<String, ModelReport>,
+    total: &StatsReport,
+    show_cache_write: bool,
+) -> String {
+    let mut models = by_model.iter().collect::<Vec<_>>();
     models.sort_by(|(left_name, left), (right_name, right)| {
         right
             .known_model_cost_usd
@@ -113,7 +175,7 @@ fn model_table(report: &Report, show_cache_write: bool) -> String {
             .iter()
             .map(|(name, model)| model_row(name, model, show_cache_write)),
     );
-    table.push(stats_row("Total", &report.tree, show_cache_write));
+    table.push(stats_row("Total", total, show_cache_write));
     text_table(&table)
 }
 
@@ -248,8 +310,11 @@ mod tests {
 
     use serde_json::{Value, json as json_value};
 
-    use super::{human, json};
-    use crate::report::{ModelReport, PricingReport, Report, RolloutReport, StatsReport};
+    use super::{human, json, project_human};
+    use crate::report::{
+        ModelReport, PricingReport, ProjectReport, ProjectSelection, Report, RolloutReport,
+        StatsReport,
+    };
 
     fn stats(cost: Option<f64>, known_cost: f64) -> StatsReport {
         StatsReport {
@@ -384,6 +449,34 @@ mod tests {
         }
 
         assert!(!human(&report).contains("Cache write"));
+    }
+
+    #[test]
+    fn project_human_keeps_nonzero_cache_write_usage_visible() {
+        let report = report();
+        let project = ProjectReport {
+            selection: ProjectSelection {
+                target: "Project".into(),
+                resolver: "project_name",
+                missing_source_roots: 0,
+                direct_assignments: 1,
+                workspace_fallbacks: 0,
+                projectless_threads: 0,
+                projectless_exclusions: 0,
+                other_project_exclusions: 0,
+                incomplete_threads: 1,
+                unpriced_threads: 0,
+            },
+            tree: report.tree,
+            by_model: report.by_model,
+            pricing: report.pricing,
+            incomplete_input_warnings: vec!["some input was incomplete".into()],
+        };
+
+        let rendered = project_human(&project);
+
+        assert!(rendered.contains("Cache write"));
+        assert!(rendered.contains("Input warnings:\n  - some input was incomplete"));
     }
 
     #[test]

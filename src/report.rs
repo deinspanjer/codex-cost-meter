@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
 };
 
@@ -37,6 +37,29 @@ pub(crate) struct Report {
     pub by_rollout_type: BTreeMap<String, StatsReport>,
     pub pricing: PricingReport,
     pub incomplete_input_warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ProjectReport {
+    pub selection: ProjectSelection,
+    pub tree: StatsReport,
+    pub by_model: BTreeMap<String, ModelReport>,
+    pub pricing: PricingReport,
+    pub incomplete_input_warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ProjectSelection {
+    pub target: String,
+    pub resolver: &'static str,
+    pub missing_source_roots: usize,
+    pub direct_assignments: usize,
+    pub workspace_fallbacks: usize,
+    pub projectless_threads: usize,
+    pub projectless_exclusions: usize,
+    pub other_project_exclusions: usize,
+    pub incomplete_threads: usize,
+    pub unpriced_threads: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,8 +148,142 @@ impl ReportContext {
         self.index.is_root(thread_id)
     }
 
+    pub(crate) fn roots(&self) -> impl Iterator<Item = &crate::rollout::discovery::RolloutRecord> {
+        self.index.roots()
+    }
+
+    pub(crate) fn build_project(
+        &self,
+        mut selection: ProjectSelection,
+        thread_ids: &[String],
+    ) -> Result<ProjectReport, ReportError> {
+        let mut tree = empty_stats();
+        let mut by_model = BTreeMap::new();
+        let mut warnings = BTreeSet::new();
+        for thread_id in thread_ids {
+            let report = match self.build(thread_id) {
+                Ok(report) => report,
+                Err(
+                    ReportError::RolloutNotFound { .. }
+                    | ReportError::SelectedRolloutUnreadable { .. },
+                ) => {
+                    selection.incomplete_threads += 1;
+                    tree.incomplete_input = true;
+                    warnings.insert("selected root rollout could not be read".into());
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            selection.incomplete_threads += usize::from(report.tree.incomplete_input);
+            selection.unpriced_threads += usize::from(!report.tree.unpriced_models.is_empty());
+            merge_stats(&mut tree, &report.tree);
+            for (name, model) in report.by_model {
+                merge_model(by_model.entry(name).or_insert_with(empty_model), &model);
+            }
+            warnings.extend(report.incomplete_input_warnings);
+        }
+        Ok(ProjectReport {
+            selection,
+            tree,
+            by_model,
+            pricing: pricing_report(&self.catalog),
+            incomplete_input_warnings: warnings.into_iter().collect(),
+        })
+    }
+
     pub(crate) fn session_index(&self) -> &Snapshot {
         &self.session_index
+    }
+}
+
+fn empty_stats() -> StatsReport {
+    StatsReport {
+        rollout_count: 0,
+        majority_turn_model: None,
+        majority_reasoning_level: None,
+        input_tokens: 0,
+        input_cache_write_tokens: 0,
+        input_cache_read_tokens: 0,
+        reasoning_tokens: 0,
+        output_tokens: 0,
+        turns: 0,
+        completed_or_aborted_turns: 0,
+        incomplete_turns: 0,
+        total_turn_duration_seconds: 0.0,
+        estimated_cost_usd: Some(0.0),
+        known_model_cost_usd: 0.0,
+        unpriced_models: BTreeMap::new(),
+        unattributed_usage_tokens: None,
+        incomplete_input: false,
+    }
+}
+
+fn empty_model() -> ModelReport {
+    ModelReport {
+        turns: 0,
+        input_tokens: 0,
+        input_cache_write_tokens: 0,
+        input_cache_read_tokens: 0,
+        reasoning_tokens: 0,
+        output_tokens: 0,
+        estimated_cost_usd: Some(0.0),
+        known_model_cost_usd: 0.0,
+    }
+}
+
+fn merge_stats(total: &mut StatsReport, next: &StatsReport) {
+    total.rollout_count += next.rollout_count;
+    total.input_tokens += next.input_tokens;
+    total.input_cache_write_tokens += next.input_cache_write_tokens;
+    total.input_cache_read_tokens += next.input_cache_read_tokens;
+    total.reasoning_tokens += next.reasoning_tokens;
+    total.output_tokens += next.output_tokens;
+    total.turns += next.turns;
+    total.completed_or_aborted_turns += next.completed_or_aborted_turns;
+    total.incomplete_turns += next.incomplete_turns;
+    total.total_turn_duration_seconds += next.total_turn_duration_seconds;
+    total.estimated_cost_usd = total
+        .estimated_cost_usd
+        .zip(next.estimated_cost_usd)
+        .map(|(left, right)| left + right);
+    total.known_model_cost_usd += next.known_model_cost_usd;
+    for (model, tokens) in &next.unpriced_models {
+        *total.unpriced_models.entry(model.clone()).or_default() += tokens;
+    }
+    total.unattributed_usage_tokens = match (
+        total.unattributed_usage_tokens,
+        next.unattributed_usage_tokens,
+    ) {
+        (None, None) => None,
+        (left, right) => Some(left.unwrap_or_default() + right.unwrap_or_default()),
+    };
+    total.incomplete_input |= next.incomplete_input;
+}
+
+fn merge_model(total: &mut ModelReport, next: &ModelReport) {
+    total.turns += next.turns;
+    total.input_tokens += next.input_tokens;
+    total.input_cache_write_tokens += next.input_cache_write_tokens;
+    total.input_cache_read_tokens += next.input_cache_read_tokens;
+    total.reasoning_tokens += next.reasoning_tokens;
+    total.output_tokens += next.output_tokens;
+    total.estimated_cost_usd = total
+        .estimated_cost_usd
+        .zip(next.estimated_cost_usd)
+        .map(|(left, right)| left + right);
+    total.known_model_cost_usd += next.known_model_cost_usd;
+}
+
+fn pricing_report(catalog: &Catalog) -> PricingReport {
+    PricingReport {
+        basis: "standard API list pricing; per request/turn model; output includes reasoning",
+        as_of: catalog.as_of().into(),
+        source: catalog.source().into(),
+        model_proxies: catalog
+            .proxies()
+            .iter()
+            .map(|(model, target)| (model.clone(), target.clone()))
+            .collect(),
     }
 }
 
@@ -388,16 +545,7 @@ fn build_with_state(
             .into_iter()
             .map(|(kind, stats)| (kind, stats.report()))
             .collect(),
-        pricing: PricingReport {
-            basis: "standard API list pricing; per request/turn model; output includes reasoning",
-            as_of: catalog.as_of().into(),
-            source: catalog.source().into(),
-            model_proxies: catalog
-                .proxies()
-                .iter()
-                .map(|(model, target)| (model.clone(), target.clone()))
-                .collect(),
-        },
+        pricing: pricing_report(catalog),
         incomplete_input_warnings: {
             if session_index.read_error().is_some() {
                 warnings.push("session index could not be read".into());
