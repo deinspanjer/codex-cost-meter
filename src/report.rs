@@ -106,6 +106,7 @@ pub(crate) struct ModelReport {
     pub input_cache_read_tokens: u64,
     pub reasoning_tokens: u64,
     pub output_tokens: u64,
+    pub total_turn_duration_seconds: f64,
     pub estimated_cost_usd: Option<f64>,
     pub known_model_cost_usd: f64,
 }
@@ -286,6 +287,7 @@ fn empty_model() -> ModelReport {
         input_cache_read_tokens: 0,
         reasoning_tokens: 0,
         output_tokens: 0,
+        total_turn_duration_seconds: 0.0,
         estimated_cost_usd: Some(0.0),
         known_model_cost_usd: 0.0,
     }
@@ -327,6 +329,7 @@ fn merge_model(total: &mut ModelReport, next: &ModelReport) {
     total.input_cache_read_tokens += next.input_cache_read_tokens;
     total.reasoning_tokens += next.reasoning_tokens;
     total.output_tokens += next.output_tokens;
+    total.total_turn_duration_seconds += next.total_turn_duration_seconds;
     total.estimated_cost_usd = total
         .estimated_cost_usd
         .zip(next.estimated_cost_usd)
@@ -368,6 +371,7 @@ struct ModelAggregate {
     usage: Usage,
     reasoning_output: u64,
     turns: usize,
+    duration_seconds: f64,
     known_cost: f64,
     incomplete: bool,
 }
@@ -389,6 +393,12 @@ impl Aggregate {
         self.turns = self.turns.saturating_add(stats.turns);
         self.ended_turns = self.ended_turns.saturating_add(stats.ended_turns);
         self.duration_seconds += stats.duration.as_seconds_f64();
+        for (model, duration) in &stats.turn_durations {
+            self.models
+                .entry(model.clone())
+                .or_default()
+                .duration_seconds += duration.as_seconds_f64();
+        }
         self.unattributed_tokens = self
             .unattributed_tokens
             .saturating_add(stats.unattributed_tokens);
@@ -478,6 +488,7 @@ impl Aggregate {
                         input_cache_read_tokens: model.usage.cached_input,
                         reasoning_tokens: model.reasoning_output,
                         output_tokens: model.usage.output,
+                        total_turn_duration_seconds: round(model.duration_seconds, 3),
                         estimated_cost_usd: (!model.incomplete).then(|| round(model.known_cost, 8)),
                         known_model_cost_usd: round(model.known_cost, 8),
                     },
@@ -763,6 +774,40 @@ mod tests {
         assert_eq!(report.tree.rollout_count, 2);
         assert_eq!(report.by_rollout_type["security_review"].rollout_count, 1);
         assert_eq!(report.by_model["gpt-5.6-terra"].input_tokens, 100);
+    }
+
+    #[test]
+    fn attributes_completed_turn_duration_to_each_model() {
+        let home = TempDir::new().unwrap();
+        write_jsonl(
+            &home,
+            "sessions/root.jsonl",
+            &[
+                json!({
+                    "type": "session_meta",
+                    "timestamp": "2026-08-13T12:00:00Z",
+                    "payload": {"id": "root", "source": "cli", "cwd": "/tmp/project"},
+                }),
+                json!({"type": "turn_context", "payload": {"turn_id": "terra", "model": "gpt-5.6-terra", "effort": "high"}}),
+                json!({"type": "turn_context", "payload": {"turn_id": "sol", "model": "gpt-5.6-sol", "effort": "high"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:00:01Z", "payload": {"type": "turn_started", "turn_id": "terra"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:00:04Z", "payload": {"type": "turn_complete", "turn_id": "terra"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:00:05Z", "payload": {"type": "turn_started", "turn_id": "sol"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:00:07Z", "payload": {"type": "turn_aborted", "turn_id": "sol"}}),
+            ],
+        );
+
+        let report = build("root", home.path()).unwrap();
+
+        assert_eq!(report.tree.total_turn_duration_seconds, 5.0);
+        assert_eq!(
+            report.by_model["gpt-5.6-terra"].total_turn_duration_seconds,
+            3.0
+        );
+        assert_eq!(
+            report.by_model["gpt-5.6-sol"].total_turn_duration_seconds,
+            2.0
+        );
     }
 
     #[test]

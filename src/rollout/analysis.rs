@@ -35,6 +35,7 @@ pub(crate) struct RolloutStats {
     pub turns: usize,
     pub ended_turns: usize,
     pub duration: Duration,
+    pub turn_durations: HashMap<String, Duration>,
     pub turn_models: HashMap<(String, String), usize>,
     pub malformed_lines: usize,
     pub oversized_lines: usize,
@@ -206,7 +207,11 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
             {
                 stats.ended_turns += 1;
                 if let Some(ended_at) = ended_at {
-                    stats.duration += ended_at - started_at;
+                    let duration = ended_at - started_at;
+                    stats.duration += duration;
+                    if let Some((model, _)) = turn_contexts.get(turn_id) {
+                        *stats.turn_durations.entry(model.clone()).or_default() += duration;
+                    }
                 }
             }
             if turn_id.as_deref() == active_turn.as_deref() {

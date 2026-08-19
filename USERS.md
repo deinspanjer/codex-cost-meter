@@ -59,7 +59,7 @@ Codex follows your normal approval settings for the local command. Review the re
 
 ## Read the report
 
-Human output shows root and whole-tree totals, per-model usage, price metadata, and summed agent-turn time. Token columns use compact `K`/`M`/`B` notation; JSON retains exact integers. A trailing `+` on a human cost means the displayed amount is only the known partial cost. In JSON, the corresponding complete estimate is `null`; inspect `incomplete_input`, `unpriced_models`, `unattributed_usage_tokens`, and `incomplete_input_warnings` before treating an estimate as complete.
+Human output shows root and whole-tree totals, per-model usage, price metadata, and summed agent-turn time. Token columns use compact `K`/`M`/`B` notation; JSON retains exact integers. Model and aggregate durations can overlap. A trailing `+` on a human cost means the displayed amount is only the known partial cost. In JSON, the corresponding complete estimate is `null`; inspect `incomplete_input`, `unpriced_models`, `unattributed_usage_tokens`, and `incomplete_input_warnings` before treating an estimate as complete.
 
 Cost uses the embedded historical catalog and is an API-list-price approximation, not a billing record. Reasoning is included in output usage; cache reads are included in input usage.
 
@@ -83,9 +83,9 @@ Whole tree  4 (4 complete, 0 incomplete)  2M         1.7M        145K     100K  
 Models
 Model              Turns                         Input      Cache read  Output   Reasoning  Duration  Cost
 -----------------  ----------------------------  ---------  ----------  -------  ---------  --------  -----
-gpt-5.6-sol        1                             1M         850K        40K      28K        -         $2.38
-gpt-5.6-terra      2                             725K       600K        93K      64K        -         $1.49
-codex-auto-review  1                             300K       275K        12K      8K         -         $0.02
+gpt-5.6-sol        1                             1M         850K        40K      28K        4m 0.0s   $2.38
+gpt-5.6-terra      2                             725K       600K        93K      64K        6m 4.0s   $1.49
+codex-auto-review  1                             300K       275K        12K      8K         2m 0.0s   $0.02
 Total              4 (4 complete, 0 incomplete)  2M         1.7M        145K     100K       12m 4.0s  $3.89
 
 Agent-turn time: 9m 3.0s (agent time can overlap).

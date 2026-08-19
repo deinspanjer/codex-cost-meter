@@ -144,6 +144,8 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
     }
     append_cost_note(&mut rendered, &report.tree);
     rendered
+        .push_str("Notes: model and aggregate durations are agent-turn time and can overlap.\n");
+    rendered
 }
 
 pub(crate) fn json(report: &impl Serialize) -> Result<String, serde_json::Error> {
@@ -237,7 +239,7 @@ fn model_row(model: &str, stats: &ModelReport, show_cache_write: bool) -> Vec<St
     row.extend([
         compact_tokens(stats.output_tokens),
         compact_tokens(stats.reasoning_tokens),
-        "-".into(),
+        human_duration(stats.total_turn_duration_seconds),
         human_cost(stats.estimated_cost_usd, stats.known_model_cost_usd),
     ]);
     row
@@ -366,6 +368,7 @@ mod tests {
                 input_cache_read_tokens: 0,
                 reasoning_tokens: 0,
                 output_tokens: 10,
+                total_turn_duration_seconds: 10.0,
                 estimated_cost_usd: Some(0.02),
                 known_model_cost_usd: 0.02,
             },
@@ -379,6 +382,7 @@ mod tests {
                 input_cache_read_tokens: 2_000,
                 reasoning_tokens: 1_000,
                 output_tokens: 2_990,
+                total_turn_duration_seconds: 55.25,
                 estimated_cost_usd: None,
                 known_model_cost_usd: 0.15,
             },
@@ -444,6 +448,7 @@ mod tests {
                 input_cache_read_tokens: 0,
                 reasoning_tokens: 0,
                 output_tokens: 0,
+                total_turn_duration_seconds: 0.0,
                 estimated_cost_usd: Some(0.0),
                 known_model_cost_usd: 0.0,
             },
