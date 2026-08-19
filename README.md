@@ -29,8 +29,8 @@ Type: root   Primary: gpt-5.6-terra / high   Descendants: 3
 Scope
 Scope       Turns                         Input      Cache read  Output   Reasoning  Duration  Cost
 ----------  ----------------------------  ---------  ----------  -------  ---------  --------  -----
-Root        1 (1 complete, 0 incomplete)  125,000    100,000     18,000   12,000     3m 1.0s   $0.29
-Whole tree  4 (4 complete, 0 incomplete)  2,025,000  1,725,000   145,000  100,000    12m 4.0s  $3.89
+Root        1 (1 complete, 0 incomplete)  125K       100K        18K      12K        3m 1.0s   $0.29
+Whole tree  4 (4 complete, 0 incomplete)  2M         1.7M        145K     100K       12m 4.0s  $3.89
 ```
 
 You can also [ask Codex to run the downloaded tool](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#ask-codex-to-run-it). The [user guide](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#find-your-session-id) explains how `/status` shows the session ID and `/statusline` keeps it visible.

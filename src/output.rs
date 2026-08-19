@@ -2,7 +2,10 @@ use std::fmt::Write;
 
 use serde::Serialize;
 
-use crate::report::{ModelReport, ProjectReport, Report, StatsReport};
+use crate::{
+    report::{ModelReport, ProjectReport, Report, StatsReport},
+    title::compact_tokens,
+};
 
 pub(crate) fn human(report: &Report) -> String {
     let rollout = &report.rollout;
@@ -79,6 +82,7 @@ pub(crate) fn human(report: &Report) -> String {
             let _ = writeln!(rendered, "  - {}", safe_text(warning));
         }
     }
+    append_cost_note(&mut rendered, &report.tree);
     rendered.push_str(
         "Notes: cache read is included in input; reasoning is included in output; agent time can overlap.\n",
     );
@@ -120,12 +124,16 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
         "Pricing source: {}",
         safe_text(&report.pricing.source)
     );
-    if selection.incomplete_threads > 0 || selection.unpriced_threads > 0 {
+    if selection.incomplete_root_reports > 0 || selection.unpriced_root_reports > 0 {
         let _ = writeln!(
             rendered,
-            "Incomplete threads: {}   Unpriced threads: {}",
-            human_number(selection.incomplete_threads as u64),
-            human_number(selection.unpriced_threads as u64),
+            "Incomplete root reports: {}   Unpriced root reports: {}",
+            human_number(selection.incomplete_root_reports as u64),
+            human_number(selection.unpriced_root_reports as u64),
+        );
+        let _ = writeln!(
+            rendered,
+            "An incomplete root report has incomplete input in it or a descendant; turn counts are shown in Lifetime."
         );
     }
     if !report.incomplete_input_warnings.is_empty() {
@@ -134,6 +142,7 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
             let _ = writeln!(rendered, "  - {}", safe_text(warning));
         }
     }
+    append_cost_note(&mut rendered, &report.tree);
     rendered
 }
 
@@ -200,15 +209,15 @@ fn stats_row(scope: &str, stats: &StatsReport, show_cache_write: bool) -> Vec<St
             human_number(stats.completed_or_aborted_turns as u64),
             human_number(stats.incomplete_turns as u64),
         ),
-        human_number(stats.input_tokens),
-        human_number(stats.input_cache_read_tokens),
+        compact_tokens(stats.input_tokens),
+        compact_tokens(stats.input_cache_read_tokens),
     ];
     if show_cache_write {
-        row.push(human_number(stats.input_cache_write_tokens));
+        row.push(compact_tokens(stats.input_cache_write_tokens));
     }
     row.extend([
-        human_number(stats.output_tokens),
-        human_number(stats.reasoning_tokens),
+        compact_tokens(stats.output_tokens),
+        compact_tokens(stats.reasoning_tokens),
         human_duration(stats.total_turn_duration_seconds),
         human_cost(stats.estimated_cost_usd, stats.known_model_cost_usd),
     ]);
@@ -219,15 +228,15 @@ fn model_row(model: &str, stats: &ModelReport, show_cache_write: bool) -> Vec<St
     let mut row = vec![
         safe_text(model),
         human_number(stats.turns as u64),
-        human_number(stats.input_tokens),
-        human_number(stats.input_cache_read_tokens),
+        compact_tokens(stats.input_tokens),
+        compact_tokens(stats.input_cache_read_tokens),
     ];
     if show_cache_write {
-        row.push(human_number(stats.input_cache_write_tokens));
+        row.push(compact_tokens(stats.input_cache_write_tokens));
     }
     row.extend([
-        human_number(stats.output_tokens),
-        human_number(stats.reasoning_tokens),
+        compact_tokens(stats.output_tokens),
+        compact_tokens(stats.reasoning_tokens),
         "-".into(),
         human_cost(stats.estimated_cost_usd, stats.known_model_cost_usd),
     ]);
@@ -262,6 +271,14 @@ fn human_cost(estimated: Option<f64>, known: f64) -> String {
     match estimated {
         Some(cost) => format!("${cost:.2}"),
         None => format!("${known:.2}+"),
+    }
+}
+
+fn append_cost_note(rendered: &mut String, stats: &StatsReport) {
+    if stats.estimated_cost_usd.is_none() {
+        rendered.push_str(
+            "Cost note: + means known lower-bound cost; the complete estimate is unavailable.\n",
+        );
     }
 }
 
@@ -454,7 +471,7 @@ mod tests {
     #[test]
     fn project_human_keeps_nonzero_cache_write_usage_visible() {
         let report = report();
-        let project = ProjectReport {
+        let mut project = ProjectReport {
             selection: ProjectSelection {
                 target: "Project".into(),
                 resolver: "project_name",
@@ -464,19 +481,28 @@ mod tests {
                 projectless_threads: 0,
                 projectless_exclusions: 0,
                 other_project_exclusions: 0,
-                incomplete_threads: 1,
-                unpriced_threads: 0,
+                incomplete_root_reports: 1,
+                unpriced_root_reports: 0,
             },
             tree: report.tree,
             by_model: report.by_model,
             pricing: report.pricing,
             incomplete_input_warnings: vec!["some input was incomplete".into()],
         };
+        project.tree.input_tokens = 15_133_186_105;
+        project.tree.turns = 8_458;
+        project.tree.completed_or_aborted_turns = 8_189;
+        project.tree.incomplete_turns = 269;
+        project.selection.incomplete_root_reports = 12;
 
         let rendered = project_human(&project);
 
         assert!(rendered.contains("Cache write"));
         assert!(rendered.contains("Input warnings:\n  - some input was incomplete"));
+        assert!(rendered.contains("15.1B"));
+        assert!(rendered.contains("269 incomplete"));
+        assert!(rendered.contains("Incomplete root reports: 12"));
+        assert!(rendered.contains("+ means known lower-bound cost"));
     }
 
     #[test]

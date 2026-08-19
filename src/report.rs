@@ -59,8 +59,8 @@ pub(crate) struct ProjectSelection {
     pub projectless_threads: usize,
     pub projectless_exclusions: usize,
     pub other_project_exclusions: usize,
-    pub incomplete_threads: usize,
-    pub unpriced_threads: usize,
+    pub incomplete_root_reports: usize,
+    pub unpriced_root_reports: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -212,15 +212,15 @@ impl ReportContext {
                     ReportError::RolloutNotFound { .. }
                     | ReportError::SelectedRolloutUnreadable { .. },
                 ) => {
-                    selection.incomplete_threads += 1;
+                    selection.incomplete_root_reports += 1;
                     tree.incomplete_input = true;
                     warnings.insert("selected root rollout could not be read".into());
                     continue;
                 }
                 Err(error) => return Err(error),
             };
-            selection.incomplete_threads += usize::from(report.tree.incomplete_input);
-            selection.unpriced_threads += usize::from(!report.tree.unpriced_models.is_empty());
+            selection.incomplete_root_reports += usize::from(report.tree.incomplete_input);
+            selection.unpriced_root_reports += usize::from(!report.tree.unpriced_models.is_empty());
             merge_stats(&mut tree, &report.tree);
             for (name, model) in report.by_model {
                 merge_model(by_model.entry(name).or_insert_with(empty_model), &model);

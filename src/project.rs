@@ -387,8 +387,8 @@ fn build_scope(
         projectless_threads: 0,
         projectless_exclusions: 0,
         other_project_exclusions: 0,
-        incomplete_threads: 0,
-        unpriced_threads: 0,
+        incomplete_root_reports: 0,
+        unpriced_root_reports: 0,
     };
     for root in context.roots() {
         let Some(cwd) = root.cwd.as_deref().map(Path::new) else {
@@ -454,8 +454,8 @@ fn build_cwd_scope(
         projectless_threads: 0,
         projectless_exclusions: 0,
         other_project_exclusions: 0,
-        incomplete_threads: 0,
-        unpriced_threads: 0,
+        incomplete_root_reports: 0,
+        unpriced_root_reports: 0,
     };
     for root in context
         .roots()
