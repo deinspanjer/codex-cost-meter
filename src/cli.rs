@@ -135,6 +135,11 @@ pub(crate) struct ReportArgs {
     pub(crate) project: Option<String>,
     #[arg(long, help = "Write the report as JSON.")]
     pub(crate) json: bool,
+    #[arg(
+        long,
+        help = "Show report progress even when stderr is not a terminal."
+    )]
+    pub(crate) progress: bool,
     #[arg(long, help = "Use this Codex storage directory.")]
     codex_home: Option<PathBuf>,
 }

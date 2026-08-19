@@ -7,7 +7,10 @@ use std::{
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::report::{ProjectReport, ProjectSelection, ReportContext, ReportError};
+use crate::{
+    progress::Progress,
+    report::{ProjectReport, ProjectSelection, ReportContext, ReportError},
+};
 
 #[derive(Debug, Error)]
 pub(crate) enum ProjectError {
@@ -69,12 +72,34 @@ struct ProjectAssignment {
     project_id: String,
 }
 
-pub(crate) fn build(
+struct ScopeRequest<'a> {
+    selected_project: Option<&'a str>,
+    fallback_paths: &'a [PathBuf],
+    target: String,
+    resolver: &'static str,
+    required_thread: Option<&'a str>,
+}
+
+pub(crate) fn build_with_progress(
     codex_home: &Path,
     thread_id: Option<&str>,
     project_ref: &str,
+    progress: &mut Progress,
 ) -> Result<ProjectReport, ProjectError> {
-    let context = ReportContext::new(codex_home).map_err(ReportError::from)?;
+    build_inner(codex_home, thread_id, project_ref, Some(progress))
+}
+
+fn build_inner(
+    codex_home: &Path,
+    thread_id: Option<&str>,
+    project_ref: &str,
+    mut progress: Option<&mut Progress>,
+) -> Result<ProjectReport, ProjectError> {
+    let context = match progress.as_deref_mut() {
+        Some(progress) => ReportContext::new_with_progress(codex_home, progress),
+        None => ReportContext::new(codex_home),
+    }
+    .map_err(ReportError::from)?;
     let (state, metadata_available) = load_state(codex_home);
     if !project_ref.is_empty() && metadata_available {
         let named = state
@@ -92,11 +117,14 @@ pub(crate) fn build(
             return build_scope(
                 &context,
                 &state,
-                Some(project.id.as_str()),
-                &project.root_paths,
-                project.name.clone(),
-                "project_name",
-                thread_id,
+                ScopeRequest {
+                    selected_project: Some(project.id.as_str()),
+                    fallback_paths: &project.root_paths,
+                    target: project.name.clone(),
+                    resolver: "project_name",
+                    required_thread: thread_id,
+                },
+                progress,
             );
         }
     }
@@ -119,11 +147,14 @@ pub(crate) fn build(
             return build_scope(
                 &context,
                 &state,
-                Some(project.id.as_str()),
-                &project.root_paths,
-                project.name.clone(),
-                "thread_assignment",
-                None,
+                ScopeRequest {
+                    selected_project: Some(project.id.as_str()),
+                    fallback_paths: &project.root_paths,
+                    target: project.name.clone(),
+                    resolver: "thread_assignment",
+                    required_thread: None,
+                },
+                progress,
             );
         }
         return build_cwd_scope(
@@ -132,6 +163,7 @@ pub(crate) fn build(
             root.cwd
                 .as_deref()
                 .ok_or_else(|| ProjectError::ThreadCwdMissing(thread_id.into()))?,
+            progress,
         );
     }
     let current_directory = project_ref.is_empty() && thread_id.is_none();
@@ -143,9 +175,11 @@ pub(crate) fn build(
     } else {
         match PathBuf::from(project_ref).canonicalize() {
             Ok(path) => path,
-            Err(_) if metadata_available => return fuzzy_project(&context, &state, project_ref),
+            Err(_) if metadata_available => {
+                return fuzzy_project(&context, &state, project_ref, progress);
+            }
             Err(_) => {
-                return match fuzzy_historical_cwd(&context, &state, project_ref) {
+                return match fuzzy_historical_cwd(&context, &state, project_ref, progress) {
                     Err(ProjectError::ProjectRefNotFound(_)) => {
                         Err(ProjectError::MetadataUnavailable)
                     }
@@ -200,11 +234,14 @@ pub(crate) fn build(
     build_scope(
         &context,
         &state,
-        selected_project,
-        std::slice::from_ref(&path),
-        target,
-        resolver,
-        thread_id,
+        ScopeRequest {
+            selected_project,
+            fallback_paths: std::slice::from_ref(&path),
+            target,
+            resolver,
+            required_thread: thread_id,
+        },
+        progress,
     )
 }
 
@@ -212,6 +249,7 @@ fn fuzzy_project(
     context: &ReportContext,
     state: &DesktopState,
     project_ref: &str,
+    progress: Option<&mut Progress>,
 ) -> Result<ProjectReport, ProjectError> {
     let mut matches = state
         .projects
@@ -223,13 +261,16 @@ fn fuzzy_project(
         [project] => build_scope(
             context,
             state,
-            Some(project.id.as_str()),
-            &project.root_paths,
-            project.name.clone(),
-            "fuzzy_project_name",
-            None,
+            ScopeRequest {
+                selected_project: Some(project.id.as_str()),
+                fallback_paths: &project.root_paths,
+                target: project.name.clone(),
+                resolver: "fuzzy_project_name",
+                required_thread: None,
+            },
+            progress,
         ),
-        [] => fuzzy_historical_cwd(context, state, project_ref),
+        [] => fuzzy_historical_cwd(context, state, project_ref, progress),
         _ => Err(ProjectError::AmbiguousProjectRef {
             reference: project_ref.into(),
             matches: project_names(&matches),
@@ -241,6 +282,7 @@ fn fuzzy_historical_cwd(
     context: &ReportContext,
     state: &DesktopState,
     project_ref: &str,
+    progress: Option<&mut Progress>,
 ) -> Result<ProjectReport, ProjectError> {
     let mut matches = context
         .roots()
@@ -253,11 +295,14 @@ fn fuzzy_historical_cwd(
         [cwd] => build_scope(
             context,
             state,
-            None,
-            &[PathBuf::from(cwd)],
-            (*cwd).into(),
-            "fuzzy_historical_cwd",
-            None,
+            ScopeRequest {
+                selected_project: None,
+                fallback_paths: &[PathBuf::from(cwd)],
+                target: (*cwd).into(),
+                resolver: "fuzzy_historical_cwd",
+                required_thread: None,
+            },
+            progress,
         ),
         [] => Err(ProjectError::ProjectRefNotFound(project_ref.into())),
         _ => Err(ProjectError::AmbiguousHistoricalCwd {
@@ -322,22 +367,20 @@ fn levenshtein(left: &str, right: &str) -> usize {
 fn build_scope(
     context: &ReportContext,
     state: &DesktopState,
-    selected_project: Option<&str>,
-    fallback_paths: &[PathBuf],
-    target: String,
-    resolver: &'static str,
-    required_thread: Option<&str>,
+    request: ScopeRequest<'_>,
+    progress: Option<&mut Progress>,
 ) -> Result<ProjectReport, ProjectError> {
-    let fallback_paths = fallback_paths
+    let fallback_paths = request
+        .fallback_paths
         .iter()
         .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
         .collect::<Vec<_>>();
-    let missing_source_roots = usize::from(selected_project.is_some())
+    let missing_source_roots = usize::from(request.selected_project.is_some())
         * fallback_paths.iter().filter(|path| !path.exists()).count();
     let mut thread_ids = Vec::new();
     let mut selection = ProjectSelection {
-        target,
-        resolver,
+        target: request.target,
+        resolver: request.resolver,
         missing_source_roots,
         direct_assignments: 0,
         workspace_fallbacks: 0,
@@ -356,7 +399,9 @@ fn build_scope(
             .assignments
             .get(&root.id)
             .map(|entry| entry.project_id.as_str());
-        let direct = selected_project.is_some_and(|project| assignment == Some(project));
+        let direct = request
+            .selected_project
+            .is_some_and(|project| assignment == Some(project));
         let beneath = fallback_paths.iter().any(|path| cwd.starts_with(path));
         if direct {
             selection.direct_assignments += 1;
@@ -371,7 +416,7 @@ fn build_scope(
         }
     }
     thread_ids.sort();
-    if let Some(thread_id) = required_thread
+    if let Some(thread_id) = request.required_thread
         && !thread_ids.iter().any(|candidate| candidate == thread_id)
     {
         return Err(ProjectError::ThreadOutsideProject {
@@ -379,9 +424,11 @@ fn build_scope(
             target: selection.target.clone(),
         });
     }
-    let mut report = context
-        .build_project(selection, &thread_ids)
-        .map_err(ProjectError::from)?;
+    let mut report = match progress {
+        Some(progress) => context.build_project_with_progress(selection, &thread_ids, progress),
+        None => context.build_project(selection, &thread_ids),
+    }
+    .map_err(ProjectError::from)?;
     if report.selection.missing_source_roots > 0 {
         report.incomplete_input_warnings.push(format!(
             "{} configured Desktop Project source root(s) unavailable; direct assignments and recorded workspace roots remain included",
@@ -395,6 +442,7 @@ fn build_cwd_scope(
     context: &ReportContext,
     state: &DesktopState,
     cwd: &str,
+    progress: Option<&mut Progress>,
 ) -> Result<ProjectReport, ProjectError> {
     let mut thread_ids = Vec::new();
     let mut selection = ProjectSelection {
@@ -424,9 +472,11 @@ fn build_cwd_scope(
         }
     }
     thread_ids.sort();
-    context
-        .build_project(selection, &thread_ids)
-        .map_err(Into::into)
+    match progress {
+        Some(progress) => context.build_project_with_progress(selection, &thread_ids, progress),
+        None => context.build_project(selection, &thread_ids),
+    }
+    .map_err(Into::into)
 }
 
 fn load_state(codex_home: &Path) -> (DesktopState, bool) {

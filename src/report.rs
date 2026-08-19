@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::{
     pricing::{Catalog, PricingError, Usage},
+    progress::Progress,
     rollout::{
         analysis::{AnalysisError, RolloutStats, analyze},
         discovery::RolloutIndex,
@@ -135,12 +136,30 @@ impl ReportContext {
     }
 
     pub(crate) fn build(&self, thread_id: &str) -> Result<Report, ReportError> {
+        self.build_inner(thread_id, None)
+    }
+
+    pub(crate) fn build_with_progress(
+        &self,
+        thread_id: &str,
+        progress: &mut Progress,
+    ) -> Result<Report, ReportError> {
+        progress.start_analysis(self.rollout_count(thread_id));
+        self.build_inner(thread_id, Some(progress))
+    }
+
+    fn build_inner(
+        &self,
+        thread_id: &str,
+        progress: Option<&mut Progress>,
+    ) -> Result<Report, ReportError> {
         build_with_state(
             thread_id,
             &self.codex_home,
             &self.index,
             &self.catalog,
             self.session_index(),
+            progress,
         )
     }
 
@@ -152,16 +171,42 @@ impl ReportContext {
         self.index.roots()
     }
 
+    fn rollout_count(&self, thread_id: &str) -> usize {
+        self.index
+            .record(thread_id)
+            .map(|_| self.index.descendants(thread_id).map_or(0, |ids| ids.len()) + 1)
+            .unwrap_or_default()
+    }
+
     pub(crate) fn build_project(
+        &self,
+        selection: ProjectSelection,
+        thread_ids: &[String],
+    ) -> Result<ProjectReport, ReportError> {
+        self.build_project_inner(selection, thread_ids, None)
+    }
+
+    pub(crate) fn build_project_with_progress(
+        &self,
+        selection: ProjectSelection,
+        thread_ids: &[String],
+        progress: &mut Progress,
+    ) -> Result<ProjectReport, ReportError> {
+        progress.start_analysis(thread_ids.iter().map(|id| self.rollout_count(id)).sum());
+        self.build_project_inner(selection, thread_ids, Some(progress))
+    }
+
+    fn build_project_inner(
         &self,
         mut selection: ProjectSelection,
         thread_ids: &[String],
+        mut progress: Option<&mut Progress>,
     ) -> Result<ProjectReport, ReportError> {
         let mut tree = empty_stats();
         let mut by_model = BTreeMap::new();
         let mut warnings = BTreeSet::new();
         for thread_id in thread_ids {
-            let report = match self.build(thread_id) {
+            let report = match self.build_inner(thread_id, progress.as_deref_mut()) {
                 Ok(report) => report,
                 Err(
                     ReportError::RolloutNotFound { .. }
@@ -193,6 +238,21 @@ impl ReportContext {
 
     pub(crate) fn session_index(&self) -> &Snapshot {
         &self.session_index
+    }
+}
+
+impl ReportContext {
+    pub(crate) fn new_with_progress(
+        codex_home: &Path,
+        progress: &mut Progress,
+    ) -> Result<Self, PricingError> {
+        progress.start_indexing();
+        Ok(Self {
+            codex_home: codex_home.into(),
+            index: RolloutIndex::build_with_progress(codex_home, || progress.indexed_file()),
+            catalog: Catalog::embedded()?,
+            session_index: Snapshot::load(codex_home),
+        })
     }
 }
 
@@ -427,8 +487,17 @@ impl Aggregate {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn build(thread_id: &str, codex_home: &Path) -> Result<Report, ReportError> {
     ReportContext::new(codex_home)?.build(thread_id)
+}
+
+pub(crate) fn build_with_progress(
+    thread_id: &str,
+    codex_home: &Path,
+    progress: &mut Progress,
+) -> Result<Report, ReportError> {
+    ReportContext::new_with_progress(codex_home, progress)?.build_with_progress(thread_id, progress)
 }
 
 #[cfg(test)]
@@ -444,6 +513,7 @@ fn build_with_index(
         index,
         catalog,
         &Snapshot::load(codex_home),
+        None,
     )
 }
 
@@ -453,6 +523,7 @@ fn build_with_state(
     index: &RolloutIndex,
     catalog: &Catalog,
     session_index: &Snapshot,
+    mut progress: Option<&mut Progress>,
 ) -> Result<Report, ReportError> {
     let root = index
         .record(thread_id)
@@ -515,6 +586,9 @@ fn build_with_state(
                 children_stats.add_unreadable();
                 warnings.push(format!("descendant rollout {id} could not be read"));
             }
+        }
+        if let Some(progress) = progress.as_deref_mut() {
+            progress.analyzed_rollout();
         }
     }
 

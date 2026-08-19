@@ -10,6 +10,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 const MAX_JSONL_RECORD_BYTES: usize = 16 * 1024 * 1024;
+const INITIAL_JSONL_RECORD_BYTES: usize = 8 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RolloutKind {
@@ -67,6 +68,10 @@ pub(crate) struct RolloutIndex {
 
 impl RolloutIndex {
     pub(crate) fn build(home: &Path) -> Self {
+        Self::build_with_progress(home, || {})
+    }
+
+    pub(crate) fn build_with_progress(home: &Path, mut indexed_file: impl FnMut()) -> Self {
         let mut candidates = Vec::new();
         let mut warnings = Vec::new();
         let mut oversized_lines_skipped = 0;
@@ -79,6 +84,7 @@ impl RolloutIndex {
                 &mut warnings,
                 &mut oversized_lines_skipped,
                 &mut malformed_lines_skipped,
+                &mut indexed_file,
             );
         }
 
@@ -158,6 +164,7 @@ fn scan_root(
     warnings: &mut Vec<DiscoveryWarning>,
     oversized_lines_skipped: &mut usize,
     malformed_lines_skipped: &mut usize,
+    indexed_file: &mut impl FnMut(),
 ) {
     let metadata = match fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
@@ -226,6 +233,7 @@ fn scan_root(
                     oversized_lines_skipped,
                     malformed_lines_skipped,
                 );
+                indexed_file();
             }
         }
     }
@@ -289,7 +297,7 @@ fn read_jsonl_until(
         source,
     })?;
     let mut reader = BufReader::new(file);
-    let mut line = Vec::with_capacity(MAX_JSONL_RECORD_BYTES + 1);
+    let mut line = Vec::with_capacity(INITIAL_JSONL_RECORD_BYTES);
     let mut oversized = false;
     let mut summary = LineReadSummary::default();
 

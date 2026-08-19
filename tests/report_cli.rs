@@ -62,6 +62,24 @@ fn report_with_home(home: &Path, thread_id: &str, json: bool) -> Output {
 }
 
 #[test]
+fn forced_progress_keeps_json_stdout_machine_readable() {
+    let home = fixture_home();
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "root", "--json", "--progress", "--codex-home"])
+        .arg(home.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(serde_json::from_slice::<Value>(&output.stdout).is_ok());
+    let stderr = stderr(&output);
+    assert!(stderr.contains("Indexing rollout metadata"));
+    assert!(stderr.contains("Analyzing 1/1 rollouts"));
+    assert_eq!(stderr.matches("Analyzing 1/1 rollouts").count(), 1);
+    assert!(!stderr.contains('\r'));
+}
+
+#[test]
 fn project_path_report_keeps_assigned_and_cli_roots_separate_from_exclusions() {
     let home = TempDir::new().unwrap();
     let workspace = home.path().join("workspace");
@@ -255,7 +273,14 @@ fn project_name_selects_all_of_its_source_roots() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
-        .args(["report", "--project", "Project", "--json", "--codex-home"])
+        .args([
+            "report",
+            "--project",
+            "Project",
+            "--json",
+            "--progress",
+            "--codex-home",
+        ])
         .arg(home.path())
         .output()
         .unwrap();
@@ -265,6 +290,7 @@ fn project_name_selects_all_of_its_source_roots() {
     assert_eq!(report["selection"]["resolver"], "project_name");
     assert_eq!(report["selection"]["workspace_fallbacks"], 2);
     assert_eq!(report["tree"]["rollout_count"], 2);
+    assert!(stderr(&output).contains("Analyzing 2/2 rollouts"));
 }
 
 #[test]
@@ -539,6 +565,7 @@ fn help_and_version_describe_the_public_cli_contract() {
     let report_help = String::from_utf8(report_help.stdout).unwrap();
     assert!(report_help.contains("Codex session ID"));
     assert!(report_help.contains("--project"));
+    assert!(report_help.contains("--progress"));
     assert!(report_help.contains("--json"));
 
     assert!(version.status.success());
