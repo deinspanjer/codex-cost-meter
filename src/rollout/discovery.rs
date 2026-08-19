@@ -115,6 +115,12 @@ impl RolloutIndex {
             .is_some_and(|record| matches!(&record.kind, RolloutKind::Root))
     }
 
+    pub(crate) fn roots(&self) -> impl Iterator<Item = &RolloutRecord> {
+        self.records
+            .values()
+            .filter(|record| matches!(record.kind, RolloutKind::Root))
+    }
+
     pub(crate) fn descendants(&self, root_id: &str) -> Option<Vec<String>> {
         self.records.get(root_id)?;
         let mut seen = HashSet::from([root_id.to_owned()]);
@@ -243,13 +249,15 @@ fn scan_file(
         }
     };
     let mut record = None;
-    match read_jsonl(path, |line| match serde_json::from_slice::<Value>(line) {
+    match read_jsonl_until(path, |line| match serde_json::from_slice::<Value>(line) {
         Ok(value) => {
-            if record.is_none() {
-                record = record_from_value(&value, path);
-            }
+            record = record_from_value(&value, path);
+            record.is_some()
         }
-        Err(_) => *malformed_lines_skipped += 1,
+        Err(_) => {
+            *malformed_lines_skipped += 1;
+            false
+        }
     }) {
         Ok(summary) => *oversized_lines_skipped += summary.oversized_lines_skipped,
         Err(error) => warnings.push(DiscoveryWarning {
@@ -265,6 +273,16 @@ fn scan_file(
 pub(crate) fn read_jsonl(
     path: &Path,
     mut visitor: impl FnMut(&[u8]),
+) -> Result<LineReadSummary, JsonlReadError> {
+    read_jsonl_until(path, |line| {
+        visitor(line);
+        false
+    })
+}
+
+fn read_jsonl_until(
+    path: &Path,
+    mut visitor: impl FnMut(&[u8]) -> bool,
 ) -> Result<LineReadSummary, JsonlReadError> {
     let file = File::open(path).map_err(|source| JsonlReadError::Read {
         path: path.to_path_buf(),
@@ -303,8 +321,8 @@ pub(crate) fn read_jsonl(
         if newline.is_some() {
             if oversized {
                 summary.oversized_lines_skipped += 1;
-            } else {
-                visitor(&line);
+            } else if visitor(&line) {
+                return Ok(summary);
             }
             line.clear();
             oversized = false;
@@ -543,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_malformed_and_oversized_records() {
+    fn discovery_stops_after_finding_session_metadata() {
         let home = TempDir::new().unwrap();
         let path = home.path().join("sessions/records.jsonl");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -559,7 +577,7 @@ mod tests {
 
         let index = RolloutIndex::build(home.path());
         assert!(index.record("valid").is_some());
-        assert_eq!(index.oversized_lines_skipped(), 1);
+        assert_eq!(index.oversized_lines_skipped(), 0);
         assert_eq!(index.malformed_lines_skipped(), 1);
     }
 
