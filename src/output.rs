@@ -262,11 +262,28 @@ fn human_number(value: u64) -> String {
 }
 
 fn human_duration(seconds: f64) -> String {
-    if seconds < 60.0 {
-        format!("{seconds:.1}s")
-    } else {
-        format!("{}m {:.1}s", (seconds / 60.0).floor(), seconds % 60.0)
+    let mut remaining = seconds;
+    let days = (remaining / 86_400.0).floor() as u64;
+    remaining -= days as f64 * 86_400.0;
+    let hours = (remaining / 3_600.0).floor() as u64;
+    remaining -= hours as f64 * 3_600.0;
+    let minutes = (remaining / 60.0).floor() as u64;
+    remaining -= minutes as f64 * 60.0;
+
+    let mut parts = Vec::new();
+    if days > 0 {
+        parts.push(format!("{days}d"));
     }
+    if hours > 0 {
+        parts.push(format!("{hours}h"));
+    }
+    if minutes > 0 {
+        parts.push(format!("{minutes}m"));
+    }
+    if remaining > 0.0 || parts.is_empty() {
+        parts.push(format!("{remaining:.1}s"));
+    }
+    parts.join(" ")
 }
 
 fn human_cost(estimated: Option<f64>, known: f64) -> String {
@@ -471,6 +488,13 @@ mod tests {
         }
 
         assert!(!human(&report).contains("Cache write"));
+    }
+
+    #[test]
+    fn human_duration_uses_days_hours_and_nonzero_portions() {
+        assert_eq!(super::human_duration(0.5), "0.5s");
+        assert_eq!(super::human_duration(65.25), "1m 5.2s");
+        assert_eq!(super::human_duration(111_349.2), "1d 6h 55m 49.2s");
     }
 
     #[test]

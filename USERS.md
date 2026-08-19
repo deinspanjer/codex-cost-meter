@@ -59,7 +59,7 @@ Codex follows your normal approval settings for the local command. Review the re
 
 ## Read the report
 
-Human output shows root and whole-tree totals, per-model usage, price metadata, and summed agent-turn time. Token columns use compact `K`/`M`/`B` notation; JSON retains exact integers. Model and aggregate durations can overlap. A trailing `+` on a human cost means the displayed amount is only the known partial cost. In JSON, the corresponding complete estimate is `null`; inspect `incomplete_input`, `unpriced_models`, `unattributed_usage_tokens`, and `incomplete_input_warnings` before treating an estimate as complete.
+Human output shows root and whole-tree totals, per-model usage, price metadata, and summed agent-turn time. Token columns use compact `K`/`M`/`B` notation; JSON retains exact integers. Durations use `d`/`h`/`m`/`s`, omitting zero day, hour, and minute portions; seconds can be fractional. Model and aggregate durations can overlap. A trailing `+` on a human cost means the displayed amount is only the known partial cost. In JSON, the corresponding complete estimate is `null`; inspect `incomplete_input`, `unpriced_models`, `unattributed_usage_tokens`, and `incomplete_input_warnings` before treating an estimate as complete.
 
 Cost uses the embedded historical catalog and is an API-list-price approximation, not a billing record. Reasoning is included in output usage; cache reads are included in input usage.
 
