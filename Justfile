@@ -26,8 +26,8 @@ version-changed BEFORE:
     python3 scripts/version.py changed --before {{BEFORE}}
 
 package:
-    RUSTC="$(rustup which rustc)" cargo build --release --target aarch64-apple-darwin
-    RUSTC="$(rustup which rustc)" cargo build --release --target x86_64-apple-darwin
+    RUSTC="$(rustup which rustc)" cargo build --locked --release --target aarch64-apple-darwin
+    RUSTC="$(rustup which rustc)" cargo build --locked --release --target x86_64-apple-darwin
     mkdir -p target/universal2/release target/release
     lipo -create -output target/universal2/release/codex-cost-meter target/aarch64-apple-darwin/release/codex-cost-meter target/x86_64-apple-darwin/release/codex-cost-meter
     test "$(lipo -archs target/universal2/release/codex-cost-meter | tr ' ' '\n' | sort | tr '\n' ' ')" = "arm64 x86_64 "

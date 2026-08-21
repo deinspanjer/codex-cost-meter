@@ -1,7 +1,10 @@
 # TODO
 
 - Decide from deployment evidence whether Windows arm64 is warranted.
-- Deliver Linux musl x86_64 and aarch64 reporting and title updates, then Linux scheduling.
+- Verify the Homebrew formula on clean Apple Silicon and Intel macOS machines, including install, first run, schedule repair after upgrade, and package-manager uninstall.
+- Verify tagged `cargo install --locked` on clean Windows x64 machines with SmartScreen and, where practical, Smart App Control enabled; record policy and first-run outcomes without promising warning-free execution.
+- After that Windows verification, publish a portable WinGet manifest for the checksummed x64 ZIP and a Scoop manifest in an appropriate bucket; verify install, upgrade, schedule repair, and uninstall for each.
+- Verify the source-building Homebrew formula on Linuxbrew x86_64 and aarch64 before documenting it as a supported Linux package-manager path.
 - Add a complete price-catalog override/export workflow after the reporting contract is stable.
 - Execute the [ccusage accounting and pricing follow-up](docs/plans/ccusage-accounting-pricing-and-multi-home-handoff.md):
   - Add effective-dated long-context thresholds and rates, rechecking the rapidly changing official pricing immediately before implementation.
@@ -15,7 +18,4 @@
 - Research hooks that could update a thread's cost at turn completion, turn start, or idle time.
 - Add a `doctor` command once multiple concrete diagnostics justify it; include rollout-cache integrity, writability, and explicit repair.
 - Extend project and corpus reports with date-bucketed and explicit-range views (day, week, month-to-date, and lifetime). Default calendar boundaries to the OS timezone; add an override only if a concrete use case requires one.
-- After v0.5.0 and before expanding signing beyond self-signed artifacts:
-  - Add an end-to-end first-report quick start with a direct release link, exact install and checksum commands, and a supported way to find a task ID.
-  - Make the CLI self-documenting with meaningful command, argument, and option help plus a package version flag.
-- Expand production macOS/Windows signing toward v1.0.
+- Reconsider Apple Developer ID, SignPath Foundation, Azure Artifact Signing, or Microsoft Store MSIX only if measured direct-download friction justifies the account, cost, and packaging work.

@@ -81,7 +81,7 @@ jobs:
             export "CARGO_TARGET_${target_upper}_LINKER=musl-gcc"
             export "CC_${target_lower}=musl-gcc"
           fi
-          cargo build --release --target "$TARGET"
+          cargo build --locked --release --target "$TARGET"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: codex-cost-meter-${{ matrix.target }}
@@ -93,7 +93,9 @@ jobs:
     if: needs.version.outputs.changed == 'true'
     runs-on: macos-15
     permissions:
+      attestations: write
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -104,10 +106,9 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           path: artifacts
-      - name: Merge, package, and publish
+      - id: package
+        name: Merge and package
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           binary=target/universal2/release/codex-cost-meter
@@ -119,20 +120,43 @@ jobs:
           codesign --force --sign - "$binary"
           codesign --verify --strict "$binary"
           archive=$(python3 scripts/version.py package --binary "$binary" --output-dir target/release)
-          checksum="$archive.sha256"
           windows_archive=$(python3 scripts/version.py package-windows \
             --binary artifacts/codex-cost-meter-x86_64-pc-windows-msvc/codex-cost-meter.exe \
             --output-dir target/release)
-          windows_checksum="$windows_archive.sha256"
           linux_x86_64_archive=$(python3 scripts/version.py package-linux \
             --architecture x86_64 \
             --binary artifacts/codex-cost-meter-x86_64-unknown-linux-musl/codex-cost-meter \
             --output-dir target/release)
-          linux_x86_64_checksum="$linux_x86_64_archive.sha256"
           linux_aarch64_archive=$(python3 scripts/version.py package-linux \
             --architecture aarch64 \
             --binary artifacts/codex-cost-meter-aarch64-unknown-linux-musl/codex-cost-meter \
             --output-dir target/release)
+          printf '%s\n' \
+            "macos_archive=$archive" \
+            "windows_archive=$windows_archive" \
+            "linux_x86_64_archive=$linux_x86_64_archive" \
+            "linux_aarch64_archive=$linux_aarch64_archive" >> "$GITHUB_OUTPUT"
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+        with:
+          subject-path: target/release/*
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MACOS_ARCHIVE: ${{ steps.package.outputs.macos_archive }}
+          WINDOWS_ARCHIVE: ${{ steps.package.outputs.windows_archive }}
+          LINUX_X86_64_ARCHIVE: ${{ steps.package.outputs.linux_x86_64_archive }}
+          LINUX_AARCH64_ARCHIVE: ${{ steps.package.outputs.linux_aarch64_archive }}
+        run: |
+          set -euo pipefail
+          archive=$MACOS_ARCHIVE
+          checksum="$archive.sha256"
+          windows_archive=$WINDOWS_ARCHIVE
+          windows_checksum="$windows_archive.sha256"
+          linux_x86_64_archive=$LINUX_X86_64_ARCHIVE
+          linux_x86_64_checksum="$linux_x86_64_archive.sha256"
+          linux_aarch64_archive=$LINUX_AARCH64_ARCHIVE
           linux_aarch64_checksum="$linux_aarch64_archive.sha256"
           version=$(python3 scripts/version.py current)
           tag="v$version"

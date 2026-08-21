@@ -11,5 +11,6 @@ Decisions are ordered by dependency and adoption, not by the date this repositor
 | [0005](0005-use-native-user-schedulers-with-bounded-status.md) | Accepted | Use native user schedulers with bounded status |
 | [0006](0006-use-current-user-windows-task-scheduler.md) | Accepted | Use current-user Windows Task Scheduler for idle updates |
 | [0007](0007-use-current-user-systemd-scheduler.md) | Accepted | Use a current-user systemd scheduler for idle updates |
+| [0008](0008-use-a-source-built-homebrew-tap-and-attested-release-assets.md) | Accepted | Use a source-built Homebrew tap and attested release assets |
 
 Later decisions may amend or supersede these records; do not rewrite an accepted decision to hide a changed direction.

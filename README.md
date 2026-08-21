@@ -4,18 +4,23 @@
 
 `codex-cost-meter` is a small cross-platform utility for exact-thread usage and estimated API-list-price cost. Its capabilities include descendant accounting, bounded root-title updates, and current-user schedules for eligible idle updates on macOS, Windows, and Linux. It is diagnostic, not a ChatGPT billing record.
 
-v0.7 supports macOS 14+ as a Universal 2 archive for Apple Silicon and Intel, Windows x64 as a native archive, and static musl Linux archives for x86_64 and aarch64. Linux schedules through a current-user systemd service and timer; macOS and Windows use their native current-user schedulers. All three platforms can install, inspect, resume, remove, and uninstall their schedule; Windows arm64 remains deferred. See the user guide for platform requirements and lifecycle details.
+v0.8 supports macOS 14+ on Apple Silicon and Intel, Windows x64, and Linux x86_64 and aarch64. Linux schedules through a current-user systemd service and timer; macOS and Windows use their native current-user schedulers. All three platforms can install, inspect, resume, remove, and uninstall their schedule; Windows arm64 remains deferred. See the user guide for platform requirements and lifecycle details.
 
 ![Codex sidebar showing cost and token metrics in task titles](https://raw.githubusercontent.com/deinspanjer/codex-cost-meter/main/docs/assets/sidebar-title-metrics.png)
 
 ## Quick start
 
-1. Download the macOS Universal 2, Windows x64, Linux x86_64 musl, or Linux aarch64 musl archive for your platform and its matching checksum from the [latest stable release](https://github.com/deinspanjer/codex-cost-meter/releases/latest).
-2. Verify the checksum before extracting the archive.
-3. [Find your session ID](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#find-your-session-id).
-4. Run `./codex-cost-meter report <SESSION_ID>` on macOS or Linux, or `& .\codex-cost-meter\codex-cost-meter.exe report <SESSION_ID>` in PowerShell.
+On macOS, install the pinned source release through Homebrew:
 
-For platform-specific download, checksum, extraction, and trust guidance, see [install and run](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#install-and-run).
+```text
+brew tap deinspanjer/codex-cost-meter https://github.com/deinspanjer/codex-cost-meter
+brew install deinspanjer/codex-cost-meter/codex-cost-meter
+codex-cost-meter report <SESSION_ID>
+```
+
+Then [find your session ID](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#find-your-session-id). Windows and Linux users can install a tagged source release with Cargo or use the checksummed archives from the [latest stable release](https://github.com/deinspanjer/codex-cost-meter/releases/latest).
+
+For Homebrew upgrades, Cargo commands, direct downloads, and platform trust guidance, see [install and run](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#install-and-run).
 
 The opening of a human report looks like this; the full report continues with per-model and pricing details:
 
