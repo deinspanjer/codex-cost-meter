@@ -140,6 +140,15 @@ impl ReportContext {
         self.build_inner(thread_id, None)
     }
 
+    pub(crate) fn new_for(codex_home: &Path, thread_ids: &[String]) -> Result<Self, PricingError> {
+        Ok(Self {
+            codex_home: codex_home.into(),
+            index: RolloutIndex::build_for(codex_home, thread_ids, || {}),
+            catalog: Catalog::embedded()?,
+            session_index: Snapshot::load(codex_home),
+        })
+    }
+
     pub(crate) fn build_with_progress(
         &self,
         thread_id: &str,
@@ -251,6 +260,20 @@ impl ReportContext {
         Ok(Self {
             codex_home: codex_home.into(),
             index: RolloutIndex::build_with_progress(codex_home, || progress.indexed_file()),
+            catalog: Catalog::embedded()?,
+            session_index: Snapshot::load(codex_home),
+        })
+    }
+
+    pub(crate) fn new_for_with_progress(
+        codex_home: &Path,
+        thread_ids: &[String],
+        progress: &mut Progress,
+    ) -> Result<Self, PricingError> {
+        progress.start_indexing();
+        Ok(Self {
+            codex_home: codex_home.into(),
+            index: RolloutIndex::build_for(codex_home, thread_ids, || progress.indexed_file()),
             catalog: Catalog::embedded()?,
             session_index: Snapshot::load(codex_home),
         })
@@ -500,7 +523,7 @@ impl Aggregate {
 
 #[cfg(test)]
 pub(crate) fn build(thread_id: &str, codex_home: &Path) -> Result<Report, ReportError> {
-    ReportContext::new(codex_home)?.build(thread_id)
+    ReportContext::new_for(codex_home, &[thread_id.into()])?.build(thread_id)
 }
 
 pub(crate) fn build_with_progress(
@@ -508,7 +531,8 @@ pub(crate) fn build_with_progress(
     codex_home: &Path,
     progress: &mut Progress,
 ) -> Result<Report, ReportError> {
-    ReportContext::new_with_progress(codex_home, progress)?.build_with_progress(thread_id, progress)
+    ReportContext::new_for_with_progress(codex_home, &[thread_id.into()], progress)?
+        .build_with_progress(thread_id, progress)
 }
 
 #[cfg(test)]
