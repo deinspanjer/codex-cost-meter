@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Cache derived rollout analysis in an app-owned SQLite database, add selected-workset `--refresh`, and avoid unrelated rollout processing during exact, project, and update commands.
+
 ## [0.8.1]
 
 - Avoid opening unrelated Codex rollout files for exact task reports and bounded title updates while preserving descendant reconciliation.

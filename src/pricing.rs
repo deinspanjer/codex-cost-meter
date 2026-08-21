@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use time::{Date, OffsetDateTime};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub(crate) struct Usage {
     pub input: u64,
     pub cached_input: u64,

@@ -2,6 +2,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
+    rc::Rc,
     time::Duration,
 };
 
@@ -9,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
 
-use crate::update::{self, UpdateError, UpdateOptions};
+use crate::{
+    cache::RolloutCache,
+    update::{self, UpdateError, UpdateOptions},
+};
 
 use crate::update::FailureClass;
 
@@ -221,17 +225,34 @@ pub(crate) fn uninstall(paths: &Paths) -> Result<(), ScheduleError> {
     windows::uninstall(paths).map_err(Into::into)
 }
 
+#[cfg(all(test, unix))]
 pub(crate) fn run_scheduled(
     paths: &Paths,
     codex_home: &Path,
     options: &UpdateOptions,
     writer: &mut impl Write,
 ) -> Result<(), ScheduledRunError> {
+    run_scheduled_cached(
+        paths,
+        codex_home,
+        options,
+        writer,
+        Rc::new(RolloutCache::open(codex_home, false)),
+    )
+}
+
+pub(crate) fn run_scheduled_cached(
+    paths: &Paths,
+    codex_home: &Path,
+    options: &UpdateOptions,
+    writer: &mut impl Write,
+    cache: Rc<RolloutCache>,
+) -> Result<(), ScheduledRunError> {
     let previous = read_status(paths.status()).map_err(|_| ScheduledRunError::StatusUnavailable)?;
     if previous.as_ref().is_some_and(|status| status.paused) {
         return Ok(());
     }
-    match update::run(codex_home, options) {
+    match update::run_cached(codex_home, options, cache) {
         Ok(_) => {
             if write_status(
                 paths.status(),

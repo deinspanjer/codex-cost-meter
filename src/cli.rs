@@ -140,6 +140,11 @@ pub(crate) struct ReportArgs {
         help = "Show report progress even when stderr is not a terminal."
     )]
     pub(crate) progress: bool,
+    #[arg(
+        long,
+        help = "Reprocess selected rollouts instead of using cached analysis."
+    )]
+    pub(crate) refresh: bool,
     #[arg(long, help = "Use this Codex storage directory.")]
     codex_home: Option<PathBuf>,
 }
@@ -197,6 +202,11 @@ pub(crate) struct UpdateArgs {
         help = "Apply the proposed title updates; otherwise only preview them."
     )]
     pub(crate) apply: bool,
+    #[arg(
+        long,
+        help = "Reprocess selected rollouts instead of using cached analysis."
+    )]
+    pub(crate) refresh: bool,
     #[arg(
         long,
         default_value_t = 65,
@@ -463,7 +473,13 @@ mod tests {
 
     #[test]
     fn parses_explicit_selection_and_defaults() {
-        let arguments = update(&["--thread-id", "root", "--match-title", "billing"]);
+        let arguments = update(&[
+            "--thread-id",
+            "root",
+            "--match-title",
+            "billing",
+            "--refresh",
+        ]);
 
         assert_eq!(arguments.thread_ids, ["root"]);
         assert_eq!(arguments.title_matches, ["billing"]);
@@ -473,6 +489,7 @@ mod tests {
         assert_eq!(arguments.max_width, 65);
         assert_eq!(arguments.title_metrics, MetricList::default());
         assert!(!arguments.apply);
+        assert!(arguments.refresh);
     }
 
     #[test]
@@ -507,6 +524,7 @@ mod tests {
 
         let seconds = update(&["--thread-id", "root", "--max-runtime", "90"]);
         assert_eq!(seconds.max_runtime.unwrap().as_secs(), 90);
+        assert!(!seconds.refresh);
         assert_eq!(
             MetricList::default(),
             "cost,total-tokens".parse::<MetricList>().unwrap()

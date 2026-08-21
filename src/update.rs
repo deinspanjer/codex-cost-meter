@@ -3,6 +3,7 @@ use std::{
     fs::{File, OpenOptions, TryLockError},
     io,
     path::{Path, PathBuf},
+    rc::Rc,
     time::{Duration, Instant},
 };
 
@@ -11,6 +12,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 
 use crate::{
+    cache::RolloutCache,
     pricing::PricingError,
     report::{ReportContext, ReportError},
     rollout::discovery::source_is_root,
@@ -138,7 +140,16 @@ struct ThreadRow {
     source: Option<String>,
 }
 
+#[cfg(test)]
 pub(crate) fn run(home: &Path, options: &UpdateOptions) -> Result<UpdateResult, UpdateError> {
+    run_cached(home, options, Rc::new(RolloutCache::open(home, false)))
+}
+
+pub(crate) fn run_cached(
+    home: &Path,
+    options: &UpdateOptions,
+    cache: Rc<RolloutCache>,
+) -> Result<UpdateResult, UpdateError> {
     let _lock = acquire_lock(home)?;
     let mut connection = open_database(home, options.apply)?;
     let source_available = validate_schema(&connection)?;
@@ -148,7 +159,7 @@ pub(crate) fn run(home: &Path, options: &UpdateOptions) -> Result<UpdateResult, 
         return Err(UpdateError::SessionIndexUnreadable { kind: source });
     }
     if !source_available {
-        let context = ReportContext::new(home)?;
+        let context = ReportContext::new_cached(home, cache)?;
         let roots = rows.iter().filter(|row| context.is_root(&row.id)).collect();
         let selected = select_rows(roots, &snapshot, options)?;
         return finish_updates(home, &mut connection, selected, &context, options);
@@ -159,7 +170,7 @@ pub(crate) fn run(home: &Path, options: &UpdateOptions) -> Result<UpdateResult, 
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    let context = ReportContext::new_for(home, &selected_ids)?;
+    let context = ReportContext::new_for_cached(home, &selected_ids, cache)?;
     finish_updates(home, &mut connection, selected, &context, options)
 }
 

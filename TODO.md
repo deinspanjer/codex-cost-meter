@@ -13,6 +13,7 @@
 - Research whether the running ChatGPT/Codex desktop app's app server can be signaled to reload externally updated titles without relaunching or cycling windows.
 - Research whether the desktop app offers a practical extension point for a per-thread context-menu update action.
 - Research hooks that could update a thread's cost at turn completion, turn start, or idle time.
+- Add a `doctor` command once multiple concrete diagnostics justify it; include rollout-cache integrity, writability, and explicit repair.
 - Extend project and corpus reports with date-bucketed and explicit-range views (day, week, month-to-date, and lifetime). Default calendar boundaries to the OS timezone; add an override only if a concrete use case requires one.
 - After v0.5.0 and before expanding signing beyond self-signed artifacts:
   - Add an end-to-end first-report quick start with a direct release link, exact install and checksum commands, and a supported way to find a task ID.

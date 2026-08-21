@@ -1,3 +1,4 @@
+mod cache;
 mod cli;
 mod output;
 mod pricing;
@@ -15,6 +16,7 @@ use std::{
     error::Error,
     io::{self, IsTerminal, Write},
     process::ExitCode,
+    rc::Rc,
 };
 
 use clap::{Parser, error::ErrorKind};
@@ -113,36 +115,54 @@ fn run_with_writers(
     match cli.command {
         Command::Report(args) => {
             let home = args.codex_home()?;
+            let cache = Rc::new(cache::RolloutCache::open(&home, args.refresh));
             let mut progress =
                 progress::Progress::new(error_writer, args.progress, stderr_is_terminal);
-            let rendered = if let Some(project_ref) = args.project {
-                let report = project::build_with_progress(
-                    &home,
-                    args.thread_id.as_deref(),
-                    &project_ref,
-                    &mut progress,
-                )?;
-                if args.json {
-                    format!("{}\n", output::json(&report)?)
+            let rendered = (|| -> Result<String, AppError> {
+                if let Some(project_ref) = args.project {
+                    let report = project::build_with_progress(
+                        &home,
+                        args.thread_id.as_deref(),
+                        &project_ref,
+                        &mut progress,
+                        Rc::clone(&cache),
+                    )?;
+                    if args.json {
+                        Ok(format!("{}\n", output::json(&report)?))
+                    } else {
+                        Ok(output::project_human(&report))
+                    }
+                } else if let Some(thread_id) = args.thread_id {
+                    let report = report::build_with_progress(
+                        &thread_id,
+                        &home,
+                        &mut progress,
+                        Rc::clone(&cache),
+                    )?;
+                    if args.json {
+                        Ok(format!("{}\n", output::json(&report)?))
+                    } else {
+                        Ok(output::human(&report))
+                    }
                 } else {
-                    output::project_human(&report)
+                    let report = project::build_with_progress(
+                        &home,
+                        None,
+                        "",
+                        &mut progress,
+                        Rc::clone(&cache),
+                    )?;
+                    if args.json {
+                        Ok(format!("{}\n", output::json(&report)?))
+                    } else {
+                        Ok(output::project_human(&report))
+                    }
                 }
-            } else if let Some(thread_id) = args.thread_id {
-                let report = report::build_with_progress(&thread_id, &home, &mut progress)?;
-                if args.json {
-                    format!("{}\n", output::json(&report)?)
-                } else {
-                    output::human(&report)
-                }
-            } else {
-                let report = project::build_with_progress(&home, None, "", &mut progress)?;
-                if args.json {
-                    format!("{}\n", output::json(&report)?)
-                } else {
-                    output::project_human(&report)
-                }
-            };
+            })();
             progress.finish();
+            drop(progress);
+            let rendered = rendered?;
+            write_cache_notices(error_writer, &cache);
             writer
                 .write_all(rendered.as_bytes())
                 .map_err(|source| AppError::WriteReport { source })?;
@@ -150,13 +170,15 @@ fn run_with_writers(
         }
         Command::Update(args) => {
             let home = args.codex_home()?;
+            let cache = Rc::new(cache::RolloutCache::open(&home, args.refresh));
             let options = args.options();
-            let result = update::run(&home, &options)?;
+            let result = update::run_cached(&home, &options, Rc::clone(&cache))?;
+            write_cache_notices(error_writer, &cache);
             write_update_output(writer, &result, options.apply)?;
             Ok(())
         }
         #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-        Command::Schedule(args) => run_schedule(args.command, writer),
+        Command::Schedule(args) => run_schedule(args.command, writer, error_writer),
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         Command::Uninstall => {
             let paths = schedule_paths()?;
@@ -177,7 +199,11 @@ fn run_with_writers(
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(), AppError> {
+fn run_schedule(
+    command: ScheduleCommand,
+    writer: &mut impl Write,
+    error_writer: &mut impl Write,
+) -> Result<(), AppError> {
     match command {
         ScheduleCommand::Install(args) => {
             let schedule_options = args.options();
@@ -253,14 +279,25 @@ fn run_schedule(command: ScheduleCommand, writer: &mut impl Write) -> Result<(),
         ScheduleCommand::Run(args) => {
             let paths = schedule_paths()?;
             let schedule_options = args.options();
-            schedule::run_scheduled(
+            let home = schedule_options.codex_home()?;
+            let cache = Rc::new(cache::RolloutCache::open(&home, false));
+            let result = schedule::run_scheduled_cached(
                 &paths,
-                &schedule_options.codex_home()?,
+                &home,
                 &schedule_options.update_options(),
                 writer,
-            )?;
+                Rc::clone(&cache),
+            );
+            result?;
+            write_cache_notices(error_writer, &cache);
             Ok(())
         }
+    }
+}
+
+fn write_cache_notices(writer: &mut impl Write, cache: &cache::RolloutCache) {
+    for notice in cache.take_notices() {
+        let _ = writeln!(writer, "{}", sanitize(notice));
     }
 }
 

@@ -507,6 +507,16 @@ fn stderr(output: &Output) -> String {
     String::from_utf8(output.stderr.clone()).unwrap()
 }
 
+fn assert_cache_created(output: &Output, home: &Path) {
+    assert_eq!(
+        stderr(output),
+        format!(
+            "created rollout cache at {}\n",
+            home.join("codex-cost-meter.sqlite").display()
+        )
+    );
+}
+
 #[test]
 fn help_and_version_describe_the_public_cli_contract() {
     let binary = env!("CARGO_BIN_EXE_codex-cost-meter");
@@ -532,6 +542,7 @@ fn help_and_version_describe_the_public_cli_contract() {
     let update_help = String::from_utf8(update_help.stdout).unwrap();
     assert!(update_help.contains("Select a task by ID"));
     assert!(update_help.contains("Apply the proposed title updates"));
+    assert!(update_help.contains("--refresh"));
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
@@ -566,6 +577,7 @@ fn help_and_version_describe_the_public_cli_contract() {
     assert!(report_help.contains("Codex session ID"));
     assert!(report_help.contains("--project"));
     assert!(report_help.contains("--progress"));
+    assert!(report_help.contains("--refresh"));
     assert!(report_help.contains("--json"));
 
     assert!(version.status.success());
@@ -592,7 +604,7 @@ fn report_json_uses_explicit_codex_home() {
         serde_json::from_slice::<Value>(&output.stdout).unwrap()["rollout"]["rollout_id"],
         "root"
     );
-    assert!(output.stderr.is_empty());
+    assert_cache_created(&output, home.path());
 }
 
 #[test]
@@ -609,7 +621,7 @@ fn report_uses_codex_home_environment_when_no_flag_is_present() {
         serde_json::from_slice::<Value>(&output.stdout).unwrap()["rollout"]["rollout_id"],
         "root"
     );
-    assert!(output.stderr.is_empty());
+    assert_cache_created(&output, home.path());
 }
 
 #[cfg(not(windows))]
@@ -629,7 +641,7 @@ fn report_uses_home_codex_directory_as_the_final_default() {
         serde_json::from_slice::<Value>(&output.stdout).unwrap()["rollout"]["rollout_id"],
         "root"
     );
-    assert!(output.stderr.is_empty());
+    assert_cache_created(&output, &root.path().join(".codex"));
 }
 
 #[cfg(windows)]
@@ -650,14 +662,15 @@ fn report_uses_userprofile_as_a_codex_home_fallback() {
         serde_json::from_slice::<Value>(&output.stdout).unwrap()["rollout"]["rollout_id"],
         "root"
     );
-    assert!(output.stderr.is_empty());
+    assert_cache_created(&output, &root.path().join(".codex"));
 }
 
 #[cfg(windows)]
 #[test]
 fn report_uses_complete_home_drive_and_path_as_a_codex_home_fallback() {
     let root = TempDir::new().unwrap();
-    fixture_home_at(&root.path().join(".codex"));
+    let cache_home = root.path().join(".codex");
+    fixture_home_at(&cache_home);
     let root = root.path().to_str().unwrap();
     let Some((drive, path)) = root
         .get(..2)
@@ -682,7 +695,7 @@ fn report_uses_complete_home_drive_and_path_as_a_codex_home_fallback() {
         serde_json::from_slice::<Value>(&output.stdout).unwrap()["rollout"]["rollout_id"],
         "root"
     );
-    assert!(output.stderr.is_empty());
+    assert_cache_created(&output, &cache_home);
 }
 
 #[test]
@@ -723,7 +736,7 @@ fn malformed_unknown_and_wrong_type_records_do_not_abort_a_report() {
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert!(output.status.success());
-    assert!(output.stderr.is_empty());
+    assert_cache_created(&output, home.path());
     assert!(
         report["incomplete_input_warnings"]
             .as_array()
@@ -746,7 +759,7 @@ fn oversized_records_leave_a_visible_incomplete_input_warning() {
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert!(output.status.success());
-    assert!(output.stderr.is_empty());
+    assert_cache_created(&output, home.path());
     assert!(
         report["incomplete_input_warnings"]
             .as_array()
@@ -787,10 +800,10 @@ fn human_output_sanitizes_terminal_control_text_from_codex_files() {
     );
 
     let output = report_with_home(home.path(), "root", false);
-    let text = String::from_utf8(output.stdout).unwrap();
 
     assert!(output.status.success());
-    assert!(output.stderr.is_empty());
+    assert_cache_created(&output, home.path());
+    let text = String::from_utf8(output.stdout).unwrap();
     assert!(!text.contains('\u{1b}'));
     assert!(!text.contains('\r'));
     assert!(!text.contains("\nforged"));
@@ -841,7 +854,7 @@ fn unreadable_scan_directory_is_reported_as_partial_input_when_permissions_apply
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert!(output.status.success());
-    assert!(output.stderr.is_empty());
+    assert_cache_created(&output, home.path());
     assert!(
         report["incomplete_input_warnings"]
             .as_array()
