@@ -18,6 +18,7 @@ macOS and Linux examples:
 ```text
 ~/.codex/codex-cost-meter report <THREAD_ID>
 ~/.codex/codex-cost-meter report <THREAD_ID> --json
+~/.codex/codex-cost-meter report <THREAD_ID> --refresh
 ~/.codex/codex-cost-meter report <THREAD_ID> --codex-home <PATH>
 ```
 
@@ -29,7 +30,9 @@ $threadId = "<THREAD_ID>"
 & "$env:USERPROFILE\.codex\codex-cost-meter.exe" update --thread-id $threadId
 ```
 
-Use the bare executable name only when you place it in an existing directory on `PATH`; the tool does not require or create a `bin` directory under the Codex home. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then the platform home plus `.codex`. `report` is read-only and reports that exact ID and its linked descendants without SQLite; `update` is dry-run by default and reads the supported local SQLite state only for title-update selection or application (details below).
+Use the bare executable name only when you place it in an existing directory on `PATH`; the tool does not require or create a `bin` directory under the Codex home. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then the platform home plus `.codex`. `report` never changes Codex task data. It may read Codex's SQLite projection to narrow discovery, with rollout-file fallback; `update` is dry-run by default and reads the supported local SQLite state for title-update selection or application (details below).
+
+The first successful analysis creates `codex-cost-meter.sqlite` in the selected Codex home and prints its path once. This app-owned, disposable cache stores rollout metadata and parsed usage facts; report pricing and aggregation remain live. An entry is reused only when the rollout file's modification time and size match. `report --refresh` and `update --refresh` reprocess only the selected roots and linked descendants. A cache error is reported once and the command continues without caching. To rebuild the cache manually, remove only `codex-cost-meter.sqlite` while no meter command is running; the next analysis recreates it. The cache is separate from Codex's `state_5.sqlite` and is not removed by schedule removal or uninstall.
 
 The macOS archive is ad-hoc signed, not Developer ID signed or notarized. Gatekeeper can therefore require a user decision before first launch. The Windows executable is unsigned, so Windows or organizational controls can also require an explicit trust decision or block it. Verify the downloaded checksum and follow your organization's trust process; the checksum detects transfer corruption or tampering but does not establish publisher identity. See [why releases are unsigned for now](docs/unsigned-releases.md) for platform-specific run/build links, the signing options considered, and their current hurdles.
 
@@ -105,6 +108,7 @@ Notes: cache read is included in input; reasoning is included in output; agent t
 ~/.codex/codex-cost-meter update --thread-id <THREAD_ID>
 ~/.codex/codex-cost-meter update --match-title "unique title text"
 ~/.codex/codex-cost-meter update --idle-minutes 15 --limit 20
+~/.codex/codex-cost-meter update --thread-id <THREAD_ID> --refresh
 ~/.codex/codex-cost-meter update --thread-id <THREAD_ID> --apply
 ```
 

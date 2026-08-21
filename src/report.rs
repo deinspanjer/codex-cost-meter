@@ -1,16 +1,18 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
+    cache::RolloutCache,
     pricing::{Catalog, PricingError, Usage},
     progress::Progress,
     rollout::{
-        analysis::{AnalysisError, RolloutStats, analyze},
+        analysis::{AnalysisError, RolloutStats},
         discovery::RolloutIndex,
     },
     session_index::Snapshot,
@@ -124,15 +126,25 @@ pub(crate) struct ReportContext {
     index: RolloutIndex,
     catalog: Catalog,
     session_index: Snapshot,
+    cache: Rc<RolloutCache>,
 }
 
 impl ReportContext {
+    #[cfg(test)]
     pub(crate) fn new(codex_home: &Path) -> Result<Self, PricingError> {
+        Self::new_cached(codex_home, Rc::new(RolloutCache::open(codex_home, false)))
+    }
+
+    pub(crate) fn new_cached(
+        codex_home: &Path,
+        cache: Rc<RolloutCache>,
+    ) -> Result<Self, PricingError> {
         Ok(Self {
             codex_home: codex_home.into(),
-            index: RolloutIndex::build(codex_home),
+            index: RolloutIndex::build_cached(codex_home, &cache),
             catalog: Catalog::embedded()?,
             session_index: Snapshot::load(codex_home),
+            cache,
         })
     }
 
@@ -140,12 +152,26 @@ impl ReportContext {
         self.build_inner(thread_id, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn new_for(codex_home: &Path, thread_ids: &[String]) -> Result<Self, PricingError> {
+        Self::new_for_cached(
+            codex_home,
+            thread_ids,
+            Rc::new(RolloutCache::open(codex_home, false)),
+        )
+    }
+
+    pub(crate) fn new_for_cached(
+        codex_home: &Path,
+        thread_ids: &[String],
+        cache: Rc<RolloutCache>,
+    ) -> Result<Self, PricingError> {
         Ok(Self {
             codex_home: codex_home.into(),
-            index: RolloutIndex::build_for(codex_home, thread_ids, || {}),
+            index: RolloutIndex::build_for_cached(codex_home, thread_ids, Some(&cache), || {}),
             catalog: Catalog::embedded()?,
             session_index: Snapshot::load(codex_home),
+            cache,
         })
     }
 
@@ -169,6 +195,7 @@ impl ReportContext {
             &self.index,
             &self.catalog,
             self.session_index(),
+            &self.cache,
             progress,
         )
     }
@@ -252,30 +279,38 @@ impl ReportContext {
 }
 
 impl ReportContext {
-    pub(crate) fn new_with_progress(
+    pub(crate) fn new_cached_with_progress(
         codex_home: &Path,
+        cache: Rc<RolloutCache>,
         progress: &mut Progress,
     ) -> Result<Self, PricingError> {
         progress.start_indexing();
         Ok(Self {
             codex_home: codex_home.into(),
-            index: RolloutIndex::build_with_progress(codex_home, || progress.indexed_file()),
+            index: RolloutIndex::build_with_cache_progress(codex_home, Some(&cache), || {
+                progress.indexed_file()
+            }),
             catalog: Catalog::embedded()?,
             session_index: Snapshot::load(codex_home),
+            cache,
         })
     }
 
-    pub(crate) fn new_for_with_progress(
+    pub(crate) fn new_for_cached_with_progress(
         codex_home: &Path,
         thread_ids: &[String],
+        cache: Rc<RolloutCache>,
         progress: &mut Progress,
     ) -> Result<Self, PricingError> {
         progress.start_indexing();
         Ok(Self {
             codex_home: codex_home.into(),
-            index: RolloutIndex::build_for(codex_home, thread_ids, || progress.indexed_file()),
+            index: RolloutIndex::build_for_cached(codex_home, thread_ids, Some(&cache), || {
+                progress.indexed_file()
+            }),
             catalog: Catalog::embedded()?,
             session_index: Snapshot::load(codex_home),
+            cache,
         })
     }
 }
@@ -530,8 +565,9 @@ pub(crate) fn build_with_progress(
     thread_id: &str,
     codex_home: &Path,
     progress: &mut Progress,
+    cache: Rc<RolloutCache>,
 ) -> Result<Report, ReportError> {
-    ReportContext::new_for_with_progress(codex_home, &[thread_id.into()], progress)?
+    ReportContext::new_for_cached_with_progress(codex_home, &[thread_id.into()], cache, progress)?
         .build_with_progress(thread_id, progress)
 }
 
@@ -548,6 +584,7 @@ fn build_with_index(
         index,
         catalog,
         &Snapshot::load(codex_home),
+        &RolloutCache::open(codex_home, false),
         None,
     )
 }
@@ -558,6 +595,7 @@ fn build_with_state(
     index: &RolloutIndex,
     catalog: &Catalog,
     session_index: &Snapshot,
+    cache: &RolloutCache,
     mut progress: Option<&mut Progress>,
 ) -> Result<Report, ReportError> {
     let root = index
@@ -599,7 +637,7 @@ fn build_with_state(
         let record = index.record(id).expect("indexed descendant must exist");
         let rollout_type = record.kind.report_type();
         let type_stats = by_rollout_type.entry(rollout_type).or_default();
-        match analyze(record) {
+        match cache.analyze(record) {
             Ok(stats) => {
                 tree_stats.add(&stats, catalog);
                 type_stats.add(&stats, catalog);

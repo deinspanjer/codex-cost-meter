@@ -2,14 +2,17 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use serde::Deserialize;
 use thiserror::Error;
 
 use crate::{
+    cache::RolloutCache,
     progress::Progress,
     report::{ProjectReport, ProjectSelection, ReportContext, ReportError},
+    rollout::discovery::{RolloutRecord, state_roots},
 };
 
 #[derive(Debug, Error)]
@@ -85,8 +88,9 @@ pub(crate) fn build_with_progress(
     thread_id: Option<&str>,
     project_ref: &str,
     progress: &mut Progress,
+    cache: Rc<RolloutCache>,
 ) -> Result<ProjectReport, ProjectError> {
-    build_inner(codex_home, thread_id, project_ref, Some(progress))
+    build_inner(codex_home, thread_id, project_ref, Some(progress), cache)
 }
 
 fn build_inner(
@@ -94,12 +98,21 @@ fn build_inner(
     thread_id: Option<&str>,
     project_ref: &str,
     mut progress: Option<&mut Progress>,
+    cache: Rc<RolloutCache>,
 ) -> Result<ProjectReport, ProjectError> {
-    let context = match progress.as_deref_mut() {
-        Some(progress) => ReportContext::new_with_progress(codex_home, progress),
-        None => ReportContext::new(codex_home),
-    }
-    .map_err(ReportError::from)?;
+    let roots = match state_roots(codex_home, &cache) {
+        Some(roots) => roots,
+        None => match progress.as_deref_mut() {
+            Some(progress) => {
+                ReportContext::new_cached_with_progress(codex_home, Rc::clone(&cache), progress)
+            }
+            None => ReportContext::new_cached(codex_home, Rc::clone(&cache)),
+        }
+        .map_err(ReportError::from)?
+        .roots()
+        .cloned()
+        .collect(),
+    };
     let (state, metadata_available) = load_state(codex_home);
     if !project_ref.is_empty() && metadata_available {
         let named = state
@@ -115,7 +128,9 @@ fn build_inner(
         }
         if let [project] = named.as_slice() {
             return build_scope(
-                &context,
+                codex_home,
+                Rc::clone(&cache),
+                &roots,
                 &state,
                 ScopeRequest {
                     selected_project: Some(project.id.as_str()),
@@ -134,8 +149,8 @@ fn build_inner(
         if !metadata_available {
             return Err(ProjectError::MetadataUnavailable);
         }
-        let root = context
-            .roots()
+        let root = roots
+            .iter()
             .find(|root| root.id == thread_id)
             .cloned()
             .ok_or_else(|| ProjectError::ThreadNotRoot(thread_id.into()))?;
@@ -145,7 +160,9 @@ fn build_inner(
             .and_then(|assignment| state.projects.get(&assignment.project_id))
         {
             return build_scope(
-                &context,
+                codex_home,
+                Rc::clone(&cache),
+                &roots,
                 &state,
                 ScopeRequest {
                     selected_project: Some(project.id.as_str()),
@@ -158,7 +175,9 @@ fn build_inner(
             );
         }
         return build_cwd_scope(
-            &context,
+            codex_home,
+            Rc::clone(&cache),
+            &roots,
             &state,
             root.cwd
                 .as_deref()
@@ -176,10 +195,24 @@ fn build_inner(
         match PathBuf::from(project_ref).canonicalize() {
             Ok(path) => path,
             Err(_) if metadata_available => {
-                return fuzzy_project(&context, &state, project_ref, progress);
+                return fuzzy_project(
+                    codex_home,
+                    Rc::clone(&cache),
+                    &roots,
+                    &state,
+                    project_ref,
+                    progress,
+                );
             }
             Err(_) => {
-                return match fuzzy_historical_cwd(&context, &state, project_ref, progress) {
+                return match fuzzy_historical_cwd(
+                    codex_home,
+                    Rc::clone(&cache),
+                    &roots,
+                    &state,
+                    project_ref,
+                    progress,
+                ) {
                     Err(ProjectError::ProjectRefNotFound(_)) => {
                         Err(ProjectError::MetadataUnavailable)
                     }
@@ -232,7 +265,9 @@ fn build_inner(
         _ => unreachable!(),
     };
     build_scope(
-        &context,
+        codex_home,
+        cache,
+        &roots,
         &state,
         ScopeRequest {
             selected_project,
@@ -246,7 +281,9 @@ fn build_inner(
 }
 
 fn fuzzy_project(
-    context: &ReportContext,
+    codex_home: &Path,
+    cache: Rc<RolloutCache>,
+    roots: &[RolloutRecord],
     state: &DesktopState,
     project_ref: &str,
     progress: Option<&mut Progress>,
@@ -259,7 +296,9 @@ fn fuzzy_project(
     matches.sort_by(|left, right| left.name.cmp(&right.name));
     match matches.as_slice() {
         [project] => build_scope(
-            context,
+            codex_home,
+            cache,
+            roots,
             state,
             ScopeRequest {
                 selected_project: Some(project.id.as_str()),
@@ -270,7 +309,7 @@ fn fuzzy_project(
             },
             progress,
         ),
-        [] => fuzzy_historical_cwd(context, state, project_ref, progress),
+        [] => fuzzy_historical_cwd(codex_home, cache, roots, state, project_ref, progress),
         _ => Err(ProjectError::AmbiguousProjectRef {
             reference: project_ref.into(),
             matches: project_names(&matches),
@@ -279,13 +318,15 @@ fn fuzzy_project(
 }
 
 fn fuzzy_historical_cwd(
-    context: &ReportContext,
+    codex_home: &Path,
+    cache: Rc<RolloutCache>,
+    roots: &[RolloutRecord],
     state: &DesktopState,
     project_ref: &str,
     progress: Option<&mut Progress>,
 ) -> Result<ProjectReport, ProjectError> {
-    let mut matches = context
-        .roots()
+    let mut matches = roots
+        .iter()
         .filter_map(|root| root.cwd.as_deref())
         .filter(|cwd| high_confidence_match(project_ref, cwd))
         .collect::<Vec<_>>();
@@ -293,7 +334,9 @@ fn fuzzy_historical_cwd(
     matches.dedup();
     match matches.as_slice() {
         [cwd] => build_scope(
-            context,
+            codex_home,
+            cache,
+            roots,
             state,
             ScopeRequest {
                 selected_project: None,
@@ -365,10 +408,12 @@ fn levenshtein(left: &str, right: &str) -> usize {
 }
 
 fn build_scope(
-    context: &ReportContext,
+    codex_home: &Path,
+    cache: Rc<RolloutCache>,
+    roots: &[RolloutRecord],
     state: &DesktopState,
     request: ScopeRequest<'_>,
-    progress: Option<&mut Progress>,
+    mut progress: Option<&mut Progress>,
 ) -> Result<ProjectReport, ProjectError> {
     let fallback_paths = request
         .fallback_paths
@@ -390,7 +435,7 @@ fn build_scope(
         incomplete_root_reports: 0,
         unpriced_root_reports: 0,
     };
-    for root in context.roots() {
+    for root in roots {
         let Some(cwd) = root.cwd.as_deref().map(Path::new) else {
             continue;
         };
@@ -424,6 +469,13 @@ fn build_scope(
             target: selection.target.clone(),
         });
     }
+    let context = match progress.as_deref_mut() {
+        Some(progress) => {
+            ReportContext::new_for_cached_with_progress(codex_home, &thread_ids, cache, progress)
+        }
+        None => ReportContext::new_for_cached(codex_home, &thread_ids, cache),
+    }
+    .map_err(ReportError::from)?;
     let mut report = match progress {
         Some(progress) => context.build_project_with_progress(selection, &thread_ids, progress),
         None => context.build_project(selection, &thread_ids),
@@ -439,10 +491,12 @@ fn build_scope(
 }
 
 fn build_cwd_scope(
-    context: &ReportContext,
+    codex_home: &Path,
+    cache: Rc<RolloutCache>,
+    roots: &[RolloutRecord],
     state: &DesktopState,
     cwd: &str,
-    progress: Option<&mut Progress>,
+    mut progress: Option<&mut Progress>,
 ) -> Result<ProjectReport, ProjectError> {
     let mut thread_ids = Vec::new();
     let mut selection = ProjectSelection {
@@ -457,10 +511,7 @@ fn build_cwd_scope(
         incomplete_root_reports: 0,
         unpriced_root_reports: 0,
     };
-    for root in context
-        .roots()
-        .filter(|root| root.cwd.as_deref() == Some(cwd))
-    {
+    for root in roots.iter().filter(|root| root.cwd.as_deref() == Some(cwd)) {
         if state.assignments.contains_key(&root.id) {
             selection.other_project_exclusions += 1;
         } else if state.projectless.contains(&root.id) {
@@ -472,6 +523,13 @@ fn build_cwd_scope(
         }
     }
     thread_ids.sort();
+    let context = match progress.as_deref_mut() {
+        Some(progress) => {
+            ReportContext::new_for_cached_with_progress(codex_home, &thread_ids, cache, progress)
+        }
+        None => ReportContext::new_for_cached(codex_home, &thread_ids, cache),
+    }
+    .map_err(ReportError::from)?;
     match progress {
         Some(progress) => context.build_project_with_progress(selection, &thread_ids, progress),
         None => context.build_project(selection, &thread_ids),

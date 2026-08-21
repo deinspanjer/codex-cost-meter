@@ -31,3 +31,17 @@ _Avoid_: Project Assignment
 **Project Report**:
 A lifetime aggregate of existing root-thread reports selected through a Desktop Project, path, or thread.
 _Avoid_: Directory report, project statistics
+
+## Rollout analysis
+
+**Rollout Analysis Cache**:
+A disposable copy of derived rollout facts that may be reused only while the corresponding source rollout is unchanged. It is never a source of truth.
+_Avoid_: Report database, usage ledger
+
+**Rollout Revision**:
+The observed state of one rollout source file against which derived facts are valid. A different revision invalidates its cached analysis.
+_Avoid_: Task timestamp, report timestamp
+
+**Rollout Workset**:
+The selected root rollouts and every linked descendant whose usage contributes to their result. Rollouts outside the workset do not participate in the command.
+_Avoid_: Rollout corpus, scan scope

@@ -158,7 +158,17 @@ fn dry_run_prints_one_safe_proposal_without_mutation() {
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(output.stderr.is_empty());
+    assert_eq!(
+        stderr(&output),
+        format!(
+            "created rollout cache at {}\n",
+            fixture
+                .home
+                .path()
+                .join("codex-cost-meter.sqlite")
+                .display()
+        )
+    );
     assert_eq!(stdout.lines().count(), 2);
     assert!(stdout.starts_with("root: Root task -> "));
     assert_eq!(
