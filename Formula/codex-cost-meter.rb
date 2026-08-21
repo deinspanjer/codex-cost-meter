@@ -13,7 +13,7 @@ class CodexCostMeter < Formula
 
   def caveats
     <<~EOS
-      If scheduled updates are installed, rerun this after each Homebrew upgrade:
+      To enable automatic title updates, and again after each Homebrew upgrade:
         codex-cost-meter schedule install
 
       To uninstall, first run `codex-cost-meter schedule remove`, then use
