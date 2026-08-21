@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
 };
 
@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::{
     pricing::{Catalog, PricingError, Usage},
+    progress::Progress,
     rollout::{
         analysis::{AnalysisError, RolloutStats, analyze},
         discovery::RolloutIndex,
@@ -37,6 +38,29 @@ pub(crate) struct Report {
     pub by_rollout_type: BTreeMap<String, StatsReport>,
     pub pricing: PricingReport,
     pub incomplete_input_warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ProjectReport {
+    pub selection: ProjectSelection,
+    pub tree: StatsReport,
+    pub by_model: BTreeMap<String, ModelReport>,
+    pub pricing: PricingReport,
+    pub incomplete_input_warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ProjectSelection {
+    pub target: String,
+    pub resolver: &'static str,
+    pub missing_source_roots: usize,
+    pub direct_assignments: usize,
+    pub workspace_fallbacks: usize,
+    pub projectless_threads: usize,
+    pub projectless_exclusions: usize,
+    pub other_project_exclusions: usize,
+    pub incomplete_root_reports: usize,
+    pub unpriced_root_reports: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +106,7 @@ pub(crate) struct ModelReport {
     pub input_cache_read_tokens: u64,
     pub reasoning_tokens: u64,
     pub output_tokens: u64,
+    pub total_turn_duration_seconds: f64,
     pub estimated_cost_usd: Option<f64>,
     pub known_model_cost_usd: f64,
 }
@@ -112,12 +137,30 @@ impl ReportContext {
     }
 
     pub(crate) fn build(&self, thread_id: &str) -> Result<Report, ReportError> {
+        self.build_inner(thread_id, None)
+    }
+
+    pub(crate) fn build_with_progress(
+        &self,
+        thread_id: &str,
+        progress: &mut Progress,
+    ) -> Result<Report, ReportError> {
+        progress.start_analysis(self.rollout_count(thread_id));
+        self.build_inner(thread_id, Some(progress))
+    }
+
+    fn build_inner(
+        &self,
+        thread_id: &str,
+        progress: Option<&mut Progress>,
+    ) -> Result<Report, ReportError> {
         build_with_state(
             thread_id,
             &self.codex_home,
             &self.index,
             &self.catalog,
             self.session_index(),
+            progress,
         )
     }
 
@@ -125,8 +168,185 @@ impl ReportContext {
         self.index.is_root(thread_id)
     }
 
+    pub(crate) fn roots(&self) -> impl Iterator<Item = &crate::rollout::discovery::RolloutRecord> {
+        self.index.roots()
+    }
+
+    fn rollout_count(&self, thread_id: &str) -> usize {
+        self.index
+            .record(thread_id)
+            .map(|_| self.index.descendants(thread_id).map_or(0, |ids| ids.len()) + 1)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn build_project(
+        &self,
+        selection: ProjectSelection,
+        thread_ids: &[String],
+    ) -> Result<ProjectReport, ReportError> {
+        self.build_project_inner(selection, thread_ids, None)
+    }
+
+    pub(crate) fn build_project_with_progress(
+        &self,
+        selection: ProjectSelection,
+        thread_ids: &[String],
+        progress: &mut Progress,
+    ) -> Result<ProjectReport, ReportError> {
+        progress.start_analysis(thread_ids.iter().map(|id| self.rollout_count(id)).sum());
+        self.build_project_inner(selection, thread_ids, Some(progress))
+    }
+
+    fn build_project_inner(
+        &self,
+        mut selection: ProjectSelection,
+        thread_ids: &[String],
+        mut progress: Option<&mut Progress>,
+    ) -> Result<ProjectReport, ReportError> {
+        let mut tree = empty_stats();
+        let mut by_model = BTreeMap::new();
+        let mut warnings = BTreeSet::new();
+        for thread_id in thread_ids {
+            let report = match self.build_inner(thread_id, progress.as_deref_mut()) {
+                Ok(report) => report,
+                Err(
+                    ReportError::RolloutNotFound { .. }
+                    | ReportError::SelectedRolloutUnreadable { .. },
+                ) => {
+                    selection.incomplete_root_reports += 1;
+                    tree.incomplete_input = true;
+                    warnings.insert("selected root rollout could not be read".into());
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            selection.incomplete_root_reports += usize::from(report.tree.incomplete_input);
+            selection.unpriced_root_reports += usize::from(!report.tree.unpriced_models.is_empty());
+            merge_stats(&mut tree, &report.tree);
+            for (name, model) in report.by_model {
+                merge_model(by_model.entry(name).or_insert_with(empty_model), &model);
+            }
+            warnings.extend(report.incomplete_input_warnings);
+        }
+        Ok(ProjectReport {
+            selection,
+            tree,
+            by_model,
+            pricing: pricing_report(&self.catalog),
+            incomplete_input_warnings: warnings.into_iter().collect(),
+        })
+    }
+
     pub(crate) fn session_index(&self) -> &Snapshot {
         &self.session_index
+    }
+}
+
+impl ReportContext {
+    pub(crate) fn new_with_progress(
+        codex_home: &Path,
+        progress: &mut Progress,
+    ) -> Result<Self, PricingError> {
+        progress.start_indexing();
+        Ok(Self {
+            codex_home: codex_home.into(),
+            index: RolloutIndex::build_with_progress(codex_home, || progress.indexed_file()),
+            catalog: Catalog::embedded()?,
+            session_index: Snapshot::load(codex_home),
+        })
+    }
+}
+
+fn empty_stats() -> StatsReport {
+    StatsReport {
+        rollout_count: 0,
+        majority_turn_model: None,
+        majority_reasoning_level: None,
+        input_tokens: 0,
+        input_cache_write_tokens: 0,
+        input_cache_read_tokens: 0,
+        reasoning_tokens: 0,
+        output_tokens: 0,
+        turns: 0,
+        completed_or_aborted_turns: 0,
+        incomplete_turns: 0,
+        total_turn_duration_seconds: 0.0,
+        estimated_cost_usd: Some(0.0),
+        known_model_cost_usd: 0.0,
+        unpriced_models: BTreeMap::new(),
+        unattributed_usage_tokens: None,
+        incomplete_input: false,
+    }
+}
+
+fn empty_model() -> ModelReport {
+    ModelReport {
+        turns: 0,
+        input_tokens: 0,
+        input_cache_write_tokens: 0,
+        input_cache_read_tokens: 0,
+        reasoning_tokens: 0,
+        output_tokens: 0,
+        total_turn_duration_seconds: 0.0,
+        estimated_cost_usd: Some(0.0),
+        known_model_cost_usd: 0.0,
+    }
+}
+
+fn merge_stats(total: &mut StatsReport, next: &StatsReport) {
+    total.rollout_count += next.rollout_count;
+    total.input_tokens += next.input_tokens;
+    total.input_cache_write_tokens += next.input_cache_write_tokens;
+    total.input_cache_read_tokens += next.input_cache_read_tokens;
+    total.reasoning_tokens += next.reasoning_tokens;
+    total.output_tokens += next.output_tokens;
+    total.turns += next.turns;
+    total.completed_or_aborted_turns += next.completed_or_aborted_turns;
+    total.incomplete_turns += next.incomplete_turns;
+    total.total_turn_duration_seconds += next.total_turn_duration_seconds;
+    total.estimated_cost_usd = total
+        .estimated_cost_usd
+        .zip(next.estimated_cost_usd)
+        .map(|(left, right)| left + right);
+    total.known_model_cost_usd += next.known_model_cost_usd;
+    for (model, tokens) in &next.unpriced_models {
+        *total.unpriced_models.entry(model.clone()).or_default() += tokens;
+    }
+    total.unattributed_usage_tokens = match (
+        total.unattributed_usage_tokens,
+        next.unattributed_usage_tokens,
+    ) {
+        (None, None) => None,
+        (left, right) => Some(left.unwrap_or_default() + right.unwrap_or_default()),
+    };
+    total.incomplete_input |= next.incomplete_input;
+}
+
+fn merge_model(total: &mut ModelReport, next: &ModelReport) {
+    total.turns += next.turns;
+    total.input_tokens += next.input_tokens;
+    total.input_cache_write_tokens += next.input_cache_write_tokens;
+    total.input_cache_read_tokens += next.input_cache_read_tokens;
+    total.reasoning_tokens += next.reasoning_tokens;
+    total.output_tokens += next.output_tokens;
+    total.total_turn_duration_seconds += next.total_turn_duration_seconds;
+    total.estimated_cost_usd = total
+        .estimated_cost_usd
+        .zip(next.estimated_cost_usd)
+        .map(|(left, right)| left + right);
+    total.known_model_cost_usd += next.known_model_cost_usd;
+}
+
+fn pricing_report(catalog: &Catalog) -> PricingReport {
+    PricingReport {
+        basis: "standard API list pricing; per request/turn model; output includes reasoning",
+        as_of: catalog.as_of().into(),
+        source: catalog.source().into(),
+        model_proxies: catalog
+            .proxies()
+            .iter()
+            .map(|(model, target)| (model.clone(), target.clone()))
+            .collect(),
     }
 }
 
@@ -151,6 +371,7 @@ struct ModelAggregate {
     usage: Usage,
     reasoning_output: u64,
     turns: usize,
+    duration_seconds: f64,
     known_cost: f64,
     incomplete: bool,
 }
@@ -172,6 +393,12 @@ impl Aggregate {
         self.turns = self.turns.saturating_add(stats.turns);
         self.ended_turns = self.ended_turns.saturating_add(stats.ended_turns);
         self.duration_seconds += stats.duration.as_seconds_f64();
+        for (model, duration) in &stats.turn_durations {
+            self.models
+                .entry(model.clone())
+                .or_default()
+                .duration_seconds += duration.as_seconds_f64();
+        }
         self.unattributed_tokens = self
             .unattributed_tokens
             .saturating_add(stats.unattributed_tokens);
@@ -261,6 +488,7 @@ impl Aggregate {
                         input_cache_read_tokens: model.usage.cached_input,
                         reasoning_tokens: model.reasoning_output,
                         output_tokens: model.usage.output,
+                        total_turn_duration_seconds: round(model.duration_seconds, 3),
                         estimated_cost_usd: (!model.incomplete).then(|| round(model.known_cost, 8)),
                         known_model_cost_usd: round(model.known_cost, 8),
                     },
@@ -270,8 +498,17 @@ impl Aggregate {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn build(thread_id: &str, codex_home: &Path) -> Result<Report, ReportError> {
     ReportContext::new(codex_home)?.build(thread_id)
+}
+
+pub(crate) fn build_with_progress(
+    thread_id: &str,
+    codex_home: &Path,
+    progress: &mut Progress,
+) -> Result<Report, ReportError> {
+    ReportContext::new_with_progress(codex_home, progress)?.build_with_progress(thread_id, progress)
 }
 
 #[cfg(test)]
@@ -287,6 +524,7 @@ fn build_with_index(
         index,
         catalog,
         &Snapshot::load(codex_home),
+        None,
     )
 }
 
@@ -296,6 +534,7 @@ fn build_with_state(
     index: &RolloutIndex,
     catalog: &Catalog,
     session_index: &Snapshot,
+    mut progress: Option<&mut Progress>,
 ) -> Result<Report, ReportError> {
     let root = index
         .record(thread_id)
@@ -359,6 +598,9 @@ fn build_with_state(
                 warnings.push(format!("descendant rollout {id} could not be read"));
             }
         }
+        if let Some(progress) = progress.as_deref_mut() {
+            progress.analyzed_rollout();
+        }
     }
 
     let by_model = tree_stats.model_reports();
@@ -388,16 +630,7 @@ fn build_with_state(
             .into_iter()
             .map(|(kind, stats)| (kind, stats.report()))
             .collect(),
-        pricing: PricingReport {
-            basis: "standard API list pricing; per request/turn model; output includes reasoning",
-            as_of: catalog.as_of().into(),
-            source: catalog.source().into(),
-            model_proxies: catalog
-                .proxies()
-                .iter()
-                .map(|(model, target)| (model.clone(), target.clone()))
-                .collect(),
-        },
+        pricing: pricing_report(catalog),
         incomplete_input_warnings: {
             if session_index.read_error().is_some() {
                 warnings.push("session index could not be read".into());
@@ -541,6 +774,40 @@ mod tests {
         assert_eq!(report.tree.rollout_count, 2);
         assert_eq!(report.by_rollout_type["security_review"].rollout_count, 1);
         assert_eq!(report.by_model["gpt-5.6-terra"].input_tokens, 100);
+    }
+
+    #[test]
+    fn attributes_completed_turn_duration_to_each_model() {
+        let home = TempDir::new().unwrap();
+        write_jsonl(
+            &home,
+            "sessions/root.jsonl",
+            &[
+                json!({
+                    "type": "session_meta",
+                    "timestamp": "2026-08-13T12:00:00Z",
+                    "payload": {"id": "root", "source": "cli", "cwd": "/tmp/project"},
+                }),
+                json!({"type": "turn_context", "payload": {"turn_id": "terra", "model": "gpt-5.6-terra", "effort": "high"}}),
+                json!({"type": "turn_context", "payload": {"turn_id": "sol", "model": "gpt-5.6-sol", "effort": "high"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:00:01Z", "payload": {"type": "turn_started", "turn_id": "terra"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:00:04Z", "payload": {"type": "turn_complete", "turn_id": "terra"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:00:05Z", "payload": {"type": "turn_started", "turn_id": "sol"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:00:07Z", "payload": {"type": "turn_aborted", "turn_id": "sol"}}),
+            ],
+        );
+
+        let report = build("root", home.path()).unwrap();
+
+        assert_eq!(report.tree.total_turn_duration_seconds, 5.0);
+        assert_eq!(
+            report.by_model["gpt-5.6-terra"].total_turn_duration_seconds,
+            3.0
+        );
+        assert_eq!(
+            report.by_model["gpt-5.6-sol"].total_turn_duration_seconds,
+            2.0
+        );
     }
 
     #[test]

@@ -61,6 +61,448 @@ fn report_with_home(home: &Path, thread_id: &str, json: bool) -> Output {
     command.output().unwrap()
 }
 
+#[test]
+fn forced_progress_keeps_json_stdout_machine_readable() {
+    let home = fixture_home();
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "root", "--json", "--progress", "--codex-home"])
+        .arg(home.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(serde_json::from_slice::<Value>(&output.stdout).is_ok());
+    let stderr = stderr(&output);
+    assert!(stderr.contains("Indexing rollout metadata"));
+    assert!(stderr.contains("Analyzing 1/1 rollouts"));
+    assert_eq!(stderr.matches("Analyzing 1/1 rollouts").count(), 1);
+    assert!(!stderr.contains('\r'));
+}
+
+#[test]
+fn project_path_report_keeps_assigned_and_cli_roots_separate_from_exclusions() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("workspace");
+    fs::create_dir_all(workspace.join("cli")).unwrap();
+    write_jsonl(
+        &home.path().join("sessions/assigned.jsonl"),
+        &[json!({
+            "type": "session_meta",
+            "payload": {"id": "assigned", "source": "cli", "cwd": "/worktree"},
+        })],
+    );
+    write_jsonl(
+        &home.path().join("sessions/cli.jsonl"),
+        &[json!({
+            "type": "session_meta",
+            "payload": {"id": "cli", "source": "cli", "cwd": workspace.join("cli")},
+        })],
+    );
+    write_jsonl(
+        &home.path().join("sessions/projectless.jsonl"),
+        &[json!({
+            "type": "session_meta",
+            "payload": {"id": "projectless", "source": "cli", "cwd": workspace},
+        })],
+    );
+    write_jsonl(
+        &home.path().join("sessions/other.jsonl"),
+        &[json!({
+            "type": "session_meta",
+            "payload": {"id": "other", "source": "cli", "cwd": workspace},
+        })],
+    );
+    fs::write(
+        home.path().join(".codex-global-state.json"),
+        json!({
+            "local-projects": {
+                "project": {"id": "project", "name": "Project", "rootPaths": [workspace]},
+                "other": {"id": "other", "name": "Other", "rootPaths": ["/other"]},
+            },
+            "thread-project-assignments": {
+                "assigned": {"projectId": "project", "projectKind": "local"},
+                "other": {"projectId": "other", "projectKind": "local"},
+            },
+            "projectless-thread-ids": ["projectless"],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "--project"])
+        .arg(&workspace)
+        .args(["--json", "--codex-home"])
+        .arg(home.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["selection"]["resolver"], "source_root_path");
+    assert_eq!(report["selection"]["direct_assignments"], 1);
+    assert_eq!(report["selection"]["workspace_fallbacks"], 1);
+    assert_eq!(report["selection"]["projectless_exclusions"], 1);
+    assert_eq!(report["selection"]["other_project_exclusions"], 1);
+    assert_eq!(report["tree"]["rollout_count"], 2);
+}
+
+#[test]
+fn project_flag_without_a_ref_derives_an_assigned_threads_desktop_project() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    for (id, cwd) in [
+        ("assigned", "/worktree"),
+        ("cli", workspace.to_str().unwrap()),
+    ] {
+        write_jsonl(
+            &home.path().join(format!("sessions/{id}.jsonl")),
+            &[json!({
+                "type": "session_meta",
+                "payload": {"id": id, "source": "cli", "cwd": cwd},
+            })],
+        );
+    }
+    fs::write(
+        home.path().join(".codex-global-state.json"),
+        json!({
+            "local-projects": {
+                "project": {"id": "project", "name": "Project", "rootPaths": [workspace]},
+            },
+            "thread-project-assignments": {
+                "assigned": {"projectId": "project", "projectKind": "local"},
+            },
+            "projectless-thread-ids": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "assigned", "--project", "--json", "--codex-home"])
+        .arg(home.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["selection"]["resolver"], "thread_assignment");
+    assert_eq!(report["selection"]["direct_assignments"], 1);
+    assert_eq!(report["selection"]["workspace_fallbacks"], 1);
+    assert_eq!(report["tree"]["rollout_count"], 2);
+}
+
+#[test]
+fn project_flag_without_a_ref_rolls_up_a_projectless_threads_exact_cwd() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    for id in ["projectless", "cli", "assigned"] {
+        write_jsonl(
+            &home.path().join(format!("sessions/{id}.jsonl")),
+            &[json!({
+                "type": "session_meta",
+                "payload": {"id": id, "source": "cli", "cwd": workspace},
+            })],
+        );
+    }
+    fs::write(
+        home.path().join(".codex-global-state.json"),
+        json!({
+            "local-projects": {
+                "other": {"id": "other", "name": "Other", "rootPaths": ["/other"]},
+            },
+            "thread-project-assignments": {
+                "assigned": {"projectId": "other", "projectKind": "local"},
+            },
+            "projectless-thread-ids": ["projectless"],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args([
+            "report",
+            "projectless",
+            "--project",
+            "--json",
+            "--codex-home",
+        ])
+        .arg(home.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["selection"]["resolver"], "thread_cwd");
+    assert_eq!(report["selection"]["projectless_threads"], 1);
+    assert_eq!(report["selection"]["workspace_fallbacks"], 1);
+    assert_eq!(report["selection"]["other_project_exclusions"], 1);
+    assert_eq!(report["tree"]["rollout_count"], 2);
+}
+
+#[test]
+fn project_name_selects_all_of_its_source_roots() {
+    let home = TempDir::new().unwrap();
+    let first_root = home.path().join("first");
+    let second_root = home.path().join("second");
+    fs::create_dir_all(&first_root).unwrap();
+    fs::create_dir_all(&second_root).unwrap();
+    for (id, cwd) in [("first", &first_root), ("second", &second_root)] {
+        write_jsonl(
+            &home.path().join(format!("sessions/{id}.jsonl")),
+            &[json!({
+                "type": "session_meta",
+                "payload": {"id": id, "source": "cli", "cwd": cwd},
+            })],
+        );
+    }
+    fs::write(
+        home.path().join(".codex-global-state.json"),
+        json!({
+            "local-projects": {
+                "project": {"id": "project", "name": "Project", "rootPaths": [first_root, second_root]},
+            },
+            "thread-project-assignments": {},
+            "projectless-thread-ids": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args([
+            "report",
+            "--project",
+            "Project",
+            "--json",
+            "--progress",
+            "--codex-home",
+        ])
+        .arg(home.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["selection"]["resolver"], "project_name");
+    assert_eq!(report["selection"]["workspace_fallbacks"], 2);
+    assert_eq!(report["tree"]["rollout_count"], 2);
+    assert!(stderr(&output).contains("Analyzing 2/2 rollouts"));
+}
+
+#[test]
+fn named_project_keeps_direct_assignments_when_a_source_root_is_missing() {
+    let home = TempDir::new().unwrap();
+    let missing_root = home.path().join("missing");
+    write_jsonl(
+        &home.path().join("sessions/worktree.jsonl"),
+        &[json!({
+            "type": "session_meta",
+            "payload": {"id": "worktree", "source": "cli", "cwd": "/outside"},
+        })],
+    );
+    fs::write(
+        home.path().join(".codex-global-state.json"),
+        json!({
+            "local-projects": {
+                "project": {"id": "project", "name": "Project", "rootPaths": [missing_root]},
+            },
+            "thread-project-assignments": {
+                "worktree": {"projectId": "project", "projectKind": "local"},
+            },
+            "projectless-thread-ids": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "--project", "Project", "--json", "--codex-home"])
+        .arg(home.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["selection"]["missing_source_roots"], 1);
+    assert_eq!(report["selection"]["direct_assignments"], 1);
+    assert!(
+        report["incomplete_input_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("source root"))
+    );
+}
+
+#[test]
+fn ambiguous_source_root_lists_the_matching_projects() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(
+        home.path().join(".codex-global-state.json"),
+        json!({
+            "local-projects": {
+                "first": {"id": "first", "name": "First", "rootPaths": [workspace]},
+                "second": {"id": "second", "name": "Second", "rootPaths": [workspace]},
+            },
+            "thread-project-assignments": {},
+            "projectless-thread-ids": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "--project"])
+        .arg(&workspace)
+        .args(["--codex-home"])
+        .arg(home.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("matches: First, Second"));
+}
+
+#[test]
+fn explicit_project_rejects_a_thread_owned_by_another_project() {
+    let home = TempDir::new().unwrap();
+    let first_root = home.path().join("first");
+    let second_root = home.path().join("second");
+    fs::create_dir_all(&first_root).unwrap();
+    fs::create_dir_all(&second_root).unwrap();
+    write_jsonl(
+        &home.path().join("sessions/other.jsonl"),
+        &[json!({
+            "type": "session_meta",
+            "payload": {"id": "other", "source": "cli", "cwd": second_root},
+        })],
+    );
+    fs::write(
+        home.path().join(".codex-global-state.json"),
+        json!({
+            "local-projects": {
+                "first": {"id": "first", "name": "First", "rootPaths": [first_root]},
+                "second": {"id": "second", "name": "Second", "rootPaths": [second_root]},
+            },
+            "thread-project-assignments": {
+                "other": {"projectId": "second", "projectKind": "local"},
+            },
+            "projectless-thread-ids": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "other", "--project", "First", "--codex-home"])
+        .arg(home.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(stderr(&output).contains("does not belong"));
+}
+
+#[test]
+fn bare_report_defaults_to_the_current_working_directory() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    write_jsonl(
+        &home.path().join("sessions/root.jsonl"),
+        &[json!({
+            "type": "session_meta",
+            "payload": {"id": "root", "source": "cli", "cwd": workspace},
+        })],
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "--json", "--codex-home"])
+        .arg(home.path())
+        .current_dir(&workspace)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["selection"]["resolver"], "current_directory");
+    assert_eq!(report["selection"]["workspace_fallbacks"], 1);
+    assert_eq!(report["tree"]["rollout_count"], 1);
+}
+
+#[test]
+fn unique_fuzzy_project_name_resolves_before_historical_cwds() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    write_jsonl(
+        &home.path().join("sessions/root.jsonl"),
+        &[json!({
+            "type": "session_meta",
+            "payload": {"id": "root", "source": "cli", "cwd": workspace},
+        })],
+    );
+    fs::write(
+        home.path().join(".codex-global-state.json"),
+        json!({
+            "local-projects": {
+                "project": {"id": "project", "name": "Project", "rootPaths": [workspace]},
+            },
+            "thread-project-assignments": {},
+            "projectless-thread-ids": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "--project", "Projec", "--json", "--codex-home"])
+        .arg(home.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["selection"]["resolver"], "fuzzy_project_name");
+    assert_eq!(report["tree"]["rollout_count"], 1);
+}
+
+#[test]
+fn unique_historical_cwd_match_is_used_when_no_project_name_or_path_matches() {
+    let home = TempDir::new().unwrap();
+    write_jsonl(
+        &home.path().join("sessions/root.jsonl"),
+        &[json!({
+            "type": "session_meta",
+            "payload": {"id": "root", "source": "cli", "cwd": "/gone/workspace"},
+        })],
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args([
+            "report",
+            "--project",
+            "/gone/workspace",
+            "--json",
+            "--codex-home",
+        ])
+        .arg(home.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["selection"]["resolver"], "fuzzy_historical_cwd");
+    assert_eq!(report["tree"]["rollout_count"], 1);
+}
+
 fn stderr(output: &Output) -> String {
     String::from_utf8(output.stderr.clone()).unwrap()
 }
@@ -121,7 +563,9 @@ fn help_and_version_describe_the_public_cli_contract() {
     assert!(report_help.status.success());
     assert!(report_help.stderr.is_empty());
     let report_help = String::from_utf8(report_help.stdout).unwrap();
-    assert!(report_help.contains("Task ID"));
+    assert!(report_help.contains("Codex session ID"));
+    assert!(report_help.contains("--project"));
+    assert!(report_help.contains("--progress"));
     assert!(report_help.contains("--json"));
 
     assert!(version.status.success());
@@ -239,17 +683,6 @@ fn report_uses_complete_home_drive_and_path_as_a_codex_home_fallback() {
         "root"
     );
     assert!(output.stderr.is_empty());
-}
-
-#[test]
-fn missing_thread_id_is_a_clap_usage_error() {
-    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
-        .arg("report")
-        .output()
-        .unwrap();
-
-    assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("Usage:"));
 }
 
 #[test]

@@ -123,10 +123,23 @@ pub(crate) struct ScheduledUpdateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct ReportArgs {
-    #[arg(help = "Task ID to report, from the Codex task URL.")]
-    pub(crate) thread_id: String,
+    #[arg(help = "Codex session ID, also called a thread or rollout ID.")]
+    pub(crate) thread_id: Option<String>,
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_name = "PROJECT_REF",
+        help = "Report a Desktop Project or path; without a value, derive it from the task."
+    )]
+    pub(crate) project: Option<String>,
     #[arg(long, help = "Write the report as JSON.")]
     pub(crate) json: bool,
+    #[arg(
+        long,
+        help = "Show report progress even when stderr is not a terminal."
+    )]
+    pub(crate) progress: bool,
     #[arg(long, help = "Use this Codex storage directory.")]
     codex_home: Option<PathBuf>,
 }

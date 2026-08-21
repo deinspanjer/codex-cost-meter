@@ -10,6 +10,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 const MAX_JSONL_RECORD_BYTES: usize = 16 * 1024 * 1024;
+const INITIAL_JSONL_RECORD_BYTES: usize = 8 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RolloutKind {
@@ -67,6 +68,10 @@ pub(crate) struct RolloutIndex {
 
 impl RolloutIndex {
     pub(crate) fn build(home: &Path) -> Self {
+        Self::build_with_progress(home, || {})
+    }
+
+    pub(crate) fn build_with_progress(home: &Path, mut indexed_file: impl FnMut()) -> Self {
         let mut candidates = Vec::new();
         let mut warnings = Vec::new();
         let mut oversized_lines_skipped = 0;
@@ -79,6 +84,7 @@ impl RolloutIndex {
                 &mut warnings,
                 &mut oversized_lines_skipped,
                 &mut malformed_lines_skipped,
+                &mut indexed_file,
             );
         }
 
@@ -113,6 +119,12 @@ impl RolloutIndex {
         self.records
             .get(id)
             .is_some_and(|record| matches!(&record.kind, RolloutKind::Root))
+    }
+
+    pub(crate) fn roots(&self) -> impl Iterator<Item = &RolloutRecord> {
+        self.records
+            .values()
+            .filter(|record| matches!(record.kind, RolloutKind::Root))
     }
 
     pub(crate) fn descendants(&self, root_id: &str) -> Option<Vec<String>> {
@@ -152,6 +164,7 @@ fn scan_root(
     warnings: &mut Vec<DiscoveryWarning>,
     oversized_lines_skipped: &mut usize,
     malformed_lines_skipped: &mut usize,
+    indexed_file: &mut impl FnMut(),
 ) {
     let metadata = match fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
@@ -220,6 +233,7 @@ fn scan_root(
                     oversized_lines_skipped,
                     malformed_lines_skipped,
                 );
+                indexed_file();
             }
         }
     }
@@ -243,13 +257,15 @@ fn scan_file(
         }
     };
     let mut record = None;
-    match read_jsonl(path, |line| match serde_json::from_slice::<Value>(line) {
+    match read_jsonl_until(path, |line| match serde_json::from_slice::<Value>(line) {
         Ok(value) => {
-            if record.is_none() {
-                record = record_from_value(&value, path);
-            }
+            record = record_from_value(&value, path);
+            record.is_some()
         }
-        Err(_) => *malformed_lines_skipped += 1,
+        Err(_) => {
+            *malformed_lines_skipped += 1;
+            false
+        }
     }) {
         Ok(summary) => *oversized_lines_skipped += summary.oversized_lines_skipped,
         Err(error) => warnings.push(DiscoveryWarning {
@@ -266,12 +282,22 @@ pub(crate) fn read_jsonl(
     path: &Path,
     mut visitor: impl FnMut(&[u8]),
 ) -> Result<LineReadSummary, JsonlReadError> {
+    read_jsonl_until(path, |line| {
+        visitor(line);
+        false
+    })
+}
+
+fn read_jsonl_until(
+    path: &Path,
+    mut visitor: impl FnMut(&[u8]) -> bool,
+) -> Result<LineReadSummary, JsonlReadError> {
     let file = File::open(path).map_err(|source| JsonlReadError::Read {
         path: path.to_path_buf(),
         source,
     })?;
     let mut reader = BufReader::new(file);
-    let mut line = Vec::with_capacity(MAX_JSONL_RECORD_BYTES + 1);
+    let mut line = Vec::with_capacity(INITIAL_JSONL_RECORD_BYTES);
     let mut oversized = false;
     let mut summary = LineReadSummary::default();
 
@@ -303,8 +329,8 @@ pub(crate) fn read_jsonl(
         if newline.is_some() {
             if oversized {
                 summary.oversized_lines_skipped += 1;
-            } else {
-                visitor(&line);
+            } else if visitor(&line) {
+                return Ok(summary);
             }
             line.clear();
             oversized = false;
@@ -543,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_malformed_and_oversized_records() {
+    fn discovery_stops_after_finding_session_metadata() {
         let home = TempDir::new().unwrap();
         let path = home.path().join("sessions/records.jsonl");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -559,7 +585,7 @@ mod tests {
 
         let index = RolloutIndex::build(home.path());
         assert!(index.record("valid").is_some());
-        assert_eq!(index.oversized_lines_skipped(), 1);
+        assert_eq!(index.oversized_lines_skipped(), 0);
         assert_eq!(index.malformed_lines_skipped(), 1);
     }
 

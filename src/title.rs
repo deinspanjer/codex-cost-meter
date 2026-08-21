@@ -241,7 +241,11 @@ fn format_cost(cost: f64, incomplete: bool) -> String {
 }
 
 fn format_tokens(tokens: u64, prefix: char) -> String {
-    let value = if tokens < 1_000 {
+    format!("{prefix}{}", compact_tokens(tokens))
+}
+
+pub(crate) fn compact_tokens(tokens: u64) -> String {
+    if tokens < 1_000 {
         tokens.to_string()
     } else {
         let (divisor, unit) = if tokens >= 1_000_000_000 {
@@ -252,8 +256,7 @@ fn format_tokens(tokens: u64, prefix: char) -> String {
             (1_000, 'K')
         };
         format_scaled(tokens, divisor, unit)
-    };
-    format!("{prefix}{value}")
+    }
 }
 
 fn format_scaled(tokens: u64, divisor: u64, unit: char) -> String {

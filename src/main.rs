@@ -1,6 +1,8 @@
 mod cli;
 mod output;
 mod pricing;
+mod progress;
+mod project;
 mod report;
 mod rollout;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -11,7 +13,7 @@ mod update;
 
 use std::{
     error::Error,
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     process::ExitCode,
 };
 
@@ -34,6 +36,8 @@ enum AppError {
     Cli(#[from] cli::CliError),
     #[error(transparent)]
     Report(#[from] ReportError),
+    #[error(transparent)]
+    Project(#[from] project::ProjectError),
     #[error(transparent)]
     Update(#[from] update::UpdateError),
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -95,18 +99,50 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), AppError> {
-    run_with_writer(cli, &mut io::stdout().lock())
+    let stderr = io::stderr();
+    let terminal = stderr.is_terminal();
+    run_with_writers(cli, &mut io::stdout().lock(), &mut stderr.lock(), terminal)
 }
 
-fn run_with_writer(cli: Cli, writer: &mut impl Write) -> Result<(), AppError> {
+fn run_with_writers(
+    cli: Cli,
+    writer: &mut impl Write,
+    error_writer: &mut impl Write,
+    stderr_is_terminal: bool,
+) -> Result<(), AppError> {
     match cli.command {
         Command::Report(args) => {
-            let report = report::build(&args.thread_id, &args.codex_home()?)?;
-            let rendered = if args.json {
-                format!("{}\n", output::json(&report)?)
+            let home = args.codex_home()?;
+            let mut progress =
+                progress::Progress::new(error_writer, args.progress, stderr_is_terminal);
+            let rendered = if let Some(project_ref) = args.project {
+                let report = project::build_with_progress(
+                    &home,
+                    args.thread_id.as_deref(),
+                    &project_ref,
+                    &mut progress,
+                )?;
+                if args.json {
+                    format!("{}\n", output::json(&report)?)
+                } else {
+                    output::project_human(&report)
+                }
+            } else if let Some(thread_id) = args.thread_id {
+                let report = report::build_with_progress(&thread_id, &home, &mut progress)?;
+                if args.json {
+                    format!("{}\n", output::json(&report)?)
+                } else {
+                    output::human(&report)
+                }
             } else {
-                output::human(&report)
+                let report = project::build_with_progress(&home, None, "", &mut progress)?;
+                if args.json {
+                    format!("{}\n", output::json(&report)?)
+                } else {
+                    output::project_human(&report)
+                }
             };
+            progress.finish();
             writer
                 .write_all(rendered.as_bytes())
                 .map_err(|source| AppError::WriteReport { source })?;
