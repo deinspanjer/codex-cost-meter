@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.8.1]
+
+- Avoid opening unrelated Codex rollout files for exact task reports and bounded title updates while preserving descendant reconciliation.
+
 ## [0.8.0]
 
 - Add lifetime Desktop Project reports with progress, compact human output, per-model agent-turn durations, and incomplete-cost explanations.
