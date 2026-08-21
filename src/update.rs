@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 use crate::{
     pricing::PricingError,
     report::{ReportContext, ReportError},
+    rollout::discovery::source_is_root,
     session_index::{AppendError, Snapshot, append},
     title::{TitleError, TitleFormat},
 };
@@ -134,19 +135,42 @@ struct ThreadRow {
     history_mode: Option<String>,
     updated_at: i64,
     first_user_message: Option<String>,
+    source: Option<String>,
 }
 
 pub(crate) fn run(home: &Path, options: &UpdateOptions) -> Result<UpdateResult, UpdateError> {
     let _lock = acquire_lock(home)?;
     let mut connection = open_database(home, options.apply)?;
-    validate_schema(&connection)?;
-    let rows = read_rows(&connection)?;
-    let context = ReportContext::new(home)?;
-    let snapshot = context.session_index();
+    let source_available = validate_schema(&connection)?;
+    let rows = read_rows(&connection, source_available)?;
+    let snapshot = Snapshot::load(home);
     if let Some(source) = snapshot.read_error() {
         return Err(UpdateError::SessionIndexUnreadable { kind: source });
     }
-    let selected = select_rows(&rows, &context, snapshot, options)?;
+    if !source_available {
+        let context = ReportContext::new(home)?;
+        let roots = rows.iter().filter(|row| context.is_root(&row.id)).collect();
+        let selected = select_rows(roots, &snapshot, options)?;
+        return finish_updates(home, &mut connection, selected, &context, options);
+    }
+    let roots = rows.iter().filter(|row| row.is_root()).collect();
+    let selected = select_rows(roots, &snapshot, options)?;
+    let selected_ids = selected
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    let context = ReportContext::new_for(home, &selected_ids)?;
+    finish_updates(home, &mut connection, selected, &context, options)
+}
+
+fn finish_updates(
+    home: &Path,
+    connection: &mut Connection,
+    selected: Vec<&ThreadRow>,
+    context: &ReportContext,
+    options: &UpdateOptions,
+) -> Result<UpdateResult, UpdateError> {
+    let snapshot = context.session_index();
     let deadline = options
         .max_runtime
         .map(|duration| Instant::now() + duration);
@@ -165,7 +189,7 @@ pub(crate) fn run(home: &Path, options: &UpdateOptions) -> Result<UpdateResult, 
         });
     }
     if options.apply {
-        apply(&mut connection, &proposals)?;
+        apply(connection, &proposals)?;
         let index_path = home.join("session_index.jsonl");
         append(
             &index_path,
@@ -246,7 +270,7 @@ fn open_database(home: &Path, apply: bool) -> Result<Connection, UpdateError> {
     Ok(connection)
 }
 
-fn validate_schema(connection: &Connection) -> Result<(), UpdateError> {
+fn validate_schema(connection: &Connection) -> Result<bool, UpdateError> {
     let mut statement = connection
         .prepare("PRAGMA table_info(threads)")
         .map_err(|source| UpdateError::Database { source })?;
@@ -262,14 +286,18 @@ fn validate_schema(connection: &Connection) -> Result<(), UpdateError> {
             });
         }
     }
-    Ok(())
+    Ok(columns.contains("source"))
 }
 
-fn read_rows(connection: &Connection) -> Result<Vec<ThreadRow>, UpdateError> {
+fn read_rows(
+    connection: &Connection,
+    source_available: bool,
+) -> Result<Vec<ThreadRow>, UpdateError> {
+    let source = if source_available { "source" } else { "NULL" };
     let mut statement = connection
-        .prepare(
-            "SELECT id, title, name, history_mode, updated_at, first_user_message FROM threads",
-        )
+        .prepare(&format!(
+            "SELECT id, title, name, history_mode, updated_at, first_user_message, {source} FROM threads"
+        ))
         .map_err(|source| UpdateError::Database { source })?;
     statement
         .query_map([], |row| {
@@ -280,6 +308,7 @@ fn read_rows(connection: &Connection) -> Result<Vec<ThreadRow>, UpdateError> {
                 history_mode: row.get(3)?,
                 updated_at: row.get(4)?,
                 first_user_message: row.get(5)?,
+                source: row.get(6)?,
             })
         })
         .map_err(|source| UpdateError::Database { source })?
@@ -288,15 +317,10 @@ fn read_rows(connection: &Connection) -> Result<Vec<ThreadRow>, UpdateError> {
 }
 
 fn select_rows<'a>(
-    rows: &'a [ThreadRow],
-    context: &ReportContext,
+    roots: Vec<&'a ThreadRow>,
     snapshot: &Snapshot,
     options: &UpdateOptions,
 ) -> Result<Vec<&'a ThreadRow>, UpdateError> {
-    let roots = rows
-        .iter()
-        .filter(|row| context.is_root(&row.id))
-        .collect::<Vec<_>>();
     if options.idle_minutes.is_some() {
         return Ok(select_idle(roots, snapshot, options));
     }
@@ -341,6 +365,12 @@ fn select_rows<'a>(
         }
     }
     Ok(selected)
+}
+
+impl ThreadRow {
+    fn is_root(&self) -> bool {
+        self.source.as_deref().is_some_and(source_is_root)
+    }
 }
 
 fn select_idle<'a>(

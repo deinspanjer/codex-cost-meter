@@ -6,6 +6,7 @@ use std::{
     time::SystemTime,
 };
 
+use rusqlite::{Connection, OpenFlags, params_from_iter};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -88,7 +89,53 @@ impl RolloutIndex {
             );
         }
 
-        let records = resolve_duplicates(candidates);
+        Self::from_records(
+            resolve_duplicates(candidates),
+            warnings,
+            oversized_lines_skipped,
+            malformed_lines_skipped,
+        )
+    }
+
+    pub(crate) fn build_for(home: &Path, ids: &[String], mut indexed_file: impl FnMut()) -> Self {
+        targeted_paths(home, ids)
+            .and_then(|paths| {
+                let mut candidates = Vec::new();
+                let mut warnings = Vec::new();
+                let mut oversized_lines_skipped = 0;
+                let mut malformed_lines_skipped = 0;
+                for path in &paths {
+                    scan_file(
+                        path,
+                        &mut candidates,
+                        &mut warnings,
+                        &mut oversized_lines_skipped,
+                        &mut malformed_lines_skipped,
+                    );
+                    indexed_file();
+                }
+                let records = resolve_duplicates(candidates);
+                (warnings.is_empty()
+                    && records.len() == paths.len()
+                    && ids.iter().all(|id| records.contains_key(id)))
+                .then(|| {
+                    Self::from_records(
+                        records,
+                        warnings,
+                        oversized_lines_skipped,
+                        malformed_lines_skipped,
+                    )
+                })
+            })
+            .unwrap_or_else(|| Self::build_with_progress(home, indexed_file))
+    }
+
+    fn from_records(
+        records: HashMap<String, RolloutRecord>,
+        warnings: Vec<DiscoveryWarning>,
+        oversized_lines_skipped: usize,
+        malformed_lines_skipped: usize,
+    ) -> Self {
         let mut children: HashMap<String, Vec<String>> = HashMap::new();
         for record in records.values() {
             if let Some(parent_id) = &record.parent_id {
@@ -101,7 +148,6 @@ impl RolloutIndex {
         for child_ids in children.values_mut() {
             child_ids.sort();
         }
-
         Self {
             records,
             children,
@@ -156,6 +202,113 @@ impl RolloutIndex {
     pub(crate) fn malformed_lines_skipped(&self) -> usize {
         self.malformed_lines_skipped
     }
+}
+
+fn targeted_paths(home: &Path, ids: &[String]) -> Option<Vec<PathBuf>> {
+    if ids.is_empty() {
+        return Some(Vec::new());
+    }
+    let database = [
+        home.join("state_5.sqlite"),
+        home.join("sqlite/state_5.sqlite"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())?;
+    let connection =
+        Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let values = std::iter::repeat_n("(?)", ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "WITH RECURSIVE seed(id) AS (
+             VALUES {values}
+             UNION
+             SELECT t.id
+             FROM threads t
+             LEFT JOIN thread_spawn_edges e ON e.child_thread_id = t.id
+             WHERE e.child_thread_id IS NULL
+               AND (t.source LIKE '%\"subagent\"%' OR t.source LIKE '%\"internal\"%')
+         ), selected(id) AS (
+             SELECT id FROM seed
+             UNION
+             SELECT e.child_thread_id
+             FROM thread_spawn_edges e
+             JOIN selected s ON s.id = e.parent_thread_id
+         )
+         SELECT DISTINCT t.rollout_path
+         FROM threads t
+         JOIN selected s ON s.id = t.id"
+    );
+    let mut statement = connection.prepare(&sql).ok()?;
+    let rows = statement
+        .query_map(params_from_iter(ids), |row| row.get::<_, String>(0))
+        .ok()?;
+    let mut paths = rows
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?
+        .into_iter()
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                home.join(path)
+            }
+        })
+        .collect::<Vec<_>>();
+    let all_paths = connection
+        .prepare("SELECT rollout_path FROM threads")
+        .ok()?
+        .query_map([], |row| row.get::<_, String>(0))
+        .ok()?
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?
+        .into_iter()
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                home.join(path)
+            }
+        })
+        .collect::<HashSet<_>>();
+    paths.extend(unindexed_rollout_paths(home, &all_paths)?);
+    paths.sort();
+    paths.dedup();
+    Some(paths)
+}
+
+fn unindexed_rollout_paths(home: &Path, indexed: &HashSet<PathBuf>) -> Option<Vec<PathBuf>> {
+    let mut unindexed = Vec::new();
+    for root in [home.join("sessions"), home.join("archived_sessions")] {
+        let metadata = match fs::symlink_metadata(&root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(_) => return None,
+        };
+        if !metadata.is_dir() {
+            continue;
+        }
+        let mut directories = vec![root];
+        while let Some(directory) = directories.pop() {
+            for entry in fs::read_dir(directory).ok()? {
+                let path = entry.ok()?.path();
+                let metadata = fs::symlink_metadata(&path).ok()?;
+                if metadata.is_dir() {
+                    directories.push(path);
+                } else if metadata.is_file()
+                    && path
+                        .extension()
+                        .is_some_and(|extension| extension == "jsonl")
+                    && !indexed.contains(&path)
+                {
+                    unindexed.push(path);
+                }
+            }
+        }
+    }
+    Some(unindexed)
 }
 
 fn scan_root(
@@ -407,6 +560,13 @@ fn rollout_kind(source: Option<&Value>) -> RolloutKind {
     }
 }
 
+pub(crate) fn source_is_root(source: &str) -> bool {
+    serde_json::from_str(source)
+        .ok()
+        .as_ref()
+        .is_none_or(|source| matches!(rollout_kind(Some(source)), RolloutKind::Root))
+}
+
 fn resolve_duplicates(
     candidates: Vec<(RolloutRecord, SystemTime)>,
 ) -> HashMap<String, RolloutRecord> {
@@ -436,6 +596,7 @@ mod tests {
         time::{Duration, UNIX_EPOCH},
     };
 
+    use rusqlite::{Connection, params};
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -498,6 +659,100 @@ mod tests {
             index.record("child").unwrap().kind,
             RolloutKind::SecurityReview
         );
+    }
+
+    #[test]
+    fn targeted_index_skips_unrelated_rollouts_and_keeps_all_descendant_sources() {
+        let home = TempDir::new().unwrap();
+        let root = write_jsonl(
+            &home,
+            "sessions/root.jsonl",
+            &[meta("root", None, json!("cli"))],
+        );
+        let child = write_jsonl(
+            &home,
+            "sessions/child.jsonl",
+            &[meta(
+                "child",
+                None,
+                json!({"subagent": {"thread_spawn": {"parent_thread_id": "root"}}}),
+            )],
+        );
+        let guardian = write_jsonl(
+            &home,
+            "archived_sessions/guardian.jsonl",
+            &[meta(
+                "guardian",
+                Some("root"),
+                json!({"subagent": {"other": "guardian"}}),
+            )],
+        );
+        write_jsonl(
+            &home,
+            "sessions/lagged.jsonl",
+            &[meta(
+                "lagged",
+                Some("root"),
+                json!({"subagent": {"other": "security-review"}}),
+            )],
+        );
+        let unrelated = home.path().join("sessions/unrelated.jsonl");
+        fs::write(
+            &unrelated,
+            format!("not json\n{}\n", meta("unrelated", None, json!("cli"))),
+        )
+        .unwrap();
+        let database = Connection::open(home.path().join("state_5.sqlite")).unwrap();
+        database
+            .execute_batch(
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, source TEXT);
+                 CREATE TABLE thread_spawn_edges (
+                     parent_thread_id TEXT, child_thread_id TEXT PRIMARY KEY
+                 );",
+            )
+            .unwrap();
+        for (id, path, source) in [
+            ("root", root, "cli".into()),
+            (
+                "child",
+                child,
+                json!({"subagent": {"thread_spawn": {"parent_thread_id": "root"}}}).to_string(),
+            ),
+            (
+                "guardian",
+                guardian,
+                json!({"subagent": {"other": "guardian"}}).to_string(),
+            ),
+            ("unrelated", unrelated, "cli".into()),
+        ] {
+            database
+                .execute(
+                    "INSERT INTO threads VALUES (?1, ?2, ?3)",
+                    params![id, path.to_string_lossy(), source],
+                )
+                .unwrap();
+        }
+        database
+            .execute(
+                "INSERT INTO thread_spawn_edges VALUES ('root', 'child')",
+                [],
+            )
+            .unwrap();
+
+        let mut opened = 0;
+        let index = RolloutIndex::build_for(home.path(), &["root".into()], || opened += 1);
+
+        assert_eq!(
+            index.descendants("root").unwrap(),
+            vec!["child", "guardian", "lagged"]
+        );
+        assert_eq!(
+            index.record("guardian").unwrap().kind,
+            RolloutKind::SecurityReview
+        );
+        assert!(index.record("unrelated").is_none());
+        assert_eq!(index.malformed_lines_skipped(), 0);
+        assert_eq!(opened, 4);
     }
 
     #[test]

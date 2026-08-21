@@ -23,7 +23,11 @@ impl Fixture {
             .execute_batch(
                 "CREATE TABLE threads (
             id TEXT PRIMARY KEY, title TEXT, name TEXT, history_mode TEXT,
-            updated_at INTEGER, first_user_message TEXT
+            updated_at INTEGER, first_user_message TEXT, source TEXT,
+            rollout_path TEXT
+        );
+        CREATE TABLE thread_spawn_edges (
+            parent_thread_id TEXT, child_thread_id TEXT PRIMARY KEY
         )",
             )
             .unwrap();
@@ -31,13 +35,25 @@ impl Fixture {
             ("root", "Stored root", "Root task"),
             ("child", "Stored child", "Child task"),
         ] {
+            let path = home.path().join("sessions").join(format!("{id}.jsonl"));
+            let source = if id == "root" {
+                "cli".into()
+            } else {
+                json!({"subagent":{"thread_spawn":{"parent_thread_id":"root"}}}).to_string()
+            };
             connection
                 .execute(
-                    "INSERT INTO threads VALUES (?1, ?2, ?3, 'paginated', 0, 'Prompt')",
-                    params![id, title, name],
+                    "INSERT INTO threads VALUES (?1, ?2, ?3, 'paginated', 0, 'Prompt', ?4, ?5)",
+                    params![id, title, name, source, path.to_string_lossy()],
                 )
                 .unwrap();
         }
+        connection
+            .execute(
+                "INSERT INTO thread_spawn_edges VALUES ('root', 'child')",
+                [],
+            )
+            .unwrap();
         rollout(home.path(), "root", None);
         rollout(home.path(), "child", Some("root"));
         fs::write(home.path().join("session_index.jsonl"), format!("{}\n{}\n",
