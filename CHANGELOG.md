@@ -2,7 +2,10 @@
 
 ## [Unreleased]
 
+## [0.8.2]
+
 - Cache derived rollout analysis in an app-owned SQLite database, add selected-workset `--refresh`, and avoid unrelated rollout processing during exact, project, and update commands.
+- Add a source-building Homebrew formula, locked release builds, and GitHub provenance attestations for release assets.
 
 ## [0.8.1]
 

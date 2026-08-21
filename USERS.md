@@ -2,14 +2,38 @@
 
 ## Install and run
 
-To produce your first report:
+### Homebrew on macOS
+
+Homebrew is the recommended macOS path. The custom tap builds the pinned release source with its committed `Cargo.lock` and links the command onto `PATH`:
+
+```text
+brew tap deinspanjer/codex-cost-meter https://github.com/deinspanjer/codex-cost-meter
+brew install deinspanjer/codex-cost-meter/codex-cost-meter
+codex-cost-meter report <THREAD_ID>
+```
+
+After `brew upgrade codex-cost-meter`, rerun `codex-cost-meter schedule install` if scheduled updates were installed; the schedule stores the resolved versioned Cellar path. To uninstall, use `codex-cost-meter schedule remove` followed by `brew uninstall codex-cost-meter`. Do not run the utility's self-uninstall on a Homebrew-owned executable.
+
+### Cargo source install
+
+With Rust 1.97.1 or newer installed, macOS, Windows, and Linux can build a pinned release directly from its tag:
+
+```text
+cargo install --locked --git https://github.com/deinspanjer/codex-cost-meter --tag v<VERSION> codex-cost-meter
+```
+
+Replace `<VERSION>` with the latest stable version. Cargo installs to its configured binary directory, normally `$CARGO_HOME/bin` or `~/.cargo/bin` on macOS and Linux and `%USERPROFILE%\.cargo\bin` on Windows. A local source build avoids the browser-download path, but it does not establish an Apple or Microsoft publisher identity or override organizational application-control policy. Remove a schedule before running `cargo uninstall codex-cost-meter`.
+
+### Direct release archives
+
+Use a direct archive when installing Homebrew or a Rust toolchain is not worthwhile:
 
 1. Open the [latest stable release](https://github.com/deinspanjer/codex-cost-meter/releases/latest). Download the macOS Universal 2 `.tar.gz` archive, Windows x64 `.zip` archive, Linux x86_64 musl `.tar.gz` archive, or Linux aarch64 musl `.tar.gz` archive, plus that archive's matching `.sha256` file.
 2. Verify the download before extracting it. On macOS, run `shasum -a 256 -c codex-cost-meter-v<VERSION>-macos-universal2.tar.gz.sha256`. On Linux, run `sha256sum -c codex-cost-meter-v<VERSION>-linux-x86_64-musl.tar.gz.sha256` or `sha256sum -c codex-cost-meter-v<VERSION>-linux-aarch64-musl.tar.gz.sha256`. In PowerShell on Windows, run `& { $archive = 'codex-cost-meter-v<VERSION>-windows-x64.zip'; $expected = (Get-Content "$archive.sha256" -Raw).Trim().Split()[0]; if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw "checksum mismatch" } }`.
 3. Extract the verified archive: `tar -xzf codex-cost-meter-v<VERSION>-macos-universal2.tar.gz` on macOS, `tar -xzf codex-cost-meter-v<VERSION>-linux-x86_64-musl.tar.gz` or `tar -xzf codex-cost-meter-v<VERSION>-linux-aarch64-musl.tar.gz` on Linux, or `Expand-Archive codex-cost-meter-v<VERSION>-windows-x64.zip -DestinationPath .\codex-cost-meter` in PowerShell.
 4. [Copy the session ID from the Codex app](#find-your-session-id), then run `./codex-cost-meter report <THREAD_ID>` on macOS or Linux, or `& .\codex-cost-meter\codex-cost-meter.exe report <THREAD_ID>` in PowerShell.
 
-Place the binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or Linux, or `$env:USERPROFILE\.codex\codex-cost-meter.exe` in PowerShell on Windows. The Windows location is a suggestion, not a requirement.
+Place a directly downloaded binary in a directory you choose. If you have no preference, use `~/.codex/codex-cost-meter` on macOS or Linux, or `$env:USERPROFILE\.codex\codex-cost-meter.exe` in PowerShell on Windows. The Windows location is a suggestion, not a requirement.
 
 The Windows ZIP contains `codex-cost-meter.exe`, `README.md`, and `LICENSE`.
 
@@ -34,7 +58,7 @@ Use the bare executable name only when you place it in an existing directory on 
 
 The first successful analysis creates `codex-cost-meter.sqlite` in the selected Codex home and prints its path once. This app-owned, disposable cache stores rollout metadata and parsed usage facts; report pricing and aggregation remain live. An entry is reused only when the rollout file's modification time and size match. `report --refresh` and `update --refresh` reprocess only the selected roots and linked descendants. A cache error is reported once and the command continues without caching. To rebuild the cache manually, remove only `codex-cost-meter.sqlite` while no meter command is running; the next analysis recreates it. The cache is separate from Codex's `state_5.sqlite` and is not removed by schedule removal or uninstall.
 
-The macOS archive is ad-hoc signed, not Developer ID signed or notarized. Gatekeeper can therefore require a user decision before first launch. The Windows executable is unsigned, so Windows or organizational controls can also require an explicit trust decision or block it. Verify the downloaded checksum and follow your organization's trust process; the checksum detects transfer corruption or tampering but does not establish publisher identity. See [why releases are unsigned for now](docs/unsigned-releases.md) for platform-specific run/build links, the signing options considered, and their current hurdles.
+The macOS archive is ad-hoc signed, not Developer ID signed or notarized. Gatekeeper can therefore require a user decision before first launch. The Windows executable is unsigned, so Windows or organizational controls can also require an explicit trust decision or block it. Verify the downloaded checksum and follow your organization's trust process; checksums and GitHub artifact attestations establish integrity or provenance but not publisher identity. See [why direct releases are unsigned for now](docs/unsigned-releases.md) for the signing options considered and their current hurdles.
 
 ## Find your session ID
 

@@ -1,8 +1,8 @@
-# Why releases are unsigned for now
+# Why direct releases are unsigned for now
 
 ## Run a release or build it yourself
 
-Before bypassing a platform warning, verify the release checksum and confirm that the download came from this project's GitHub Release.
+Homebrew is the preferred macOS install path because it builds pinned source through the package manager. A tagged `cargo install --locked` is available on macOS, Windows, and Linux. Before bypassing a warning for a direct archive, verify its checksum and confirm that it came from this project's GitHub Release.
 
 * **macOS:** Apple documents the one-release exception in [Safely open apps on your Mac](https://support.apple.com/102445). Do not change Gatekeeper globally.
 * **Windows:** Microsoft describes the standard **More info** then **Run anyway** flow for a known download in [its Windows publishing guidance](https://learn.microsoft.com/windows/apps/package-and-deploy/publish-first-app#step-6-handle-smartscreen-for-new-apps). An organization can disable that bypass; follow its application-control policy rather than weakening Windows security.
@@ -10,13 +10,13 @@ Before bypassing a platform warning, verify the release checksum and confirm tha
 
 ## Current release state
 
-Releases are intentionally distributed as direct GitHub archives while production code signing is deferred:
+Direct GitHub archives remain available while production code signing is deferred:
 
 * The macOS Universal 2 executable is **ad-hoc signed**, not Developer ID signed or notarized. Gatekeeper therefore cannot establish an identified publisher.
 * The Windows executable is **unsigned**, so SmartScreen and organizational application-control policies can warn or block it.
 * Linux archives use the normal archive-and-checksum distribution model. There is no single Linux desktop trust service equivalent to Gatekeeper or SmartScreen.
 
-Checksums detect a changed download only when the checksum itself was obtained from a trusted project release. They do not identify the publisher.
+Checksums detect a changed download only when the checksum itself was obtained from a trusted project release. GitHub artifact attestations add verifiable build provenance to new release assets. Neither mechanism identifies the executable publisher to macOS or Windows.
 
 ## Why this remains unsigned
 
@@ -35,4 +35,4 @@ The complete evidence and source links are in [Windows code-signing options with
 
 ## GitHub protections that do not replace platform signing
 
-GitHub Release checksums, [artifact attestations](https://docs.github.com/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations), and [immutable releases](https://docs.github.com/code-security/concepts/supply-chain-security/immutable-releases) can improve provenance and tamper detection. Windows and macOS do not treat them as an identified-publisher signature, so they do not remove Gatekeeper or SmartScreen friction.
+GitHub Release checksums, [artifact attestations](https://docs.github.com/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations), and [immutable releases](https://docs.github.com/code-security/concepts/supply-chain-security/immutable-releases) can improve provenance and tamper detection. New release assets are attested by the pinned release workflow and can be checked with `gh attestation verify <ASSET> --repo deinspanjer/codex-cost-meter`. Windows and macOS do not treat that result as an identified-publisher signature, so it does not remove Gatekeeper or SmartScreen friction.
