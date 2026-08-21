@@ -29,7 +29,7 @@ jobs:
           while IFS= read -r path; do
             changed=true
             case "$path" in
-              *.md) ;;
+              *.md|openspec/*|.agents/skills/.openspec-target) ;;
               *) docs_only=false; break ;;
             esac
           done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
@@ -46,7 +46,7 @@ jobs:
         run: exit 1
       - name: Skip builds for documentation-only changes
         if: needs.changes.outputs.docs_only == 'true'
-        run: echo "All changed files are Markdown."
+        run: echo "Only documentation and OpenSpec metadata changed."
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         if: needs.changes.outputs.docs_only != 'true'
         with:
@@ -179,7 +179,7 @@ jobs:
         run: exit 1
       - name: Skip build for documentation-only changes
         if: needs.changes.outputs.docs_only == 'true'
-        run: echo "All changed files are Markdown."
+        run: echo "Only documentation and OpenSpec metadata changed."
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         if: needs.changes.outputs.docs_only != 'true'
         with:
