@@ -225,7 +225,7 @@ pub(crate) fn uninstall(paths: &Paths) -> Result<(), ScheduleError> {
     windows::uninstall(paths).map_err(Into::into)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn run_scheduled(
     paths: &Paths,
     codex_home: &Path,
