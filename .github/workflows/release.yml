@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths-ignore:
       - "**/*.md"
+      - ".agents/skills/.openspec-target"
+      - "openspec/**"
 
 permissions:
   contents: read
