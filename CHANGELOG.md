@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.8.0]
+
+- Add lifetime Desktop Project reports with progress, compact human output, per-model agent-turn durations, and incomplete-cost explanations.
+
 ## [0.7.1]
 
 - Document current unsigned-release guidance and the Linux systemd scheduler decision.
