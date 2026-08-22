@@ -623,7 +623,7 @@ fn read_jsonl_until(
             return Ok(summary);
         }
         let newline = buffer.iter().position(|byte| *byte == b'\n');
-        let bytes = newline.map_or(buffer.len(), |position| position);
+        let bytes = newline.unwrap_or(buffer.len());
         if !oversized {
             if line.len() + bytes > MAX_JSONL_RECORD_BYTES {
                 line.clear();

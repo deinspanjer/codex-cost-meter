@@ -1,7 +1,7 @@
 # TODO
 
 - Decide from deployment evidence whether Windows arm64 is warranted.
-- Verify the Homebrew formula on clean Apple Silicon and Intel macOS machines, including install, first run, schedule repair after upgrade, and package-manager uninstall.
+- Clean Apple Silicon Homebrew install and first run are verified. Still verify the formula on clean Intel macOS, plus schedule repair after upgrade and package-manager uninstall on both architectures.
 - Verify tagged `cargo install --locked` on clean Windows x64 machines with SmartScreen and, where practical, Smart App Control enabled; record policy and first-run outcomes without promising warning-free execution.
 - After that Windows verification, publish a portable WinGet manifest for the checksummed x64 ZIP and a Scoop manifest in an appropriate bucket; verify install, upgrade, schedule repair, and uninstall for each.
 - Verify the source-building Homebrew formula on Linuxbrew x86_64 and aarch64 before documenting it as a supported Linux package-manager path.
