@@ -13,6 +13,7 @@
   - Rename the report option to `--codex-homes` and accept a comma-separated list while keeping update and scheduling mutations scoped to one `--codex-home`.
 - Add a privacy-safe, confirmation-gated submit-issue mode using an allowlist only.
 - Evaluate naming threads younger than 15 minutes without racing or preempting Codex's own delayed, improved title evaluation.
+- Add an optional Tufte-style title mode: append cost first, then numeric input and output token totals paired with compact per-turn eight-height sparklines, so narrow panels clip the trailing sparklines before the cost.
 - Research whether the running ChatGPT/Codex desktop app's app server can be signaled to reload externally updated titles without relaunching or cycling windows.
 - Research whether the desktop app offers a practical extension point for a per-thread context-menu update action.
 - Research hooks that could update a thread's cost at turn completion, turn start, or idle time.
