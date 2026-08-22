@@ -180,7 +180,7 @@ pub(crate) struct UpdateArgs {
         default_value_t = 20,
         value_parser = parse_positive_usize,
         requires = "idle_minutes",
-        help = "Maximum number of idle tasks to select."
+        help = "Maximum number of idle tasks to select; requires --idle-minutes."
     )]
     pub(crate) limit: usize,
     #[arg(
@@ -194,7 +194,7 @@ pub(crate) struct UpdateArgs {
         value_parser = parse_reprice_before,
         requires = "idle_minutes",
         conflicts_with_all = ["thread_ids", "title_matches"],
-        help = "Reprice idle tasks updated before this ISO date or timestamp."
+        help = "Reprice idle tasks updated before this ISO date or timestamp; requires --idle-minutes."
     )]
     pub(crate) reprice_before: Option<OffsetDateTime>,
     #[arg(
