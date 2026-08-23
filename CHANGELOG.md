@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.9.0]
+
+- Attribute rollout usage to Standard, Fast, or unavailable service tiers, with current Fast and long-context pricing plus per-model tier detail.
+
 ## [0.8.2]
 
 - Cache derived rollout analysis in an app-owned SQLite database, add selected-workset `--refresh`, and avoid unrelated rollout processing during exact, project, and update commands.
