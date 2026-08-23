@@ -3,7 +3,7 @@ use std::fmt::Write;
 use serde::Serialize;
 
 use crate::{
-    report::{ModelReport, ProjectReport, Report, StatsReport},
+    report::{ModelReport, ModelTierReport, ProjectReport, Report, StatsReport},
     title::compact_tokens,
 };
 
@@ -67,6 +67,11 @@ pub(crate) fn human(report: &Report) -> String {
     );
     let _ = writeln!(
         rendered,
+        "Pricing basis: {}",
+        safe_text(report.pricing.basis)
+    );
+    let _ = writeln!(
+        rendered,
         "Pricing source: {}",
         safe_text(&report.pricing.source)
     );
@@ -118,6 +123,11 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
         rendered,
         "\nPricing as of: {}",
         safe_text(&report.pricing.as_of)
+    );
+    let _ = writeln!(
+        rendered,
+        "Pricing basis: {}",
+        safe_text(report.pricing.basis)
     );
     let _ = writeln!(
         rendered,
@@ -181,11 +191,16 @@ fn model_table_from_models(
             .then_with(|| left_name.cmp(right_name))
     });
     let mut table = vec![stats_headers("Model", show_cache_write)];
-    table.extend(
-        models
-            .iter()
-            .map(|(name, model)| model_row(name, model, show_cache_write)),
-    );
+    for (name, model) in models {
+        table.push(model_row(name, model, show_cache_write));
+        let mut tiers = model.by_service_tier.iter().collect::<Vec<_>>();
+        tiers.sort_by_key(|(tier, _)| tier_sort_key(tier));
+        table.extend(
+            tiers
+                .into_iter()
+                .map(|(tier, detail)| model_tier_row(tier, detail, show_cache_write)),
+        );
+    }
     table.push(stats_row("Total", total, show_cache_write));
     text_table(&table)
 }
@@ -245,6 +260,40 @@ fn model_row(model: &str, stats: &ModelReport, show_cache_write: bool) -> Vec<St
     row
 }
 
+fn model_tier_row(tier: &str, stats: &ModelTierReport, show_cache_write: bool) -> Vec<String> {
+    let label = match tier {
+        "standard" => "↳ Standard".into(),
+        "assumed_standard" => "↳ Standard (assumed)".into(),
+        "fast" => "↳ ⚡ Fast".into(),
+        tier => format!("↳ Tier unavailable ({})", safe_text(tier)),
+    };
+    let mut row = vec![
+        label,
+        String::new(),
+        compact_tokens(stats.input_tokens),
+        compact_tokens(stats.input_cache_read_tokens),
+    ];
+    if show_cache_write {
+        row.push(compact_tokens(stats.input_cache_write_tokens));
+    }
+    row.extend([
+        compact_tokens(stats.output_tokens),
+        compact_tokens(stats.reasoning_tokens),
+        String::new(),
+        human_cost(stats.estimated_cost_usd, stats.known_model_cost_usd),
+    ]);
+    row
+}
+
+fn tier_sort_key(tier: &str) -> (u8, &str) {
+    match tier {
+        "standard" => (0, tier),
+        "assumed_standard" => (1, tier),
+        "fast" => (2, tier),
+        _ => (3, tier),
+    }
+}
+
 fn human_number(value: u64) -> String {
     let digits = value.to_string();
     let first = digits.len() % 3;
@@ -294,6 +343,16 @@ fn human_cost(estimated: Option<f64>, known: f64) -> String {
 }
 
 fn append_cost_note(rendered: &mut String, stats: &StatsReport) {
+    if stats.assumed_standard_tokens > 0 {
+        let _ = writeln!(
+            rendered,
+            "Estimate assumption: {} tokens without a recorded tier were priced as Standard.",
+            human_number(stats.assumed_standard_tokens)
+        );
+        rendered.push_str(
+            "Tier history: Fast became generally available in Codex CLI 0.111.0 on 2026-03-05; applied-tier snapshots were not persisted until 0.144.0 on 2026-07-09.\n",
+        );
+    }
     if stats.estimated_cost_usd.is_none() {
         rendered.push_str(
             "Cost note: + means known lower-bound cost; the complete estimate is unavailable.\n",
@@ -311,7 +370,12 @@ fn safe_text(value: &str) -> String {
 
 fn text_table(rows: &[Vec<String>]) -> String {
     let widths = (0..rows.first().map_or(0, Vec::len))
-        .map(|column| rows.iter().map(|row| row[column].len()).max().unwrap_or(0))
+        .map(|column| {
+            rows.iter()
+                .map(|row| cell_width(&row[column]))
+                .max()
+                .unwrap_or(0)
+        })
         .collect::<Vec<_>>();
     rows.iter()
         .enumerate()
@@ -319,7 +383,12 @@ fn text_table(rows: &[Vec<String>]) -> String {
             let line = row
                 .iter()
                 .enumerate()
-                .map(|(column, cell)| format!("{cell:width$}", width = widths[column]))
+                .map(|(column, cell)| {
+                    format!(
+                        "{cell}{}",
+                        " ".repeat(widths[column].saturating_sub(cell_width(cell)))
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("  ");
             if index == 0 {
@@ -340,6 +409,13 @@ fn text_table(rows: &[Vec<String>]) -> String {
         + "\n"
 }
 
+fn cell_width(value: &str) -> usize {
+    value
+        .chars()
+        .map(|character| usize::from(character == '⚡') + 1)
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -348,8 +424,8 @@ mod tests {
 
     use super::{human, json, project_human};
     use crate::report::{
-        ModelReport, PricingReport, ProjectReport, ProjectSelection, Report, RolloutReport,
-        StatsReport,
+        ModelReport, ModelTierReport, PricingReport, ProjectReport, ProjectSelection, Report,
+        RolloutReport, StatsReport,
     };
 
     fn stats(cost: Option<f64>, known_cost: f64) -> StatsReport {
@@ -369,6 +445,8 @@ mod tests {
             estimated_cost_usd: cost,
             known_model_cost_usd: known_cost,
             unpriced_models: BTreeMap::new(),
+            unpriced_service_tiers: BTreeMap::new(),
+            assumed_standard_tokens: 990,
             unattributed_usage_tokens: None,
             incomplete_input: cost.is_none(),
         }
@@ -388,6 +466,7 @@ mod tests {
                 total_turn_duration_seconds: 10.0,
                 estimated_cost_usd: Some(0.02),
                 known_model_cost_usd: 0.02,
+                by_service_tier: BTreeMap::new(),
             },
         );
         by_model.insert(
@@ -400,8 +479,46 @@ mod tests {
                 reasoning_tokens: 1_000,
                 output_tokens: 2_990,
                 total_turn_duration_seconds: 55.25,
-                estimated_cost_usd: None,
+                estimated_cost_usd: Some(0.15),
                 known_model_cost_usd: 0.15,
+                by_service_tier: BTreeMap::from([
+                    (
+                        "standard".into(),
+                        ModelTierReport {
+                            input_tokens: 6_000,
+                            input_cache_write_tokens: 250,
+                            input_cache_read_tokens: 1_000,
+                            reasoning_tokens: 500,
+                            output_tokens: 1_495,
+                            estimated_cost_usd: Some(0.04),
+                            known_model_cost_usd: 0.04,
+                        },
+                    ),
+                    (
+                        "fast".into(),
+                        ModelTierReport {
+                            input_tokens: 5_000,
+                            input_cache_write_tokens: 250,
+                            input_cache_read_tokens: 1_000,
+                            reasoning_tokens: 500,
+                            output_tokens: 1_495,
+                            estimated_cost_usd: Some(0.10),
+                            known_model_cost_usd: 0.10,
+                        },
+                    ),
+                    (
+                        "assumed_standard".into(),
+                        ModelTierReport {
+                            input_tokens: 990,
+                            input_cache_write_tokens: 0,
+                            input_cache_read_tokens: 0,
+                            reasoning_tokens: 0,
+                            output_tokens: 0,
+                            estimated_cost_usd: Some(0.01),
+                            known_model_cost_usd: 0.01,
+                        },
+                    ),
+                ]),
             },
         );
         let mut proxies = BTreeMap::new();
@@ -420,7 +537,7 @@ mod tests {
             by_model,
             by_rollout_type: BTreeMap::new(),
             pricing: PricingReport {
-                basis: "standard API list pricing; per request/turn model; output includes reasoning",
+                basis: "API list pricing; applied rollout tier (served tier unavailable); per request model/context; output includes reasoning",
                 as_of: "2026-08-13".into(),
                 source: "https://example.invalid/prices".into(),
                 model_proxies: proxies,
@@ -438,7 +555,15 @@ mod tests {
         assert!(rendered.contains("Whole tree"));
         assert!(rendered.contains("Cache write"));
         assert!(rendered.contains("$0.17+"));
+        assert!(rendered.contains(
+            "Pricing basis: API list pricing; applied rollout tier (served tier unavailable)"
+        ));
         assert!(rendered.contains("gpt-5.6-terra"));
+        assert!(rendered.contains("Standard (assumed)"));
+        assert!(rendered.contains("⚡ Fast"));
+        assert!(rendered.contains(
+            "Estimate assumption: 990 tokens without a recorded tier were priced as Standard."
+        ));
         let models = rendered.split_once("Models\n").unwrap().1;
         assert!(models.find("gpt-5.6-terra").unwrap() < models.find("cheap").unwrap());
         assert!(rendered.contains("Total"));
@@ -468,6 +593,7 @@ mod tests {
                 total_turn_duration_seconds: 0.0,
                 estimated_cost_usd: Some(0.0),
                 known_model_cost_usd: 0.0,
+                by_service_tier: BTreeMap::new(),
             },
         );
 

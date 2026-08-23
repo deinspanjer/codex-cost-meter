@@ -3,12 +3,15 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
+use time::macros::datetime;
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
-    pricing::Usage,
+    pricing::{ServiceTier, Usage},
     rollout::discovery::{JsonlReadError, RolloutRecord, read_jsonl},
 };
+
+const FIRST_PUBLIC_FAST_RELEASE: OffsetDateTime = datetime!(2026-03-03 05:35:04 UTC);
 
 const TOKEN_FIELDS: [&str; 6] = [
     "input_tokens",
@@ -23,6 +26,7 @@ const TOKEN_FIELDS: [&str; 6] = [
 pub(crate) struct UsageEvent {
     pub model: String,
     pub at: Option<OffsetDateTime>,
+    pub service_tier: ServiceTier,
     pub usage: Usage,
     pub reasoning_output: u64,
 }
@@ -120,6 +124,7 @@ impl TokenUsage {
 pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisError> {
     let mut session_meta_count = 0;
     let mut session_at = None;
+    let mut creator_version = None;
     let mut malformed_timestamp = false;
     let mut valid_turns = HashSet::new();
     let mut turn_contexts = HashMap::new();
@@ -131,10 +136,18 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
         match item.get("type").and_then(Value::as_str) {
             Some("session_meta") => {
                 session_meta_count += 1;
-                match timestamp(&item) {
-                    Ok(Some(at)) => session_at = Some(at),
-                    Ok(None) => {}
-                    Err(()) => malformed_timestamp = true,
+                if session_meta_count == 1 {
+                    creator_version = item
+                        .get("payload")
+                        .and_then(Value::as_object)
+                        .and_then(|payload| payload.get("cli_version"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                    match timestamp(&item) {
+                        Ok(Some(at)) => session_at = Some(at),
+                        Ok(None) => {}
+                        Err(()) => malformed_timestamp = true,
+                    }
                 }
             }
             Some("turn_context") => {
@@ -159,6 +172,7 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
     let mut started_turns = Vec::new();
     let mut active_turn = None::<String>;
     let mut legacy_model = None::<String>;
+    let mut service_tier = ServiceTier::Unpriced("missing".into());
     let mut previous_total = None;
     let summary = read_jsonl(&record.path, |line| {
         let Ok(item) = serde_json::from_slice::<Value>(line) else {
@@ -185,6 +199,10 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
         let Some(event_type) = payload.get("type").and_then(Value::as_str) else {
             return;
         };
+        if event_type == "thread_settings_applied" {
+            service_tier = applied_service_tier(payload);
+            return;
+        }
         if matches!(event_type, "task_started" | "turn_started") {
             let turn_id = event_turn_id(payload);
             active_turn = turn_id.filter(|id| valid_turns.contains(id));
@@ -276,10 +294,12 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
             stats.incomplete_usage = true;
             return;
         }
-        let at = timestamp_or_incomplete(&item, &mut stats).or(session_at);
+        let event_at = timestamp_or_incomplete(&item, &mut stats);
+        let at = event_at.or(session_at);
         stats.events.push(UsageEvent {
             model,
             at,
+            service_tier: tier_for_usage(&service_tier, event_at, creator_version.as_deref()),
             usage: normalized.usage,
             reasoning_output: normalized.reasoning_output,
         });
@@ -298,6 +318,81 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
         *stats.turn_models.entry(context).or_default() += 1;
     }
     Ok(stats)
+}
+
+fn tier_for_usage(
+    tier: &ServiceTier,
+    at: Option<OffsetDateTime>,
+    creator_version: Option<&str>,
+) -> ServiceTier {
+    match tier {
+        ServiceTier::Unpriced(value) if value == "missing" => {
+            if at.is_some_and(|at| at < FIRST_PUBLIC_FAST_RELEASE)
+                && !fast_capable_creator(creator_version)
+            {
+                ServiceTier::Standard
+            } else {
+                ServiceTier::AssumedStandard
+            }
+        }
+        tier => tier.clone(),
+    }
+}
+
+fn fast_capable_creator(version: Option<&str>) -> bool {
+    let Some(version) = version.map(str::trim) else {
+        return false;
+    };
+    let version = version.strip_prefix('v').unwrap_or(version);
+    let (core, prerelease) = version
+        .split_once('-')
+        .map_or((version, None), |(core, prerelease)| {
+            (core, Some(prerelease))
+        });
+    let mut numbers = core.split('.').map(str::parse::<u64>);
+    let Some(Ok(major)) = numbers.next() else {
+        return false;
+    };
+    let Some(Ok(minor)) = numbers.next() else {
+        return false;
+    };
+    let Some(Ok(patch)) = numbers.next() else {
+        return false;
+    };
+    if numbers.next().is_some() {
+        return false;
+    }
+
+    match (major, minor, patch).cmp(&(0, 108, 0)) {
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Equal => match prerelease {
+            None => true,
+            Some("alpha") => false,
+            Some(value) => value
+                .strip_prefix("alpha.")
+                .and_then(|value| value.split('.').next())
+                .and_then(|value| value.parse::<u64>().ok())
+                .is_none_or(|number| number >= 2),
+        },
+    }
+}
+
+fn applied_service_tier(payload: &Map<String, Value>) -> ServiceTier {
+    let Some(value) = payload
+        .get("thread_settings")
+        .and_then(Value::as_object)
+        .and_then(|settings| settings.get("service_tier"))
+        .and_then(Value::as_str)
+    else {
+        return ServiceTier::Unpriced("missing".into());
+    };
+    match value {
+        "default" | "standard" => ServiceTier::Standard,
+        "fast" | "priority" => ServiceTier::Fast,
+        "" => ServiceTier::Unpriced("empty".into()),
+        value => ServiceTier::Unpriced(value.into()),
+    }
 }
 
 fn model_context(payload: &Map<String, Value>) -> (String, String) {
@@ -396,7 +491,7 @@ mod tests {
     use time::macros::datetime;
 
     use super::{RolloutStats, analyze};
-    use crate::pricing::Usage;
+    use crate::pricing::{ServiceTier, Usage};
     use crate::rollout::discovery::{RolloutKind, RolloutRecord};
 
     #[derive(Clone, Copy, Default)]
@@ -422,9 +517,13 @@ mod tests {
     }
 
     fn token_event(last: FixtureUsage, total: FixtureUsage) -> Value {
+        token_event_at("2026-08-13T12:00:00Z", last, total)
+    }
+
+    fn token_event_at(timestamp: &str, last: FixtureUsage, total: FixtureUsage) -> Value {
         json!({
             "type": "event_msg",
-            "timestamp": "2026-08-13T12:00:00Z",
+            "timestamp": timestamp,
             "payload": {
                 "type": "token_count",
                 "info": {
@@ -469,6 +568,14 @@ mod tests {
         json!({"type": "session_meta", "timestamp": timestamp, "payload": {"id": "rollout"}})
     }
 
+    fn metadata_with_version(timestamp: &str, cli_version: &str) -> Value {
+        json!({
+            "type": "session_meta",
+            "timestamp": timestamp,
+            "payload": {"id": "rollout", "cli_version": cli_version},
+        })
+    }
+
     fn context(turn_id: Option<&str>, model: &str, effort: &str) -> Value {
         let mut payload = json!({"model": model, "effort": effort});
         if let Some(turn_id) = turn_id {
@@ -482,6 +589,20 @@ mod tests {
             "type": "event_msg",
             "timestamp": timestamp,
             "payload": {"type": name, "turn_id": turn_id},
+        })
+    }
+
+    fn settings(service_tier: Option<&str>) -> Value {
+        let mut thread_settings = json!({});
+        if let Some(service_tier) = service_tier {
+            thread_settings["service_tier"] = json!(service_tier);
+        }
+        json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "thread_settings_applied",
+                "thread_settings": thread_settings,
+            },
         })
     }
 
@@ -507,6 +628,85 @@ mod tests {
         assert_eq!(stats.known_usage.input, 147);
         assert_eq!(stats.known_usage.cached_input, 31);
         assert_eq!(stats.known_usage.output, 8);
+    }
+
+    #[test]
+    fn usage_follows_applied_service_tier_chronology() {
+        let stats = analyze_fixture(&[
+            metadata("2026-08-13T10:00:00Z"),
+            context(None, "gpt-5.6-terra", "high"),
+            settings(Some("default")),
+            token_event(usage(1, 0, 0), usage(1, 0, 0)),
+            settings(Some("priority")),
+            token_event(usage(1, 0, 0), usage(2, 0, 0)),
+            settings(Some("standard")),
+            token_event(usage(1, 0, 0), usage(3, 0, 0)),
+            settings(None),
+            token_event(usage(1, 0, 0), usage(4, 0, 0)),
+            settings(Some("flex")),
+            token_event(usage(1, 0, 0), usage(5, 0, 0)),
+        ]);
+
+        assert_eq!(
+            stats
+                .events
+                .iter()
+                .map(|event| event.service_tier.clone())
+                .collect::<Vec<_>>(),
+            [
+                ServiceTier::Standard,
+                ServiceTier::Fast,
+                ServiceTier::Standard,
+                ServiceTier::AssumedStandard,
+                ServiceTier::Unpriced("flex".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_tier_uses_creator_version_and_public_release_time() {
+        let cases = [
+            (
+                "ordinary stable creator",
+                "0.111.0",
+                "2026-03-03T05:35:03Z",
+                ServiceTier::AssumedStandard,
+            ),
+            (
+                "old creator after ordinary launch",
+                "0.107.0",
+                "2026-03-05T19:12:13Z",
+                ServiceTier::AssumedStandard,
+            ),
+            (
+                "first public prerelease creator",
+                "0.108.0-alpha.2",
+                "2026-03-03T05:35:03Z",
+                ServiceTier::AssumedStandard,
+            ),
+            (
+                "old creator at first public release",
+                "0.107.0",
+                "2026-03-03T05:35:04Z",
+                ServiceTier::AssumedStandard,
+            ),
+            (
+                "pre-release creator and usage",
+                "0.108.0-alpha.1",
+                "2026-03-03T05:35:03Z",
+                ServiceTier::Standard,
+            ),
+        ];
+
+        for (name, cli_version, at, expected) in cases {
+            let stats = analyze_fixture(&[
+                metadata_with_version("2026-03-02T00:00:00Z", cli_version),
+                context(None, "gpt-5.3-codex", "high"),
+                token_event_at(at, usage(1, 0, 0), usage(1, 0, 0)),
+            ]);
+
+            assert_eq!(stats.events[0].service_tier, expected, "{name}");
+        }
     }
 
     #[test]

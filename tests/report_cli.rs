@@ -36,6 +36,7 @@ fn fixture_home_at(home: &Path) {
                 "timestamp": "2026-08-13T12:00:00Z",
                 "payload": {"id": "root", "source": "cli", "cwd": "/tmp/project"},
             }),
+            json!({"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {"service_tier": "standard"}}}),
             json!({"type": "turn_context", "payload": {"model": "gpt-5.6-terra", "effort": "high"}}),
             json!({
                 "type": "event_msg",

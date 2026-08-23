@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::{
     cache::RolloutCache,
-    pricing::{Catalog, PricingError, Usage},
+    pricing::{Catalog, PricingError, ServiceTier, Usage},
     progress::Progress,
     rollout::{
         analysis::{AnalysisError, RolloutStats},
@@ -94,6 +94,8 @@ pub(crate) struct StatsReport {
     pub estimated_cost_usd: Option<f64>,
     pub known_model_cost_usd: f64,
     pub unpriced_models: BTreeMap<String, u64>,
+    pub unpriced_service_tiers: BTreeMap<String, u64>,
+    pub assumed_standard_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unattributed_usage_tokens: Option<u64>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -109,6 +111,18 @@ pub(crate) struct ModelReport {
     pub reasoning_tokens: u64,
     pub output_tokens: u64,
     pub total_turn_duration_seconds: f64,
+    pub estimated_cost_usd: Option<f64>,
+    pub known_model_cost_usd: f64,
+    pub by_service_tier: BTreeMap<String, ModelTierReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ModelTierReport {
+    pub input_tokens: u64,
+    pub input_cache_write_tokens: u64,
+    pub input_cache_read_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub output_tokens: u64,
     pub estimated_cost_usd: Option<f64>,
     pub known_model_cost_usd: f64,
 }
@@ -257,7 +271,10 @@ impl ReportContext {
                 Err(error) => return Err(error),
             };
             selection.incomplete_root_reports += usize::from(report.tree.incomplete_input);
-            selection.unpriced_root_reports += usize::from(!report.tree.unpriced_models.is_empty());
+            selection.unpriced_root_reports += usize::from(
+                !report.tree.unpriced_models.is_empty()
+                    || !report.tree.unpriced_service_tiers.is_empty(),
+            );
             merge_stats(&mut tree, &report.tree);
             for (name, model) in report.by_model {
                 merge_model(by_model.entry(name).or_insert_with(empty_model), &model);
@@ -332,6 +349,8 @@ fn empty_stats() -> StatsReport {
         estimated_cost_usd: Some(0.0),
         known_model_cost_usd: 0.0,
         unpriced_models: BTreeMap::new(),
+        unpriced_service_tiers: BTreeMap::new(),
+        assumed_standard_tokens: 0,
         unattributed_usage_tokens: None,
         incomplete_input: false,
     }
@@ -348,6 +367,7 @@ fn empty_model() -> ModelReport {
         total_turn_duration_seconds: 0.0,
         estimated_cost_usd: Some(0.0),
         known_model_cost_usd: 0.0,
+        by_service_tier: BTreeMap::new(),
     }
 }
 
@@ -370,6 +390,15 @@ fn merge_stats(total: &mut StatsReport, next: &StatsReport) {
     for (model, tokens) in &next.unpriced_models {
         *total.unpriced_models.entry(model.clone()).or_default() += tokens;
     }
+    for (tier, tokens) in &next.unpriced_service_tiers {
+        *total
+            .unpriced_service_tiers
+            .entry(tier.clone())
+            .or_default() += tokens;
+    }
+    total.assumed_standard_tokens = total
+        .assumed_standard_tokens
+        .saturating_add(next.assumed_standard_tokens);
     total.unattributed_usage_tokens = match (
         total.unattributed_usage_tokens,
         next.unattributed_usage_tokens,
@@ -393,11 +422,39 @@ fn merge_model(total: &mut ModelReport, next: &ModelReport) {
         .zip(next.estimated_cost_usd)
         .map(|(left, right)| left + right);
     total.known_model_cost_usd += next.known_model_cost_usd;
+    for (tier, next) in &next.by_service_tier {
+        let total = total
+            .by_service_tier
+            .entry(tier.clone())
+            .or_insert_with(empty_model_tier);
+        total.input_tokens += next.input_tokens;
+        total.input_cache_write_tokens += next.input_cache_write_tokens;
+        total.input_cache_read_tokens += next.input_cache_read_tokens;
+        total.reasoning_tokens += next.reasoning_tokens;
+        total.output_tokens += next.output_tokens;
+        total.estimated_cost_usd = total
+            .estimated_cost_usd
+            .zip(next.estimated_cost_usd)
+            .map(|(left, right)| left + right);
+        total.known_model_cost_usd += next.known_model_cost_usd;
+    }
+}
+
+fn empty_model_tier() -> ModelTierReport {
+    ModelTierReport {
+        input_tokens: 0,
+        input_cache_write_tokens: 0,
+        input_cache_read_tokens: 0,
+        reasoning_tokens: 0,
+        output_tokens: 0,
+        estimated_cost_usd: Some(0.0),
+        known_model_cost_usd: 0.0,
+    }
 }
 
 fn pricing_report(catalog: &Catalog) -> PricingReport {
     PricingReport {
-        basis: "standard API list pricing; per request/turn model; output includes reasoning",
+        basis: "API list pricing; applied rollout tier (served tier unavailable); per request model/context; output includes reasoning",
         as_of: catalog.as_of().into(),
         source: catalog.source().into(),
         model_proxies: catalog
@@ -419,6 +476,8 @@ struct Aggregate {
     turn_models: HashMap<(String, String), usize>,
     known_cost: f64,
     unpriced_models: BTreeMap<String, u64>,
+    unpriced_service_tiers: BTreeMap<String, u64>,
+    assumed_standard_tokens: u64,
     unattributed_tokens: u64,
     incomplete: bool,
     models: BTreeMap<String, ModelAggregate>,
@@ -430,6 +489,15 @@ struct ModelAggregate {
     reasoning_output: u64,
     turns: usize,
     duration_seconds: f64,
+    known_cost: f64,
+    incomplete: bool,
+    by_service_tier: BTreeMap<String, ModelTierAggregate>,
+}
+
+#[derive(Default)]
+struct ModelTierAggregate {
+    usage: Usage,
+    reasoning_output: u64,
     known_cost: f64,
     incomplete: bool,
 }
@@ -484,14 +552,50 @@ impl Aggregate {
             model.reasoning_output = model
                 .reasoning_output
                 .saturating_add(event.reasoning_output);
+            let tier = model
+                .by_service_tier
+                .entry(service_tier_key(&event.service_tier).into())
+                .or_default();
+            tier.usage.input = tier.usage.input.saturating_add(event.usage.input);
+            tier.usage.cached_input = tier
+                .usage
+                .cached_input
+                .saturating_add(event.usage.cached_input);
+            tier.usage.cache_write_input = tier
+                .usage
+                .cache_write_input
+                .saturating_add(event.usage.cache_write_input);
+            tier.usage.output = tier.usage.output.saturating_add(event.usage.output);
+            tier.reasoning_output = tier.reasoning_output.saturating_add(event.reasoning_output);
 
-            let cost = catalog.cost(&event.model, event.at, event.usage);
+            let tokens = event.usage.input.saturating_add(event.usage.output);
+            if matches!(event.service_tier, ServiceTier::AssumedStandard) {
+                self.assumed_standard_tokens = self.assumed_standard_tokens.saturating_add(tokens);
+            }
+            if let ServiceTier::Unpriced(tier) = &event.service_tier {
+                *self.unpriced_service_tiers.entry(tier.clone()).or_default() += tokens;
+                model.incomplete = true;
+                let tier = model
+                    .by_service_tier
+                    .get_mut(service_tier_key(&event.service_tier))
+                    .expect("tier exists");
+                tier.incomplete = true;
+                self.incomplete = true;
+                continue;
+            }
+
+            let cost = catalog.cost(&event.model, event.at, &event.service_tier, event.usage);
             self.known_cost += cost.known;
             model.known_cost += cost.known;
+            let tier = model
+                .by_service_tier
+                .get_mut(service_tier_key(&event.service_tier))
+                .expect("tier exists");
+            tier.known_cost += cost.known;
             if cost.complete.is_none() {
-                let tokens = event.usage.input.saturating_add(event.usage.output);
                 *self.unpriced_models.entry(event.model.clone()).or_default() += tokens;
                 model.incomplete = true;
+                tier.incomplete = true;
                 self.incomplete = true;
             }
         }
@@ -527,6 +631,8 @@ impl Aggregate {
             estimated_cost_usd,
             known_model_cost_usd: round(self.known_cost, 8),
             unpriced_models: self.unpriced_models,
+            unpriced_service_tiers: self.unpriced_service_tiers,
+            assumed_standard_tokens: self.assumed_standard_tokens,
             unattributed_usage_tokens: (self.unattributed_tokens > 0)
                 .then_some(self.unattributed_tokens),
             incomplete_input: self.incomplete,
@@ -549,10 +655,38 @@ impl Aggregate {
                         total_turn_duration_seconds: round(model.duration_seconds, 3),
                         estimated_cost_usd: (!model.incomplete).then(|| round(model.known_cost, 8)),
                         known_model_cost_usd: round(model.known_cost, 8),
+                        by_service_tier: model
+                            .by_service_tier
+                            .iter()
+                            .map(|(tier, detail)| {
+                                (
+                                    tier.clone(),
+                                    ModelTierReport {
+                                        input_tokens: detail.usage.input,
+                                        input_cache_write_tokens: detail.usage.cache_write_input,
+                                        input_cache_read_tokens: detail.usage.cached_input,
+                                        reasoning_tokens: detail.reasoning_output,
+                                        output_tokens: detail.usage.output,
+                                        estimated_cost_usd: (!detail.incomplete)
+                                            .then(|| round(detail.known_cost, 8)),
+                                        known_model_cost_usd: round(detail.known_cost, 8),
+                                    },
+                                )
+                            })
+                            .collect(),
                     },
                 )
             })
             .collect()
+    }
+}
+
+fn service_tier_key(tier: &ServiceTier) -> &str {
+    match tier {
+        ServiceTier::Standard => "standard",
+        ServiceTier::AssumedStandard => "assumed_standard",
+        ServiceTier::Fast => "fast",
+        ServiceTier::Unpriced(value) => value,
     }
 }
 
@@ -753,6 +887,7 @@ mod tests {
                 "timestamp": "2026-08-13T12:00:00Z",
                 "payload": payload,
             }),
+            json!({"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {"service_tier": "standard"}}}),
             json!({"type": "turn_context", "payload": {"model": model, "effort": "high"}}),
             json!({
                 "type": "event_msg",
@@ -896,6 +1031,64 @@ mod tests {
         assert_eq!(report.tree.estimated_cost_usd, None);
         assert!(report.tree.known_model_cost_usd > 0.0);
         assert_eq!(report.tree.unpriced_models["unpriced-model"], 20);
+    }
+
+    #[test]
+    fn missing_and_unsupported_tiers_keep_only_known_cost() {
+        let home = TempDir::new().unwrap();
+        write_jsonl(
+            &home,
+            "sessions/root.jsonl",
+            &[
+                json!({
+                    "type": "session_meta",
+                    "timestamp": "2026-08-22T12:00:00Z",
+                    "payload": {"id": "root", "source": "cli", "cwd": "/tmp/project"},
+                }),
+                json!({"type": "turn_context", "payload": {"model": "gpt-5.6-terra", "effort": "high"}}),
+                json!({"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {"service_tier": "standard"}}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-22T12:00:01Z", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 100, "total_tokens": 100}}}}),
+                json!({"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {"service_tier": "priority"}}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-22T12:00:02Z", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 100, "total_tokens": 100}}}}),
+                json!({"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {}}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-22T12:00:03Z", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 100, "total_tokens": 100}}}}),
+                json!({"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {"service_tier": "flex"}}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-22T12:00:04Z", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 100, "total_tokens": 100}}}}),
+            ],
+        );
+
+        let report = build("root", home.path()).unwrap();
+
+        assert!(report.tree.known_model_cost_usd > 0.0);
+        assert_eq!(report.tree.estimated_cost_usd, None);
+        assert_eq!(report.tree.unpriced_service_tiers["flex"], 100);
+        assert_eq!(report.tree.assumed_standard_tokens, 100);
+        assert!(report.tree.unpriced_models.is_empty());
+        let model = &report.by_model["gpt-5.6-terra"];
+        assert_eq!(model.input_tokens, 400);
+        assert_eq!(model.by_service_tier["standard"].input_tokens, 100);
+        assert_eq!(model.by_service_tier["fast"].input_tokens, 100);
+        assert_eq!(model.by_service_tier["assumed_standard"].input_tokens, 100);
+        assert_eq!(model.by_service_tier["flex"].input_tokens, 100);
+        assert_eq!(
+            model.by_service_tier["standard"].estimated_cost_usd,
+            Some(0.0002)
+        );
+        assert_eq!(
+            model.by_service_tier["fast"].estimated_cost_usd,
+            Some(0.0004)
+        );
+        assert_eq!(
+            model.by_service_tier["assumed_standard"].estimated_cost_usd,
+            Some(0.0002)
+        );
+        assert_eq!(model.known_model_cost_usd, 0.0008);
+        let tier_cost = model
+            .by_service_tier
+            .values()
+            .map(|tier| tier.known_model_cost_usd)
+            .sum::<f64>();
+        assert!((tier_cost - model.known_model_cost_usd).abs() < 1e-12);
     }
 
     #[test]

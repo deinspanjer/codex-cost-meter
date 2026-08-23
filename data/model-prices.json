@@ -1,29 +1,62 @@
 {
-  "as_of": "2026-08-06",
-  "source": "https://developers.openai.com/api/docs/pricing",
+  "as_of": "2026-08-22",
+  "source": "https://developers.openai.com/api/docs/pricing, https://openai.com/api-fast-mode/",
+  "long_context_thresholds": {
+    "gpt-5.4": 272000,
+    "gpt-5.5": 272000,
+    "gpt-5.6-sol": 272000,
+    "gpt-5.6-terra": 272000,
+    "gpt-5.6-luna": 272000
+  },
   "histories": {
-    "gpt-5.1": [{"effective_from": "2025-11-13", "input": 1.25, "cached_input": 0.125, "cache_write_input": null, "output": 10.0}],
-    "gpt-5.1-codex": [{"effective_from": "2025-11-13", "input": 1.25, "cached_input": 0.125, "cache_write_input": null, "output": 10.0}],
+    "gpt-5.1": [
+      {"effective_from": "2025-11-13", "input": 1.25, "cached_input": 0.125, "cache_write_input": null, "output": 10.0, "fast": {"input": 2.5, "cached_input": 0.25, "cache_write_input": null, "output": 20.0}},
+      {"effective_from": "2026-08-22", "input": 1.25, "cached_input": 0.125, "cache_write_input": null, "output": 10.0, "fast": {"input": 2.5, "cached_input": 0.25, "cache_write_input": null, "output": 20.0}}
+    ],
+    "gpt-5.1-codex": [
+      {"effective_from": "2025-11-13", "input": 1.25, "cached_input": 0.125, "cache_write_input": null, "output": 10.0, "fast": {"input": 2.5, "cached_input": 0.25, "cache_write_input": null, "output": 20.0}},
+      {"effective_from": "2026-08-22", "input": 1.25, "cached_input": 0.125, "cache_write_input": null, "output": 10.0, "fast": {"input": 2.5, "cached_input": 0.25, "cache_write_input": null, "output": 20.0}}
+    ],
     "gpt-5.1-codex-mini": [{"effective_from": "2025-11-13", "input": 0.25, "cached_input": 0.025, "cache_write_input": null, "output": 2.0}],
     "gpt-5.1-codex-max": [{"effective_from": "2025-11-13", "input": 1.25, "cached_input": 0.125, "cache_write_input": null, "output": 10.0}],
-    "gpt-5.2": [{"effective_from": "2025-12-11", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0}],
+    "gpt-5.2": [
+      {"effective_from": "2025-12-11", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0, "fast": {"input": 3.5, "cached_input": 0.35, "cache_write_input": null, "output": 28.0}},
+      {"effective_from": "2026-08-22", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0, "fast": {"input": 3.5, "cached_input": 0.35, "cache_write_input": null, "output": 28.0}}
+    ],
     "gpt-5.2-pro": [{"effective_from": "2025-12-11", "input": 21.0, "cached_input": null, "cache_write_input": null, "output": 168.0}],
     "gpt-5.2-codex": [{"effective_from": "2025-12-11", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0}],
-    "gpt-5.3-codex": [{"effective_from": "2026-02-05", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0}],
-    "gpt-5.4": [{"effective_from": "2026-03-05", "input": 2.5, "cached_input": 0.25, "cache_write_input": null, "output": 15.0}],
+    "gpt-5.3-codex": [
+      {"effective_from": "2026-02-05", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0, "fast": {"input": 3.5, "cached_input": 0.35, "cache_write_input": null, "output": 28.0}},
+      {"effective_from": "2026-08-22", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0, "fast": {"input": 3.5, "cached_input": 0.35, "cache_write_input": null, "output": 28.0}}
+    ],
+    "gpt-5.4": [
+      {"effective_from": "2026-03-05", "input": 2.5, "cached_input": 0.25, "cache_write_input": null, "output": 15.0, "fast": {"input": 5.0, "cached_input": 0.5, "cache_write_input": null, "output": 30.0}},
+      {"effective_from": "2026-08-22", "input": 2.5, "cached_input": 0.25, "cache_write_input": null, "output": 15.0, "fast": {"input": 5.0, "cached_input": 0.5, "cache_write_input": null, "output": 30.0}, "long_context": {"standard": {"input": 5.0, "cached_input": 0.5, "cache_write_input": null, "output": 22.5}, "fast": null}}
+    ],
     "gpt-5.4-pro": [{"effective_from": "2026-03-05", "input": 30.0, "cached_input": null, "cache_write_input": null, "output": 180.0}],
-    "gpt-5.4-mini": [{"effective_from": "2026-03-17", "input": 0.75, "cached_input": 0.075, "cache_write_input": null, "output": 4.5}],
+    "gpt-5.4-mini": [
+      {"effective_from": "2026-03-17", "input": 0.75, "cached_input": 0.075, "cache_write_input": null, "output": 4.5, "fast": {"input": 1.5, "cached_input": 0.15, "cache_write_input": null, "output": 9.0}},
+      {"effective_from": "2026-08-22", "input": 0.75, "cached_input": 0.075, "cache_write_input": null, "output": 4.5, "fast": {"input": 1.5, "cached_input": 0.15, "cache_write_input": null, "output": 9.0}}
+    ],
     "gpt-5.4-nano": [{"effective_from": "2026-03-17", "input": 0.2, "cached_input": 0.02, "cache_write_input": null, "output": 1.25}],
-    "gpt-5.5": [{"effective_from": "2026-04-23", "input": 5.0, "cached_input": 0.5, "cache_write_input": null, "output": 30.0}],
+    "gpt-5.5": [
+      {"effective_from": "2026-04-23", "input": 5.0, "cached_input": 0.5, "cache_write_input": null, "output": 30.0, "fast": {"input": 12.5, "cached_input": 1.25, "cache_write_input": null, "output": 75.0}},
+      {"effective_from": "2026-08-22", "input": 5.0, "cached_input": 0.5, "cache_write_input": null, "output": 30.0, "fast": {"input": 12.5, "cached_input": 1.25, "cache_write_input": null, "output": 75.0}, "long_context": {"standard": {"input": 10.0, "cached_input": 1.0, "cache_write_input": null, "output": 45.0}, "fast": null}}
+    ],
     "gpt-5.5-pro": [{"effective_from": "2026-04-23", "input": 30.0, "cached_input": null, "cache_write_input": null, "output": 180.0}],
-    "gpt-5.6-sol": [{"effective_from": "2026-07-09", "input": 5.0, "cached_input": 0.5, "cache_write_input": 6.25, "output": 30.0}],
+    "gpt-5.6-sol": [
+      {"effective_from": "2026-07-09", "input": 5.0, "cached_input": 0.5, "cache_write_input": 6.25, "output": 30.0, "fast": {"input": 10.0, "cached_input": 1.0, "cache_write_input": 12.5, "output": 60.0}},
+      {"effective_from": "2026-08-22", "input": 4.0, "cached_input": 0.4, "cache_write_input": 5.0, "output": 20.0, "fast": {"input": 8.0, "cached_input": 0.8, "cache_write_input": 10.0, "output": 40.0}, "long_context": {"standard": {"input": 8.0, "cached_input": 0.8, "cache_write_input": 10.0, "output": 30.0}, "fast": {"input": 16.0, "cached_input": 1.6, "cache_write_input": 20.0, "output": 60.0}}}
+    ],
     "gpt-5.6-terra": [
-      {"effective_from": "2026-07-09", "input": 2.5, "cached_input": 0.25, "cache_write_input": 3.125, "output": 15.0},
-      {"effective_from": "2026-07-30", "input": 2.0, "cached_input": 0.2, "cache_write_input": 2.5, "output": 12.0}
+      {"effective_from": "2026-07-09", "input": 2.5, "cached_input": 0.25, "cache_write_input": 3.125, "output": 15.0, "fast": {"input": 5.0, "cached_input": 0.5, "cache_write_input": 6.25, "output": 30.0}},
+      {"effective_from": "2026-07-30", "input": 2.0, "cached_input": 0.2, "cache_write_input": 2.5, "output": 12.0, "fast": {"input": 4.0, "cached_input": 0.4, "cache_write_input": 5.0, "output": 24.0}},
+      {"effective_from": "2026-08-22", "input": 2.0, "cached_input": 0.2, "cache_write_input": 2.5, "output": 12.0, "fast": {"input": 4.0, "cached_input": 0.4, "cache_write_input": 5.0, "output": 24.0}, "long_context": {"standard": {"input": 4.0, "cached_input": 0.4, "cache_write_input": 5.0, "output": 18.0}, "fast": {"input": 8.0, "cached_input": 0.8, "cache_write_input": 10.0, "output": 36.0}}}
     ],
     "gpt-5.6-luna": [
-      {"effective_from": "2026-07-09", "input": 1.0, "cached_input": 0.1, "cache_write_input": 1.25, "output": 6.0},
-      {"effective_from": "2026-07-30", "input": 0.2, "cached_input": 0.02, "cache_write_input": 0.25, "output": 1.2}
+      {"effective_from": "2026-07-09", "input": 1.0, "cached_input": 0.1, "cache_write_input": 1.25, "output": 6.0, "fast": {"input": 2.0, "cached_input": 0.2, "cache_write_input": 2.5, "output": 12.0}},
+      {"effective_from": "2026-07-30", "input": 0.2, "cached_input": 0.02, "cache_write_input": 0.25, "output": 1.2, "fast": {"input": 0.4, "cached_input": 0.04, "cache_write_input": 0.5, "output": 2.4}},
+      {"effective_from": "2026-08-22", "input": 0.2, "cached_input": 0.02, "cache_write_input": 0.25, "output": 1.2, "fast": {"input": 0.4, "cached_input": 0.04, "cache_write_input": 0.5, "output": 2.4}, "long_context": {"standard": {"input": 0.4, "cached_input": 0.04, "cache_write_input": 0.5, "output": 1.8}, "fast": {"input": 0.8, "cached_input": 0.08, "cache_write_input": 1.0, "output": 3.6}}}
     ]
   },
   "proxies": {
