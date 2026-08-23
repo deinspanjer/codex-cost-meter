@@ -86,9 +86,13 @@ Codex follows your normal approval settings for the local command. Review the re
 
 ## Read the report
 
-Human output shows root and whole-tree totals, per-model usage, price metadata, and summed agent-turn time. Token columns use compact `K`/`M`/`B` notation; JSON retains exact integers. Durations use `d`/`h`/`m`/`s`, omitting zero day, hour, and minute portions; seconds can be fractional. Model and aggregate durations can overlap. A trailing `+` on a human cost means the displayed amount is only the known partial cost. In JSON, the corresponding complete estimate is `null`; inspect `incomplete_input`, `unpriced_models`, `unattributed_usage_tokens`, and `incomplete_input_warnings` before treating an estimate as complete.
+Human output shows root and whole-tree totals, per-model usage, price metadata, and summed agent-turn time. Each model row is followed by its Standard, `⚡ Fast`, and unavailable-tier usage where present. Turns and duration stay on the aggregate model row because a tier can change between usage events within one turn; the tool does not guess how to split them. Token columns use compact `K`/`M`/`B` notation; JSON retains exact integers. Durations use `d`/`h`/`m`/`s`, omitting zero day, hour, and minute portions; seconds can be fractional. Model and aggregate durations can overlap. A trailing `+` on a human cost means the displayed amount is only the known partial cost. In JSON, the corresponding complete estimate is `null`; inspect `incomplete_input`, `unpriced_models`, `unpriced_service_tiers`, `unattributed_usage_tokens`, and `incomplete_input_warnings` before treating an estimate as complete.
 
-Cost uses the embedded historical catalog and is an API-list-price approximation, not a billing record. Reasoning is included in output usage; cache reads are included in input usage.
+Cost uses the embedded historical catalog and is an API-list-price approximation, not a billing record. Each request uses the service tier most recently applied in the rollout settings; current Codex token records do not reveal the tier actually served, so a Fast request that was downgraded cannot be corrected to Standard pricing. Missing tier metadata is priced at Standard rates. It is definitive Standard only when the usage timestamp and creator version place it before the first public Fast-capable package; otherwise it appears as `Standard (assumed)` and contributes to `assumed_standard_tokens`. Explicit unsupported tiers remain unpriced.
+
+Fast first appeared in public opt-in prerelease `0.108.0-alpha.2` on March 2 PST (March 3 UTC) and became generally available in stable `0.111.0` on March 5. Applied-tier snapshots were not persisted until stable `0.144.0` on July 9. The analyzer uses each usage event's timestamp because the canonical `session_meta.cli_version` identifies the rollout creator, not the client that may later resume and append to it.
+
+Requests above a model's published input threshold use its long-context rate cell. Explicit Priority/Fast markers at or after stable `0.144.0` use the model-specific Fast premium captured in the embedded catalog; missing attribution always uses the Standard rate, with post-release assumptions labeled separately. Fast markers before the exact stable `0.144.0` publication time remain unpriced because durable rollout evidence was not yet available. Unsupported applied tiers appear under `unpriced_service_tiers`; unavailable model, date, tier, context, or token-component rates appear under `unpriced_models`. Both make the complete estimate unavailable while preserving known cost. Reasoning is included in output usage; cache reads are included in input usage. See the [attribution evidence](docs/research/fast-mode-attribution-evidence.md) for the official timeline and representative local chronology.
 
 ### Larger worked example
 
@@ -111,8 +115,12 @@ Models
 Model              Turns                         Input      Cache read  Output   Reasoning  Duration  Cost
 -----------------  ----------------------------  ---------  ----------  -------  ---------  --------  -----
 gpt-5.6-sol        1                             1M         850K        40K      28K        4m 0.0s   $2.38
+↳ ⚡ Fast                                        1M         850K        40K      28K                  $2.38
 gpt-5.6-terra      2                             725K       600K        93K      64K        6m 4.0s   $1.49
+↳ Standard                                       400K       325K        45K      31K                  $0.80
+↳ ⚡ Fast                                        325K       275K        48K      33K                  $0.69
 codex-auto-review  1                             300K       275K        12K      8K         2m 0.0s   $0.02
+↳ Standard                                       300K       275K        12K      8K                   $0.02
 Total              4 (4 complete, 0 incomplete)  2M         1.7M        145K     100K       12m 4.0s  $3.89
 
 Agent-turn time: 9m 3.0s (agent time can overlap).

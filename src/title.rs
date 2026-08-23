@@ -298,6 +298,8 @@ mod tests {
             estimated_cost_usd: (!incomplete).then_some(cost),
             known_model_cost_usd: cost,
             unpriced_models: BTreeMap::new(),
+            unpriced_service_tiers: BTreeMap::new(),
+            assumed_standard_tokens: 0,
             unattributed_usage_tokens: None,
             incomplete_input: incomplete,
         }
