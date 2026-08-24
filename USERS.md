@@ -56,7 +56,9 @@ $threadId = "<THREAD_ID>"
 
 Use the bare executable name only when you place it in an existing directory on `PATH`; the tool does not require or create a `bin` directory under the Codex home. The tool resolves the Codex directory in this order: `--codex-home`, `CODEX_HOME`, then the platform home plus `.codex`. `report` never changes Codex task data. It may read Codex's SQLite projection to narrow discovery, with rollout-file fallback; `update` is dry-run by default and reads the supported local SQLite state for title-update selection or application (details below).
 
-The first successful analysis creates `codex-cost-meter.sqlite` in the selected Codex home and prints its path once. This app-owned, disposable cache stores rollout metadata and parsed usage facts; report pricing and aggregation remain live. An entry is reused only when the rollout file's modification time and size match. `report --refresh` and `update --refresh` reprocess only the selected roots and linked descendants. A cache error is reported once and the command continues without caching. To rebuild the cache manually, remove only `codex-cost-meter.sqlite` while no meter command is running; the next analysis recreates it. The cache is separate from Codex's `state_5.sqlite` and is not removed by schedule removal or uninstall.
+The first successful analysis creates `codex-cost-meter.sqlite` in the selected Codex home and prints its path once. This app-owned, disposable cache stores rollout metadata and parsed usage facts; report pricing and aggregation remain live. An entry is reused only when the rollout file's modification time and size match. `report --refresh` and `update --refresh` reprocess only the selected roots and linked descendants.
+
+If an existing cache can be read but not written, the command reuses compatible entries read-only, analyzes misses without storing them, and warns that it must be run with write permission to update the cache. If no cache exists, the command attempts to create one; a permission failure warns that write access is required and continues uncached. An unusable existing cache likewise produces one unavailable warning and continues without caching. To rebuild the cache manually, remove only `codex-cost-meter.sqlite` while no meter command is running; the next analysis recreates it. The cache is separate from Codex's `state_5.sqlite` and is not removed by schedule removal or uninstall.
 
 The macOS archive is ad-hoc signed, not Developer ID signed or notarized. Gatekeeper can therefore require a user decision before first launch. The Windows executable is unsigned, so Windows or organizational controls can also require an explicit trust decision or block it. Verify the downloaded checksum and follow your organization's trust process; checksums and GitHub artifact attestations establish integrity or provenance but not publisher identity. See [why direct releases are unsigned for now](docs/unsigned-releases.md) for the signing options considered and their current hurdles.
 
@@ -87,6 +89,24 @@ Codex follows your normal approval settings for the local command. Review the re
 ## Read the report
 
 Human output shows root and whole-tree totals, per-model usage, price metadata, and summed agent-turn time. Each model row is followed by its Standard, `⚡ Fast`, and unavailable-tier usage where present. Turns and duration stay on the aggregate model row because a tier can change between usage events within one turn; the tool does not guess how to split them. Token columns use compact `K`/`M`/`B` notation; JSON retains exact integers. Durations use `d`/`h`/`m`/`s`, omitting zero day, hour, and minute portions; seconds can be fractional. Model and aggregate durations can overlap. A trailing `+` on a human cost means the displayed amount is only the known partial cost. In JSON, the corresponding complete estimate is `null`; inspect `incomplete_input`, `unpriced_models`, `unpriced_service_tiers`, `unattributed_usage_tokens`, and `incomplete_input_warnings` before treating an estimate as complete.
+
+### Corpus and date reports
+
+Use `--all` for one aggregate across every discovered rollout, including roots, subagents, reviews, compactions, and other internal rollout types. Rollout type is reported as a breakdown and can be used as a grouping dimension; it is not a selection filter.
+
+```text
+codex-cost-meter report --all
+codex-cost-meter report --all --since 2026-08-01 --through 2026-08-31
+codex-cost-meter report --all --since 2026-08-01 --through 2026-08-31 --group-by day
+codex-cost-meter report --project . --since 2026-08-01 --through 2026-08-31 --group-by week,rollout-type
+codex-cost-meter report --all --since 2026-08-01 --through 2026-08-31 --group-by month,model --include-empty
+```
+
+`--since` and `--through` are inclusive `YYYY-MM-DD` bounds in the operating system's local timezone. Either bound may be omitted. Day and month buckets use local calendar boundaries, and weeks start on Monday. `--group-by` requires exactly one of `day`, `week`, or `month`, plus optional `rollout-type` and/or `model`. Empty periods are omitted unless `--include-empty` is present; that option requires both bounds and emits one zero-valued time-only row without inventing a model or rollout type.
+
+For `--all`, available Codex thread metadata narrows discovery before rollout files are opened: `--since` skips indexed rollouts last updated before its local date, and `--through` skips indexed rollouts created after its local date. Each bound works independently. Unindexed rollouts, unusable timestamps, and unavailable metadata remain candidates, so the command falls back toward a full scan rather than hiding data. Retained rollouts still use the event- and turn-level filtering below. This metadata pruning does not apply to project reports.
+
+Date filtering attributes tokens and cost to each usage-event timestamp, while turns and their complete duration are attributed to the turn's start date. Data with neither an event nor session timestamp remains in unfiltered lifetime totals but is excluded and visibly marked incomplete in a filtered report. Date and grouping options apply to `--all`, `--project`, and the bare current-project report, not an exact session-ID report. JSON retains the overall `tree` total and adds `date_range`, `by_rollout_type`, and `groups`.
 
 Cost uses the embedded historical catalog and is an API-list-price approximation, not a billing record. Each request uses the service tier most recently applied in the rollout settings; current Codex token records do not reveal the tier actually served, so a Fast request that was downgraded cannot be corrected to Standard pricing. Missing tier metadata is priced at Standard rates. It is definitive Standard only when the usage timestamp and creator version place it before the first public Fast-capable package; otherwise it appears as `Standard (assumed)` and contributes to `assumed_standard_tokens`. Explicit unsupported tiers remain unpriced.
 

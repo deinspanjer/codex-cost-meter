@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use crate::{
     cache::RolloutCache,
+    date_filter::Filter,
     progress::Progress,
     report::{ProjectReport, ProjectSelection, ReportContext, ReportError},
     rollout::discovery::{RolloutRecord, state_roots},
@@ -87,16 +88,25 @@ pub(crate) fn build_with_progress(
     codex_home: &Path,
     thread_id: Option<&str>,
     project_ref: &str,
+    filter: &Filter,
     progress: &mut Progress,
     cache: Rc<RolloutCache>,
 ) -> Result<ProjectReport, ProjectError> {
-    build_inner(codex_home, thread_id, project_ref, Some(progress), cache)
+    build_inner(
+        codex_home,
+        thread_id,
+        project_ref,
+        filter,
+        Some(progress),
+        cache,
+    )
 }
 
 fn build_inner(
     codex_home: &Path,
     thread_id: Option<&str>,
     project_ref: &str,
+    filter: &Filter,
     mut progress: Option<&mut Progress>,
     cache: Rc<RolloutCache>,
 ) -> Result<ProjectReport, ProjectError> {
@@ -139,6 +149,7 @@ fn build_inner(
                     resolver: "project_name",
                     required_thread: thread_id,
                 },
+                filter,
                 progress,
             );
         }
@@ -171,6 +182,7 @@ fn build_inner(
                     resolver: "thread_assignment",
                     required_thread: None,
                 },
+                filter,
                 progress,
             );
         }
@@ -182,6 +194,7 @@ fn build_inner(
             root.cwd
                 .as_deref()
                 .ok_or_else(|| ProjectError::ThreadCwdMissing(thread_id.into()))?,
+            filter,
             progress,
         );
     }
@@ -201,6 +214,7 @@ fn build_inner(
                     &roots,
                     &state,
                     project_ref,
+                    filter,
                     progress,
                 );
             }
@@ -211,6 +225,7 @@ fn build_inner(
                     &roots,
                     &state,
                     project_ref,
+                    filter,
                     progress,
                 ) {
                     Err(ProjectError::ProjectRefNotFound(_)) => {
@@ -276,6 +291,7 @@ fn build_inner(
             resolver,
             required_thread: thread_id,
         },
+        filter,
         progress,
     )
 }
@@ -286,6 +302,7 @@ fn fuzzy_project(
     roots: &[RolloutRecord],
     state: &DesktopState,
     project_ref: &str,
+    filter: &Filter,
     progress: Option<&mut Progress>,
 ) -> Result<ProjectReport, ProjectError> {
     let mut matches = state
@@ -307,9 +324,18 @@ fn fuzzy_project(
                 resolver: "fuzzy_project_name",
                 required_thread: None,
             },
+            filter,
             progress,
         ),
-        [] => fuzzy_historical_cwd(codex_home, cache, roots, state, project_ref, progress),
+        [] => fuzzy_historical_cwd(
+            codex_home,
+            cache,
+            roots,
+            state,
+            project_ref,
+            filter,
+            progress,
+        ),
         _ => Err(ProjectError::AmbiguousProjectRef {
             reference: project_ref.into(),
             matches: project_names(&matches),
@@ -323,6 +349,7 @@ fn fuzzy_historical_cwd(
     roots: &[RolloutRecord],
     state: &DesktopState,
     project_ref: &str,
+    filter: &Filter,
     progress: Option<&mut Progress>,
 ) -> Result<ProjectReport, ProjectError> {
     let mut matches = roots
@@ -345,6 +372,7 @@ fn fuzzy_historical_cwd(
                 resolver: "fuzzy_historical_cwd",
                 required_thread: None,
             },
+            filter,
             progress,
         ),
         [] => Err(ProjectError::ProjectRefNotFound(project_ref.into())),
@@ -413,6 +441,7 @@ fn build_scope(
     roots: &[RolloutRecord],
     state: &DesktopState,
     request: ScopeRequest<'_>,
+    filter: &Filter,
     mut progress: Option<&mut Progress>,
 ) -> Result<ProjectReport, ProjectError> {
     let fallback_paths = request
@@ -477,8 +506,10 @@ fn build_scope(
     }
     .map_err(ReportError::from)?;
     let mut report = match progress {
-        Some(progress) => context.build_project_with_progress(selection, &thread_ids, progress),
-        None => context.build_project(selection, &thread_ids),
+        Some(progress) => {
+            context.build_project_with_progress(selection, &thread_ids, filter, progress)
+        }
+        None => context.build_project(selection, &thread_ids, filter),
     }
     .map_err(ProjectError::from)?;
     if report.selection.missing_source_roots > 0 {
@@ -496,6 +527,7 @@ fn build_cwd_scope(
     roots: &[RolloutRecord],
     state: &DesktopState,
     cwd: &str,
+    filter: &Filter,
     mut progress: Option<&mut Progress>,
 ) -> Result<ProjectReport, ProjectError> {
     let mut thread_ids = Vec::new();
@@ -531,8 +563,10 @@ fn build_cwd_scope(
     }
     .map_err(ReportError::from)?;
     match progress {
-        Some(progress) => context.build_project_with_progress(selection, &thread_ids, progress),
-        None => context.build_project(selection, &thread_ids),
+        Some(progress) => {
+            context.build_project_with_progress(selection, &thread_ids, filter, progress)
+        }
+        None => context.build_project(selection, &thread_ids, filter),
     }
     .map_err(Into::into)
 }

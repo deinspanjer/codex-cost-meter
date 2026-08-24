@@ -10,8 +10,9 @@ use rusqlite::{Connection, OpenFlags, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+use time::OffsetDateTime;
 
-use crate::cache::RolloutCache;
+use crate::{cache::RolloutCache, date_filter::Filter};
 
 const MAX_JSONL_RECORD_BYTES: usize = 16 * 1024 * 1024;
 const INITIAL_JSONL_RECORD_BYTES: usize = 8 * 1024;
@@ -115,6 +116,38 @@ impl RolloutIndex {
         )
     }
 
+    pub(crate) fn build_corpus_with_cache_progress(
+        home: &Path,
+        filter: &Filter,
+        cache: Option<&RolloutCache>,
+        mut indexed_file: impl FnMut(),
+    ) -> Self {
+        let Some(paths) = corpus_paths(home, filter) else {
+            return Self::build_with_cache_progress(home, cache, indexed_file);
+        };
+        let mut candidates = Vec::new();
+        let mut warnings = Vec::new();
+        let mut oversized_lines_skipped = 0;
+        let mut malformed_lines_skipped = 0;
+        for path in paths {
+            scan_file(
+                &path,
+                &mut candidates,
+                &mut warnings,
+                &mut oversized_lines_skipped,
+                &mut malformed_lines_skipped,
+                cache,
+            );
+            indexed_file();
+        }
+        Self::from_records(
+            resolve_duplicates(candidates),
+            warnings,
+            oversized_lines_skipped,
+            malformed_lines_skipped,
+        )
+    }
+
     pub(crate) fn build_for_cached(
         home: &Path,
         ids: &[String],
@@ -195,6 +228,10 @@ impl RolloutIndex {
         self.records
             .values()
             .filter(|record| matches!(record.kind, RolloutKind::Root))
+    }
+
+    pub(crate) fn records(&self) -> impl Iterator<Item = &RolloutRecord> {
+        self.records.values()
     }
 
     pub(crate) fn descendants(&self, root_id: &str) -> Option<Vec<String>> {
@@ -328,6 +365,56 @@ fn targeted_paths(
         Some(cache) => cache.related_discovery_paths(&reconciliation_paths, &selected_ids)?,
         None => reconciliation_paths,
     });
+    paths.sort();
+    paths.dedup();
+    Some(paths)
+}
+
+fn corpus_paths(home: &Path, filter: &Filter) -> Option<Vec<PathBuf>> {
+    if !filter.is_filtered() {
+        return None;
+    }
+    let database = [
+        home.join("state_5.sqlite"),
+        home.join("sqlite/state_5.sqlite"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())?;
+    let connection =
+        Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let mut statement = connection
+        .prepare("SELECT rollout_path, created_at, updated_at FROM threads")
+        .ok()?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        })
+        .ok()?
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let mut indexed = HashSet::new();
+    let mut paths = Vec::new();
+    for (path, created_at, updated_at) in rows {
+        let path = PathBuf::from(path);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            home.join(path)
+        };
+        indexed.insert(path.clone());
+        let created_at =
+            created_at.and_then(|value| OffsetDateTime::from_unix_timestamp(value).ok());
+        let updated_at =
+            updated_at.and_then(|value| OffsetDateTime::from_unix_timestamp(value).ok());
+        if filter.retains_rollout(created_at, updated_at) {
+            paths.push(path);
+        }
+    }
+    paths.extend(unindexed_rollout_paths(home, &indexed)?);
     paths.sort();
     paths.dedup();
     Some(paths)
