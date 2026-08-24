@@ -52,30 +52,19 @@ pub(crate) fn human(report: &Report) -> String {
         [("Root", &rollout.stats), ("Whole tree", &report.tree)],
     ));
 
-    rendered.push_str("\nModels\n");
-    rendered.push_str(&model_table(report, show_cache_write));
+    append_models(
+        &mut rendered,
+        &report.by_model,
+        &report.tree,
+        show_cache_write,
+    );
 
     let _ = writeln!(
         rendered,
         "\nAgent-turn time: {} (agent time can overlap).",
         human_duration(rollout.total_subagent_turn_duration_seconds)
     );
-    let _ = writeln!(
-        rendered,
-        "Pricing as of: {}",
-        safe_text(&report.pricing.as_of)
-    );
-    let _ = writeln!(
-        rendered,
-        "Pricing basis: {}",
-        safe_text(report.pricing.basis)
-    );
-    let _ = writeln!(
-        rendered,
-        "Pricing source: {}",
-        safe_text(&report.pricing.source)
-    );
-    append_model_proxies(&mut rendered, &report.pricing);
+    append_pricing(&mut rendered, &report.pricing);
     if !report.incomplete_input_warnings.is_empty() {
         rendered.push_str("Incomplete input:\n");
         for warning in &report.incomplete_input_warnings {
@@ -143,12 +132,12 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
         show_cache_write,
         [(scope_label, &report.tree)],
     ));
-    rendered.push_str("\nModels\n");
-    rendered.push_str(&model_table_from_models(
+    append_models(
+        &mut rendered,
         &report.by_model,
         &report.tree,
         show_cache_write,
-    ));
+    );
     if !report.by_rollout_type.is_empty() {
         rendered.push_str("\nRollout types\n");
         rendered.push_str(&stats_table(
@@ -163,22 +152,8 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
         rendered.push_str("\nGroups\n");
         rendered.push_str(&group_table(report, show_cache_write));
     }
-    let _ = writeln!(
-        rendered,
-        "\nPricing as of: {}",
-        safe_text(&report.pricing.as_of)
-    );
-    let _ = writeln!(
-        rendered,
-        "Pricing basis: {}",
-        safe_text(report.pricing.basis)
-    );
-    let _ = writeln!(
-        rendered,
-        "Pricing source: {}",
-        safe_text(&report.pricing.source)
-    );
-    append_model_proxies(&mut rendered, &report.pricing);
+    rendered.push('\n');
+    append_pricing(&mut rendered, &report.pricing);
     if selection.resolver != "corpus"
         && (selection.incomplete_root_reports > 0 || selection.unpriced_root_reports > 0)
     {
@@ -203,6 +178,44 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
     rendered
         .push_str("Notes: model and aggregate durations are agent-turn time and can overlap.\n");
     rendered
+}
+
+const HUMAN_LINE_WIDTH: usize = 116;
+
+fn append_pricing(rendered: &mut String, pricing: &PricingReport) {
+    let _ = writeln!(rendered, "Pricing as of: {}", safe_text(&pricing.as_of));
+    append_wrapped_field(rendered, "Pricing basis: ", &safe_text(pricing.basis));
+    rendered.push_str("Pricing sources:\n");
+    for source in pricing.source.split(',') {
+        append_wrapped_field(rendered, "  - ", &safe_text(source));
+    }
+    append_model_proxies(rendered, pricing);
+}
+
+fn append_wrapped_field(rendered: &mut String, prefix: &str, value: &str) {
+    let content_width = HUMAN_LINE_WIDTH.saturating_sub(prefix.chars().count());
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in value.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > content_width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    for (index, line) in lines.into_iter().enumerate() {
+        let label = if index == 0 {
+            prefix.to_owned()
+        } else {
+            " ".repeat(prefix.chars().count())
+        };
+        let _ = writeln!(rendered, "{label}{line}");
+    }
 }
 
 fn append_model_proxies(rendered: &mut String, pricing: &PricingReport) {
@@ -249,7 +262,11 @@ fn append_model_proxies(rendered: &mut String, pricing: &PricingReport) {
             }
         }
         if model == "codex-auto-review" {
-            rendered.push_str("  Note: codex-auto-review boundaries are announcement-date estimates, not observed routing or billing cutovers.\n");
+            append_wrapped_field(
+                rendered,
+                "  Note: ",
+                "codex-auto-review boundaries are announcement-date estimates, not observed routing or billing cutovers.",
+            );
         }
     }
 }
@@ -285,8 +302,18 @@ fn stats_table<'a>(
     text_table(&table)
 }
 
-fn model_table(report: &Report, show_cache_write: bool) -> String {
-    model_table_from_models(&report.by_model, &report.tree, show_cache_write)
+fn append_models(
+    rendered: &mut String,
+    by_model: &std::collections::BTreeMap<String, ModelReport>,
+    total: &StatsReport,
+    show_cache_write: bool,
+) {
+    rendered.push_str("\nModels\n");
+    if by_model.is_empty() {
+        rendered.push_str("No model usage.\n");
+    } else {
+        rendered.push_str(&model_table_from_models(by_model, total, show_cache_write));
+    }
 }
 
 fn model_table_from_models(
@@ -303,14 +330,20 @@ fn model_table_from_models(
     });
     let mut table = vec![stats_headers("Model", show_cache_write)];
     for (name, model) in models {
-        table.push(model_row(name, model, show_cache_write));
-        let mut tiers = model.by_service_tier.iter().collect::<Vec<_>>();
-        tiers.sort_by_key(|(tier, _)| tier_sort_key(tier));
-        table.extend(
-            tiers
-                .into_iter()
-                .map(|(tier, detail)| model_tier_row(tier, detail, show_cache_write)),
-        );
+        let modes = human_modes(model);
+        let label = if let [mode] = modes.as_slice() {
+            format!("{} [{}]", safe_text(name), mode.label)
+        } else {
+            safe_text(name)
+        };
+        table.push(model_row(&label, model, show_cache_write));
+        if modes.len() > 1 {
+            table.extend(
+                modes
+                    .iter()
+                    .map(|mode| model_tier_row(&mode.label, &mode.detail, show_cache_write)),
+            );
+        }
     }
     table.push(stats_row("Total", total, show_cache_write));
     text_table(&table)
@@ -371,15 +404,9 @@ fn model_row(model: &str, stats: &ModelReport, show_cache_write: bool) -> Vec<St
     row
 }
 
-fn model_tier_row(tier: &str, stats: &ModelTierReport, show_cache_write: bool) -> Vec<String> {
-    let label = match tier {
-        "standard" => "↳ Standard".into(),
-        "assumed_standard" => "↳ Standard (assumed)".into(),
-        "fast" => "↳ ⚡ Fast".into(),
-        tier => format!("↳ Tier unavailable ({})", safe_text(tier)),
-    };
+fn model_tier_row(label: &str, stats: &ModelTierReport, show_cache_write: bool) -> Vec<String> {
     let mut row = vec![
-        label,
+        format!("↳ {label}"),
         String::new(),
         compact_tokens(stats.input_tokens),
         compact_tokens(stats.input_cache_read_tokens),
@@ -396,13 +423,82 @@ fn model_tier_row(tier: &str, stats: &ModelTierReport, show_cache_write: bool) -
     row
 }
 
-fn tier_sort_key(tier: &str) -> (u8, &str) {
-    match tier {
-        "standard" => (0, tier),
-        "assumed_standard" => (1, tier),
-        "fast" => (2, tier),
-        _ => (3, tier),
+struct HumanMode {
+    label: String,
+    detail: ModelTierReport,
+}
+
+fn human_modes(model: &ModelReport) -> Vec<HumanMode> {
+    let mut modes = Vec::new();
+    let standard = model.by_service_tier.get("standard");
+    let assumed = model.by_service_tier.get("assumed_standard");
+    if standard.is_some() || assumed.is_some() {
+        let assumed_usage = assumed.is_some_and(tier_has_usage);
+        modes.push(HumanMode {
+            label: if assumed_usage {
+                "Standard*"
+            } else {
+                "Standard"
+            }
+            .into(),
+            detail: merge_tiers([standard, assumed].into_iter().flatten()),
+        });
     }
+    if let Some(fast) = model.by_service_tier.get("fast") {
+        modes.push(HumanMode {
+            label: "Fast".into(),
+            detail: merge_tiers([fast]),
+        });
+    }
+    for (tier, detail) in &model.by_service_tier {
+        if !matches!(tier.as_str(), "standard" | "assumed_standard" | "fast") {
+            modes.push(HumanMode {
+                label: format!("Tier unavailable ({})", safe_text(tier)),
+                detail: merge_tiers([detail]),
+            });
+        }
+    }
+    modes
+}
+
+fn tier_has_usage(tier: &ModelTierReport) -> bool {
+    tier.input_tokens > 0
+        || tier.input_cache_write_tokens > 0
+        || tier.input_cache_read_tokens > 0
+        || tier.reasoning_tokens > 0
+        || tier.output_tokens > 0
+        || tier.known_model_cost_usd > 0.0
+}
+
+fn merge_tiers<'a>(tiers: impl IntoIterator<Item = &'a ModelTierReport>) -> ModelTierReport {
+    tiers.into_iter().fold(
+        ModelTierReport {
+            input_tokens: 0,
+            input_cache_write_tokens: 0,
+            input_cache_read_tokens: 0,
+            reasoning_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: Some(0.0),
+            known_model_cost_usd: 0.0,
+        },
+        |mut total, tier| {
+            total.input_tokens = total.input_tokens.saturating_add(tier.input_tokens);
+            total.input_cache_write_tokens = total
+                .input_cache_write_tokens
+                .saturating_add(tier.input_cache_write_tokens);
+            total.input_cache_read_tokens = total
+                .input_cache_read_tokens
+                .saturating_add(tier.input_cache_read_tokens);
+            total.reasoning_tokens = total.reasoning_tokens.saturating_add(tier.reasoning_tokens);
+            total.output_tokens = total.output_tokens.saturating_add(tier.output_tokens);
+            total.estimated_cost_usd = total
+                .estimated_cost_usd
+                .zip(tier.estimated_cost_usd)
+                .map(|(left, right)| left + right);
+            total.known_model_cost_usd += tier.known_model_cost_usd;
+            total
+        },
+    )
 }
 
 fn human_number(value: u64) -> String {
@@ -457,7 +553,7 @@ fn append_cost_note(rendered: &mut String, stats: &StatsReport) {
     if stats.assumed_standard_tokens > 0 {
         let _ = writeln!(
             rendered,
-            "Estimate assumption: {} tokens without a recorded tier were priced as Standard.",
+            "* Standard includes {} tokens without a recorded tier that were priced as Standard.",
             human_number(stats.assumed_standard_tokens)
         );
         rendered.push_str(
@@ -521,10 +617,7 @@ fn text_table(rows: &[Vec<String>]) -> String {
 }
 
 fn cell_width(value: &str) -> usize {
-    value
-        .chars()
-        .map(|character| usize::from(character == '⚡') + 1)
-        .sum()
+    value.chars().count()
 }
 
 #[cfg(test)]
@@ -694,10 +787,11 @@ mod tests {
             "Pricing basis: API list pricing; applied rollout tier (served tier unavailable)"
         ));
         assert!(rendered.contains("gpt-5.6-terra"));
-        assert!(rendered.contains("Standard (assumed)"));
-        assert!(rendered.contains("⚡ Fast"));
+        assert!(rendered.contains("↳ Standard*"));
+        assert!(rendered.contains("↳ Fast"));
+        assert!(!rendered.contains('⚡'));
         assert!(rendered.contains(
-            "Estimate assumption: 990 tokens without a recorded tier were priced as Standard."
+            "* Standard includes 990 tokens without a recorded tier that were priced as Standard."
         ));
         let models = rendered.split_once("Models\n").unwrap().1;
         assert!(models.find("gpt-5.6-terra").unwrap() < models.find("cheap").unwrap());
@@ -713,6 +807,127 @@ mod tests {
         assert!(rendered.contains("cache read is included in input"));
         assert!(rendered.contains("reasoning is included in output"));
         assert!(rendered.contains("agent time can overlap"));
+    }
+
+    #[test]
+    fn human_collapses_single_service_modes_but_json_keeps_tiers_separate() {
+        let mut report = report();
+        let model = report.by_model.get_mut("gpt-5.6-terra").unwrap();
+        model.by_service_tier.remove("fast");
+
+        let rendered = human(&report);
+        assert!(rendered.contains("gpt-5.6-terra [Standard*]"));
+        assert!(!rendered.contains("↳ Standard"));
+        let structured: Value = serde_json::from_str(&json(&report).unwrap()).unwrap();
+        assert!(structured["by_model"]["gpt-5.6-terra"]["by_service_tier"]["standard"].is_object());
+        assert!(
+            structured["by_model"]["gpt-5.6-terra"]["by_service_tier"]["assumed_standard"]
+                .is_object()
+        );
+
+        let model = report.by_model.get_mut("gpt-5.6-terra").unwrap();
+        let assumed = model.by_service_tier.remove("assumed_standard").unwrap();
+        assert!(human(&report).contains("gpt-5.6-terra [Standard]"));
+
+        let model = report.by_model.get_mut("gpt-5.6-terra").unwrap();
+        let fast = model.by_service_tier.remove("standard").unwrap();
+        model.by_service_tier.clear();
+        model
+            .by_service_tier
+            .insert("assumed_standard".into(), assumed);
+        assert!(human(&report).contains("gpt-5.6-terra [Standard*]"));
+
+        let model = report.by_model.get_mut("gpt-5.6-terra").unwrap();
+        model.by_service_tier.clear();
+        model.by_service_tier.insert("fast".into(), fast);
+        let rendered = human(&report);
+        assert!(rendered.contains("gpt-5.6-terra [Fast]"));
+        assert!(!rendered.contains("↳ Fast"));
+        assert!(!rendered.contains('⚡'));
+    }
+
+    #[test]
+    fn human_mixed_modes_align_and_bound_pricing_provenance() {
+        let mut report = report();
+        report.pricing.source =
+            "https://developers.openai.com/api/docs/pricing, https://openai.com/api-fast-mode/"
+                .into();
+        let rendered = human(&report);
+        let model = rendered
+            .lines()
+            .find(|line| line.starts_with("gpt-5.6-terra "))
+            .unwrap();
+        let standard = rendered
+            .lines()
+            .find(|line| line.starts_with("↳ Standard*"))
+            .unwrap();
+        let fast = rendered
+            .lines()
+            .find(|line| line.starts_with("↳ Fast"))
+            .unwrap();
+        let column = |line: &str, value: &str| line[..line.find(value).unwrap()].chars().count();
+        assert_eq!(column(model, "12K"), column(standard, "7K"));
+        assert_eq!(column(model, "12K"), column(fast, "5K"));
+        assert!(rendered.contains("Pricing sources:\n  - https://developers.openai.com/api/docs/pricing\n  - https://openai.com/api-fast-mode/"));
+        assert!(
+            rendered
+                .lines()
+                .all(|line| !line.starts_with("Pricing basis:") || line.chars().count() <= 116)
+        );
+    }
+
+    #[test]
+    fn human_preserves_unavailable_mode_in_mixed_output() {
+        let mut report = report();
+        let model = report.by_model.get_mut("gpt-5.6-terra").unwrap();
+        model.by_service_tier.remove("fast");
+        let unavailable = model.by_service_tier.remove("standard").unwrap();
+        model.by_service_tier.insert("flex".into(), unavailable);
+
+        let rendered = human(&report);
+        assert!(rendered.contains("↳ Standard*"));
+        assert!(rendered.contains("↳ Tier unavailable (flex)"));
+    }
+
+    #[test]
+    fn empty_models_render_an_explicit_state() {
+        let mut report = report();
+        report.by_model.clear();
+        let rendered = human(&report);
+        let models = rendered.split_once("Models\n").unwrap().1;
+        assert!(models.starts_with("No model usage.\n"));
+        assert!(!models.starts_with("Model "));
+
+        let mut project = ProjectReport {
+            selection: ProjectSelection {
+                target: "Project".into(),
+                resolver: "project_name".into(),
+                missing_source_roots: 0,
+                direct_assignments: 0,
+                workspace_fallbacks: 0,
+                projectless_threads: 0,
+                projectless_exclusions: 0,
+                other_project_exclusions: 0,
+                incomplete_root_reports: 0,
+                unpriced_root_reports: 0,
+            },
+            date_range: DateRangeReport {
+                since: None,
+                through: None,
+                group_by: Vec::new(),
+            },
+            tree: report.tree,
+            by_model: BTreeMap::new(),
+            by_rollout_type: BTreeMap::new(),
+            groups: Vec::new(),
+            pricing: report.pricing,
+            incomplete_input_warnings: Vec::new(),
+        };
+        let rendered = project_human(&project);
+        let models = rendered.split_once("Models\n").unwrap().1;
+        assert!(models.starts_with("No model usage.\n"));
+        project.selection.resolver = "corpus".into();
+        assert!(project_human(&project).contains("Models\nNo model usage.\n"));
     }
 
     #[test]
