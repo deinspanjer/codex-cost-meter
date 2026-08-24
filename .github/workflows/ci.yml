@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
+      formula_only: ${{ steps.classify.outputs.formula_only }}
+      full_ci: ${{ steps.classify.outputs.full_ci }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -26,20 +28,34 @@ jobs:
         run: |
           changed=false
           docs_only=true
+          formula_only=true
           while IFS= read -r path; do
             changed=true
             case "$path" in
               *.md|openspec/*|.agents/skills/.openspec-target) ;;
-              *) docs_only=false; break ;;
+              *) docs_only=false ;;
+            esac
+            case "$path" in
+              Formula/codex-cost-meter.rb) ;;
+              *) formula_only=false ;;
             esac
           done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          if [ "$changed" = false ]; then docs_only=false; fi
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          if [ "$changed" = false ]; then
+            docs_only=false
+            formula_only=false
+          fi
+          if [ "$docs_only" = true ] || [ "$formula_only" = true ]; then
+            full_ci=false
+          else
+            full_ci=true
+          fi
+          printf 'docs_only=%s\nformula_only=%s\nfull_ci=%s\n' \
+            "$docs_only" "$formula_only" "$full_ci" >> "$GITHUB_OUTPUT"
 
   check:
     needs: changes
     if: always()
-    runs-on: ${{ needs.changes.outputs.docs_only == 'true' && 'ubuntu-latest' || 'macos-15' }}
+    runs-on: ${{ needs.changes.outputs.full_ci == 'true' && 'macos-15' || 'ubuntu-latest' }}
     steps:
       - name: Require change classification
         if: needs.changes.result != 'success'
@@ -51,22 +67,39 @@ jobs:
         if: needs.changes.outputs.docs_only != 'true'
         with:
           fetch-depth: 0
-      - if: needs.changes.outputs.docs_only != 'true'
+      - name: Validate Homebrew formula source archive
+        if: needs.changes.outputs.formula_only == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          formula=Formula/codex-cost-meter.rb
+          ruby -c "$formula"
+          version=$(python3 scripts/version.py current)
+          url=$(sed -n 's/^  url "\(.*\)"$/\1/p' "$formula")
+          checksum=$(sed -n 's/^  sha256 "\([0-9a-f]\{64\}\)"$/\1/p' "$formula")
+          test "$url" = "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/archive/refs/tags/v$version.tar.gz"
+          test ${#checksum} -eq 64
+          source_archive=$(mktemp)
+          trap 'rm -f "$source_archive"' EXIT
+          curl --fail --location --silent --show-error --retry 3 "$url" --output "$source_archive"
+          printf '%s  %s\n' "$checksum" "$source_archive" | sha256sum --check -
+          tar -tzf "$source_archive" >/dev/null
+      - if: needs.changes.outputs.full_ci == 'true'
         run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
-      - if: needs.changes.outputs.docs_only != 'true'
+      - if: needs.changes.outputs.full_ci == 'true'
         run: rustup default 1.97.1
-      - if: needs.changes.outputs.docs_only != 'true'
+      - if: needs.changes.outputs.full_ci == 'true'
         run: cargo fmt --check
-      - if: needs.changes.outputs.docs_only != 'true'
+      - if: needs.changes.outputs.full_ci == 'true'
         run: cargo test
-      - if: needs.changes.outputs.docs_only != 'true'
+      - if: needs.changes.outputs.full_ci == 'true'
         run: python3 -m unittest scripts/test_version.py -v
-      - if: needs.changes.outputs.docs_only != 'true'
+      - if: needs.changes.outputs.full_ci == 'true'
         run: cargo clippy --all-targets --keep-going -- -D warnings
 
   windows:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.result == 'success' && needs.changes.outputs.full_ci == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -172,32 +205,32 @@ jobs:
             target: aarch64-unknown-linux-musl
             architecture: aarch64
             musl: true
-    runs-on: ${{ needs.changes.outputs.docs_only == 'true' && 'ubuntu-latest' || matrix.runner }}
+    runs-on: ${{ needs.changes.outputs.full_ci == 'true' && matrix.runner || 'ubuntu-latest' }}
     steps:
       - name: Require change classification
         if: needs.changes.result != 'success'
         run: exit 1
-      - name: Skip build for documentation-only changes
-        if: needs.changes.outputs.docs_only == 'true'
-        run: echo "Only documentation and OpenSpec metadata changed."
+      - name: Skip build for lightweight changes
+        if: needs.changes.outputs.full_ci != 'true'
+        run: echo "No Rust or platform code changed."
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-        if: needs.changes.outputs.docs_only != 'true'
+        if: needs.changes.outputs.full_ci == 'true'
         with:
           fetch-depth: 0
-      - if: needs.changes.outputs.docs_only != 'true'
+      - if: needs.changes.outputs.full_ci == 'true'
         run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
-      - if: needs.changes.outputs.docs_only != 'true'
+      - if: needs.changes.outputs.full_ci == 'true'
         run: rustup default 1.97.1
-      - if: needs.changes.outputs.docs_only != 'true' && matrix.musl
+      - if: needs.changes.outputs.full_ci == 'true' && matrix.musl
         run: sudo apt-get update && sudo apt-get install --yes musl-tools
-      - if: needs.changes.outputs.docs_only != 'true'
+      - if: needs.changes.outputs.full_ci == 'true'
         run: rustup target add ${{ matrix.target }}
-      - if: needs.changes.outputs.docs_only != 'true' && matrix.musl
+      - if: needs.changes.outputs.full_ci == 'true' && matrix.musl
         name: Test Linux scheduling contracts
         run: |
           cargo test schedule::linux::tests
           cargo test --test linux_schedule_cli
-      - if: needs.changes.outputs.docs_only != 'true'
+      - if: needs.changes.outputs.full_ci == 'true'
         name: Build release binary
         env:
           TARGET: ${{ matrix.target }}
@@ -210,7 +243,7 @@ jobs:
             export "CC_${target_lower}=musl-gcc"
           fi
           cargo build --locked --release --target "$TARGET"
-      - if: needs.changes.outputs.docs_only != 'true' && matrix.musl
+      - if: needs.changes.outputs.full_ci == 'true' && matrix.musl
         name: Package and inspect Linux archive
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
