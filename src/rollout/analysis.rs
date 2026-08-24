@@ -8,7 +8,7 @@ use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     pricing::{ServiceTier, Usage},
-    rollout::discovery::{JsonlReadError, RolloutRecord, read_jsonl},
+    rollout::discovery::{ForkHistoryMode, JsonlReadError, RolloutRecord, read_jsonl},
 };
 
 const FIRST_PUBLIC_FAST_RELEASE: OffsetDateTime = datetime!(2026-03-03 05:35:04 UTC);
@@ -54,7 +54,7 @@ pub(crate) enum AnalysisError {
     Read(#[from] JsonlReadError),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct TokenUsage {
     usage: Usage,
     reasoning_output: u64,
@@ -121,7 +121,98 @@ impl TokenUsage {
     }
 }
 
+pub(crate) fn replay_prefix_len(parent: &RolloutRecord, child: &RolloutRecord) -> usize {
+    if child.fork_history_mode != Some(ForkHistoryMode::Legacy)
+        || child.parent_id.as_deref() != Some(parent.id.as_str())
+    {
+        return 0;
+    }
+
+    let mut child_at = None;
+    let mut session_meta_count = 0;
+    let mut embeds_parent = false;
+    let mut child_usage = Vec::new();
+    if read_jsonl(&child.path, |line| {
+        let Ok(item) = serde_json::from_slice::<Value>(line) else {
+            child_usage.push(None);
+            return;
+        };
+        if item.get("type").and_then(Value::as_str) == Some("session_meta") {
+            session_meta_count += 1;
+            if session_meta_count == 1 {
+                child_at = timestamp(&item).ok().flatten();
+            } else if item
+                .get("payload")
+                .and_then(Value::as_object)
+                .and_then(|payload| payload.get("id").or_else(|| payload.get("session_id")))
+                .and_then(Value::as_str)
+                == Some(parent.id.as_str())
+            {
+                embeds_parent = true;
+            }
+        }
+        if let Some(usage) = token_usage_from_item(&item) {
+            child_usage.push(usage);
+        }
+    })
+    .is_err()
+        || !embeds_parent
+    {
+        return 0;
+    }
+    let Some(child_at) = child_at else {
+        return 0;
+    };
+
+    let mut parent_usage = Vec::new();
+    if read_jsonl(&parent.path, |line| {
+        let Ok(item) = serde_json::from_slice::<Value>(line) else {
+            parent_usage.push(None);
+            return;
+        };
+        let Some(usage) = token_usage_from_item(&item) else {
+            return;
+        };
+        match timestamp(&item) {
+            Ok(Some(at)) if at <= child_at => parent_usage.push(usage),
+            Ok(Some(_)) => {}
+            _ => parent_usage.push(None),
+        }
+    })
+    .is_err()
+    {
+        return 0;
+    }
+
+    parent_usage
+        .iter()
+        .zip(&child_usage)
+        .take_while(|(parent, child)| parent.is_some() && parent == child)
+        .count()
+}
+
+fn token_usage_from_item(item: &Value) -> Option<Option<TokenUsage>> {
+    let payload = item.get("payload")?.as_object()?;
+    if payload.get("type").and_then(Value::as_str) != Some("token_count") {
+        return None;
+    }
+    Some(
+        payload
+            .get("info")
+            .and_then(Value::as_object)
+            .and_then(|info| info.get("last_token_usage"))
+            .and_then(TokenUsage::from_json),
+    )
+}
+
 pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisError> {
+    analyze_skipping(record, 0)
+}
+
+pub(crate) fn analyze_skipping(
+    record: &RolloutRecord,
+    replay_prefix_len: usize,
+) -> Result<RolloutStats, AnalysisError> {
     let mut session_meta_count = 0;
     let mut session_at = None;
     let mut creator_version = None;
@@ -174,6 +265,7 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
     let mut legacy_model = None::<String>;
     let mut service_tier = ServiceTier::Unpriced("missing".into());
     let mut previous_total = None;
+    let mut replay_records_remaining = replay_prefix_len;
     let summary = read_jsonl(&record.path, |line| {
         let Ok(item) = serde_json::from_slice::<Value>(line) else {
             stats.malformed_lines += 1;
@@ -273,6 +365,10 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
         };
         if let Some(total) = total {
             previous_total = Some(total);
+        }
+        if replay_records_remaining > 0 {
+            replay_records_remaining -= 1;
+            return;
         }
         if !normalized.has_tokens() {
             return;
@@ -490,9 +586,9 @@ mod tests {
     use tempfile::TempDir;
     use time::macros::datetime;
 
-    use super::{RolloutStats, analyze};
+    use super::{RolloutStats, analyze, replay_prefix_len};
     use crate::pricing::{ServiceTier, Usage};
-    use crate::rollout::discovery::{RolloutKind, RolloutRecord};
+    use crate::rollout::discovery::{ForkHistoryMode, RolloutKind, RolloutRecord};
 
     #[derive(Clone, Copy, Default)]
     struct FixtureUsage {
@@ -558,6 +654,7 @@ mod tests {
         RolloutRecord {
             id: "rollout".into(),
             parent_id: None,
+            fork_history_mode: None,
             kind,
             cwd: None,
             path,
@@ -613,6 +710,102 @@ mod tests {
             output,
             ..FixtureUsage::default()
         }
+    }
+
+    #[test]
+    fn matches_only_the_structural_legacy_fork_prefix() {
+        let temp = TempDir::new().unwrap();
+        let parent_path = temp.path().join("parent.jsonl");
+        let child_path = temp.path().join("child.jsonl");
+        let parent_usage = [
+            FixtureUsage {
+                input: 10,
+                cached_input: 1,
+                cache_write_input: 2,
+                output: 3,
+                reasoning_output: 1,
+            },
+            usage(20, 2, 3),
+            usage(30, 3, 4),
+        ];
+        fs::write(
+            &parent_path,
+            [
+                json!({"type": "session_meta", "timestamp": "2026-08-13T12:00:00Z", "payload": {"id": "parent"}}),
+                token_event_at("2026-08-13T12:00:01Z", parent_usage[0], parent_usage[0]),
+                token_event_at("2026-08-13T12:00:02Z", parent_usage[1], parent_usage[1]),
+                token_event_at("2026-08-13T12:00:03Z", parent_usage[2], parent_usage[2]),
+            ]
+            .iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>(),
+        )
+        .unwrap();
+        let write_child = |rows: &[Value]| {
+            fs::write(
+                &child_path,
+                rows.iter()
+                    .map(|row| format!("{row}\n"))
+                    .collect::<String>(),
+            )
+            .unwrap();
+        };
+        let parent = RolloutRecord {
+            id: "parent".into(),
+            parent_id: None,
+            fork_history_mode: None,
+            kind: RolloutKind::Root,
+            cwd: None,
+            path: parent_path,
+        };
+        let mut child = RolloutRecord {
+            id: "child".into(),
+            parent_id: Some("parent".into()),
+            fork_history_mode: Some(ForkHistoryMode::Legacy),
+            kind: RolloutKind::Root,
+            cwd: None,
+            path: child_path.clone(),
+        };
+        let child_meta = json!({"type": "session_meta", "timestamp": "2026-08-13T12:01:00Z", "payload": {"id": "child"}});
+        let embedded_parent = json!({"type": "session_meta", "timestamp": "2026-08-13T12:00:00Z", "payload": {"id": "parent"}});
+
+        write_child(&[
+            child_meta.clone(),
+            embedded_parent.clone(),
+            token_event_at("2026-08-13T12:01:00.001Z", parent_usage[0], parent_usage[0]),
+            token_event_at("2026-08-13T12:01:00.002Z", parent_usage[1], parent_usage[1]),
+            token_event_at("2026-08-13T12:01:00.003Z", parent_usage[2], parent_usage[2]),
+        ]);
+        assert_eq!(replay_prefix_len(&parent, &child), 3);
+
+        write_child(&[
+            child_meta.clone(),
+            embedded_parent.clone(),
+            token_event_at("2026-08-13T12:01:00.001Z", parent_usage[0], parent_usage[0]),
+            token_event_at("2026-08-13T12:01:00.002Z", parent_usage[1], parent_usage[1]),
+            token_event_at("2026-08-13T12:01:05Z", usage(99, 0, 1), usage(99, 0, 1)),
+        ]);
+        assert_eq!(replay_prefix_len(&parent, &child), 2);
+
+        write_child(&[
+            child_meta.clone(),
+            embedded_parent.clone(),
+            token_event_at("2026-08-13T12:01:00.001Z", usage(99, 0, 1), usage(99, 0, 1)),
+        ]);
+        assert_eq!(replay_prefix_len(&parent, &child), 0);
+
+        write_child(&[
+            child_meta.clone(),
+            embedded_parent.clone(),
+            token_event_at("2026-08-13T12:01:00.001Z", parent_usage[0], parent_usage[0]),
+            json!({"type": "event_msg", "timestamp": "2026-08-13T12:01:00.002Z", "payload": {"type": "token_count", "info": {}}}),
+        ]);
+        assert_eq!(replay_prefix_len(&parent, &child), 1);
+
+        child.fork_history_mode = Some(ForkHistoryMode::Paginated);
+        assert_eq!(replay_prefix_len(&parent, &child), 0);
+        child.fork_history_mode = None;
+        assert_eq!(replay_prefix_len(&parent, &child), 0);
     }
 
     #[test]

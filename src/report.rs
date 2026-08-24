@@ -12,7 +12,7 @@ use crate::{
     pricing::{Catalog, PricingError, ServiceTier, Usage},
     progress::Progress,
     rollout::{
-        analysis::{AnalysisError, RolloutStats},
+        analysis::{AnalysisError, RolloutStats, replay_prefix_len},
         discovery::RolloutIndex,
     },
     session_index::Snapshot,
@@ -769,9 +769,14 @@ fn build_with_state(
 
     for id in std::iter::once(thread_id).chain(descendants.iter().map(String::as_str)) {
         let record = index.record(id).expect("indexed descendant must exist");
+        let replay_prefix_len = record
+            .parent_id
+            .as_deref()
+            .and_then(|parent_id| index.record(parent_id))
+            .map_or(0, |parent| replay_prefix_len(parent, record));
         let rollout_type = record.kind.report_type();
         let type_stats = by_rollout_type.entry(rollout_type).or_default();
-        match cache.analyze(record) {
+        match cache.analyze_with_replay(record, replay_prefix_len) {
             Ok(stats) => {
                 tree_stats.add(&stats, catalog);
                 type_stats.add(&stats, catalog);
@@ -855,7 +860,7 @@ mod tests {
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
-    use super::{ReportContext, ReportError, build, build_with_index};
+    use super::{ProjectSelection, ReportContext, ReportError, build, build_with_index};
     use crate::{pricing::Catalog, rollout::discovery::RolloutIndex};
 
     fn write_jsonl(home: &TempDir, relative: &str, rows: &[Value]) {
@@ -971,6 +976,91 @@ mod tests {
         assert_eq!(report.tree.rollout_count, 2);
         assert_eq!(report.by_rollout_type["security_review"].rollout_count, 1);
         assert_eq!(report.by_model["gpt-5.6-terra"].input_tokens, 100);
+    }
+
+    #[test]
+    fn excludes_copied_fork_usage_and_keeps_the_first_child_request() {
+        let home = TempDir::new().unwrap();
+        write_jsonl(
+            &home,
+            "sessions/root.jsonl",
+            &[
+                json!({"type": "session_meta", "timestamp": "2026-08-13T12:00:00Z", "payload": {"id": "root", "source": "cli"}}),
+                json!({"type": "turn_context", "payload": {"turn_id": "parent-1", "model": "gpt-5.6-terra", "effort": "high"}}),
+                json!({"type": "event_msg", "payload": {"type": "turn_started", "turn_id": "parent-1"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:01:00Z", "payload": {"type": "token_count", "info": {
+                    "last_token_usage": {"input_tokens": 100, "total_tokens": 100},
+                    "total_token_usage": {"input_tokens": 100, "total_tokens": 100}
+                }}}),
+                json!({"type": "event_msg", "payload": {"type": "turn_complete", "turn_id": "parent-1"}}),
+                json!({"type": "turn_context", "payload": {"turn_id": "parent-2", "model": "gpt-5.6-terra", "effort": "high"}}),
+                json!({"type": "event_msg", "payload": {"type": "turn_started", "turn_id": "parent-2"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:01:59.900Z", "payload": {"type": "token_count", "info": {
+                    "last_token_usage": {"input_tokens": 100, "total_tokens": 100},
+                    "total_token_usage": {"input_tokens": 200, "total_tokens": 200}
+                }}}),
+            ],
+        );
+        write_jsonl(
+            &home,
+            "sessions/child.jsonl",
+            &[
+                json!({"type": "session_meta", "timestamp": "2026-08-13T12:02:00Z", "payload": {
+                    "id": "child", "forked_from_id": "root", "history_mode": "legacy", "source": "cli"
+                }}),
+                json!({"type": "session_meta", "timestamp": "2026-08-13T12:00:00Z", "payload": {"id": "root", "source": "cli"}}),
+                json!({"type": "turn_context", "payload": {"turn_id": "parent-1", "model": "gpt-5.6-terra", "effort": "high"}}),
+                json!({"type": "event_msg", "payload": {"type": "turn_started", "turn_id": "parent-1"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:02:00.001Z", "payload": {"type": "token_count", "info": {
+                    "last_token_usage": {"input_tokens": 100, "total_tokens": 100},
+                    "total_token_usage": {"input_tokens": 100, "total_tokens": 100}
+                }}}),
+                json!({"type": "event_msg", "payload": {"type": "turn_complete", "turn_id": "parent-1"}}),
+                json!({"type": "turn_context", "payload": {"turn_id": "child-1", "model": "gpt-5.6-sol", "effort": "high"}}),
+                json!({"type": "event_msg", "payload": {"type": "turn_started", "turn_id": "child-1"}}),
+                json!({"type": "event_msg", "timestamp": "2026-08-13T12:02:05Z", "payload": {"type": "token_count", "info": {
+                    "last_token_usage": {
+                        "input_tokens": 50, "cached_input_tokens": 20, "cache_write_input_tokens": 5,
+                        "output_tokens": 10, "reasoning_output_tokens": 3, "total_tokens": 60
+                    },
+                    "total_token_usage": {
+                        "input_tokens": 150, "cached_input_tokens": 20, "cache_write_input_tokens": 5,
+                        "output_tokens": 10, "reasoning_output_tokens": 3, "total_tokens": 160
+                    }
+                }}}),
+            ],
+        );
+
+        let report = build("root", home.path()).unwrap();
+
+        assert_eq!(report.tree.input_tokens, 250);
+        assert_eq!(report.tree.input_cache_read_tokens, 20);
+        assert_eq!(report.tree.input_cache_write_tokens, 5);
+        assert_eq!(report.tree.output_tokens, 10);
+        assert_eq!(report.tree.reasoning_tokens, 3);
+        assert_eq!(report.by_model["gpt-5.6-terra"].input_tokens, 200);
+        assert_eq!(report.by_model["gpt-5.6-sol"].input_tokens, 50);
+
+        let project = ReportContext::new(home.path())
+            .unwrap()
+            .build_project(
+                ProjectSelection {
+                    target: "fixture".into(),
+                    resolver: "test",
+                    missing_source_roots: 0,
+                    direct_assignments: 1,
+                    workspace_fallbacks: 0,
+                    projectless_threads: 0,
+                    projectless_exclusions: 0,
+                    other_project_exclusions: 0,
+                    incomplete_root_reports: 0,
+                    unpriced_root_reports: 0,
+                },
+                &["root".into()],
+            )
+            .unwrap();
+        assert_eq!(project.tree.input_tokens, 250);
+        assert_eq!(project.by_model["gpt-5.6-sol"].input_tokens, 50);
     }
 
     #[test]

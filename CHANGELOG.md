@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.1.0]
+
+- Exclude proven legacy-fork rollout replay from usage totals while preserving the first genuine child request.
+
 ## [0.9.0]
 
 - Attribute rollout usage to Standard, Fast, or unavailable service tiers, with current Fast and long-context pricing plus per-model tier detail.
