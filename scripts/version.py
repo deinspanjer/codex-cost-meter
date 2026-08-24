@@ -11,6 +11,7 @@ import zipfile
 
 
 VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def parse_version(value):
@@ -236,6 +237,28 @@ def package_windows(root, binary, output_dir):
     return archive
 
 
+def update_formula(root, checksum):
+    if not SHA256.fullmatch(checksum):
+        raise ValueError("SHA-256 must be 64 lowercase hexadecimal characters")
+    name, version = read_package(root)
+    formula_path = root / "Formula" / f"{name}.rb"
+    formula = formula_path.read_text(encoding="utf-8")
+    formula, url_count = re.subn(
+        r'(?m)^(  url "https://github\.com/[^\"]+/archive/refs/tags/)v\d+\.\d+\.\d+(\.tar\.gz")$',
+        rf"\g<1>v{version}\g<2>",
+        formula,
+    )
+    formula, checksum_count = re.subn(
+        r'(?m)^(  sha256 ")[0-9a-f]{64}(")$',
+        rf"\g<1>{checksum}\g<2>",
+        formula,
+    )
+    if url_count != 1 or checksum_count != 1:
+        raise ValueError("formula requires one tagged source URL and SHA-256")
+    formula_path.write_text(formula, encoding="utf-8")
+    return formula_path
+
+
 def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -256,6 +279,8 @@ def main():
     package_windows_parser = commands.add_parser("package-windows")
     package_windows_parser.add_argument("--binary", type=Path, required=True)
     package_windows_parser.add_argument("--output-dir", type=Path, required=True)
+    update_formula_parser = commands.add_parser("update-formula")
+    update_formula_parser.add_argument("--sha256", required=True)
     commands.add_parser("verify")
     arguments = parser.parse_args()
     root = Path.cwd()
@@ -278,6 +303,8 @@ def main():
             )
         elif arguments.command == "package-windows":
             print(package_windows(root, arguments.binary, arguments.output_dir))
+        elif arguments.command == "update-formula":
+            print(update_formula(root, arguments.sha256))
         else:
             verify(root)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
