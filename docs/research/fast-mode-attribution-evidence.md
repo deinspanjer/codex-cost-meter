@@ -97,8 +97,8 @@ Local file references below use paths under `CODEX_HOME`; line numbers refer to 
 
 - The first `token_count` occurs at 2026-08-19 20:09:03Z (line 17), while the first `thread_settings_applied` does not occur until 20:58:47Z (line 398). The initial 49-minute region therefore has usage but no preceding tier snapshot.
 - The file later contains 14 `default` snapshots and 9 `priority` snapshots; the first Priority snapshot is on 2026-08-21 (line 1811). Applied-tier switching is directly observed.
-- A fresh tree report prices 6,791,345 unattributed tokens as `Standard (assumed)` and keeps that assumption visible without making the estimate incomplete.
-- The same report prices 5.5M input tokens under the explicit `⚡ Fast` model detail and produces a complete $35.06 tree estimate.
+- A fresh tree report prices 6,791,345 unattributed tokens as assumed Standard and keeps that assumption visible without making the estimate incomplete.
+- The same report prices 5.5M input tokens under explicit Fast model detail and produces a complete $35.06 tree estimate.
 
 File: `$CODEX_HOME/archived_sessions/rollout-2026-08-19T16-06-35-01a01ba1-f94b-7041-8e9b-727b5b3e864a.jsonl`.
 
@@ -106,7 +106,7 @@ File: `$CODEX_HOME/archived_sessions/rollout-2026-08-19T16-06-35-01a01ba1-f94b-7
 
 - The rollout begins with `task_started` on line 2 and produces its first `token_count` on line 19.
 - Its first `thread_settings_applied` is `default` on line 258, immediately before the next `task_started`, roughly 12 minutes after initial usage began.
-- Those initial normalized usage events are priced as `Standard (assumed)`: they precede the first persisted settings event in file order, but they do **not** precede Fast-mode availability.
+- Those initial normalized usage events are priced as assumed Standard: they precede the first persisted settings event in file order, but they do **not** precede Fast-mode availability.
 
 File: `$CODEX_HOME/sessions/2026/08/22/rollout-2026-08-22T18-19-05-01a02b8e-5dad-7fe1-86c3-e5ce39442af8.jsonl`.
 
@@ -152,7 +152,7 @@ Files:
 
 For a useful best-effort estimator, price missing tier metadata at Standard rates while preserving the distinction between evidence and assumption. Mark usage as definitive Standard only when its timestamp predates `0.108.0-alpha.2` and its creator version does not prove Fast capability; otherwise label it assumed Standard. This is a pricing fallback, not proof of the API-served tier. Explicit Standard, Priority/Fast, and unsupported markers remain authoritative for applied-tier classification.
 
-For display, retain the aggregate model row and show tier details beneath it, using `⚡` for Fast, `Standard (assumed)` for missing attribution, and an unavailable label only for unsupported explicit tiers. For billing-grade backfill, use an authoritative API response log or the OpenAI Usage Dashboard grouped by service tier and line item; the local rollout corpus cannot prove served-tier history on its own.
+For display, annotate the aggregate row when a model has one service mode and show child rows only for mixed modes. Combine explicit and assumed Standard usage as `Standard*`, explain the assumption once, render Fast without a glyph, and retain unavailable labels for unsupported explicit tiers. Keep the exact Standard split in structured output. For billing-grade backfill, use an authoritative API response log or the OpenAI Usage Dashboard grouped by service tier and line item; the local rollout corpus cannot prove served-tier history on its own.
 
 Reproduction commands used for the representative counts:
 

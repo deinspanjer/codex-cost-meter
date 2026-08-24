@@ -38,8 +38,13 @@ impl<'a> Progress<'a> {
 
     pub(crate) fn indexed_file(&mut self) {
         self.indexed_files += 1;
+        let noun = if self.indexed_files == 1 {
+            "file"
+        } else {
+            "files"
+        };
         self.render(
-            &format!("Indexing rollout metadata: {} files", self.indexed_files),
+            &format!("Indexing rollout metadata: {} {noun}", self.indexed_files),
             false,
         );
     }
@@ -94,7 +99,7 @@ impl<'a> Progress<'a> {
         self.last_render = Some(now);
         self.last_message = Some(message.into());
         if self.terminal {
-            let _ = write!(self.writer, "\r{message}");
+            let _ = write!(self.writer, "\r\x1b[2K{message}");
             let _ = self.writer.flush();
             self.rendered_terminal_line = true;
         } else {
@@ -108,5 +113,46 @@ impl Drop for Progress<'_> {
         if self.terminal && self.rendered_terminal_line {
             let _ = self.writer.write_all(b"\n");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Progress;
+
+    #[test]
+    fn terminal_progress_erases_each_line_and_uses_singular_file() {
+        let mut output = Vec::new();
+        {
+            let mut progress = Progress::new(&mut output, false, true);
+            progress.start_indexing();
+            progress.last_render = None;
+            progress.indexed_file();
+            progress.start_analysis(1);
+            progress.analyzed_rollout();
+            progress.finish();
+        }
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "\r\x1b[2KIndexing rollout metadata: 0 files\r\x1b[2KIndexing rollout metadata: 1 file\r\x1b[2KAnalyzing 0/1 rollouts\r\x1b[2KAnalyzing 1/1 rollouts\n"
+        );
+    }
+
+    #[test]
+    fn redirected_forced_progress_uses_complete_plain_lines() {
+        let mut output = Vec::new();
+        {
+            let mut progress = Progress::new(&mut output, true, false);
+            progress.start_indexing();
+            progress.start_analysis(1);
+            progress.analyzed_rollout();
+            progress.finish();
+        }
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Indexing rollout metadata: 0 files\nAnalyzing 0/1 rollouts\nAnalyzing 1/1 rollouts\n"
+        );
     }
 }

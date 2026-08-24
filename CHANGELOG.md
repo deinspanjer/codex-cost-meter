@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.2.0]
+
+- Price `codex-auto-review` through its dated GPT-5.4 and GPT-5.6 Luna proxy history and expose the qualified mapping in human and structured reports.
+- Condense human service-tier output, wrap pricing provenance, render intentional empty-model states, and erase stale progress-line text.
+
 ## [1.1.0]
 
 - Exclude proven legacy-fork rollout replay from usage totals while preserving the first genuine child request.

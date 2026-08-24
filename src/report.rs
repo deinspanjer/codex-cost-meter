@@ -156,6 +156,14 @@ pub(crate) struct PricingReport {
     pub as_of: String,
     pub source: String,
     pub model_proxies: BTreeMap<String, String>,
+    pub model_proxy_histories: BTreeMap<String, Vec<ModelProxyPointReport>>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ModelProxyPointReport {
+    pub target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_from: Option<String>,
 }
 
 pub(crate) struct ReportContext {
@@ -569,6 +577,22 @@ impl ReportContext {
 }
 
 fn pricing_report(catalog: &Catalog) -> PricingReport {
+    let model_proxy_histories = catalog
+        .proxies()
+        .iter()
+        .map(|(model, points)| {
+            (
+                model.clone(),
+                points
+                    .iter()
+                    .map(|point| ModelProxyPointReport {
+                        target: point.target().into(),
+                        effective_from: point.effective_from().map(|date| date.to_string()),
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
     PricingReport {
         basis: "API list pricing; applied rollout tier (served tier unavailable); per request model/context; output includes reasoning",
         as_of: catalog.as_of().into(),
@@ -576,8 +600,18 @@ fn pricing_report(catalog: &Catalog) -> PricingReport {
         model_proxies: catalog
             .proxies()
             .iter()
-            .map(|(model, target)| (model.clone(), target.clone()))
+            .map(|(model, points)| {
+                (
+                    model.clone(),
+                    points
+                        .last()
+                        .expect("validated proxy history")
+                        .target()
+                        .into(),
+                )
+            })
             .collect(),
+        model_proxy_histories,
     }
 }
 
