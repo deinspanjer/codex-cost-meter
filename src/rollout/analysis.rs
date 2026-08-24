@@ -31,11 +31,21 @@ pub(crate) struct UsageEvent {
     pub reasoning_output: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub(crate) struct TurnEvent {
+    pub model: String,
+    pub effort: String,
+    pub started_at: Option<OffsetDateTime>,
+    pub duration: Option<Duration>,
+    pub ended: bool,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct RolloutStats {
     pub known_usage: Usage,
     pub reasoning_output: u64,
     pub events: Vec<UsageEvent>,
+    pub turn_events: Vec<TurnEvent>,
     pub unattributed_tokens: u64,
     pub turns: usize,
     pub ended_turns: usize,
@@ -169,6 +179,7 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
         ..RolloutStats::default()
     };
     let mut starts = HashMap::new();
+    let mut turn_event_indices = HashMap::new();
     let mut started_turns = Vec::new();
     let mut active_turn = None::<String>;
     let mut legacy_model = None::<String>;
@@ -209,7 +220,20 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
             if let Some(turn_id) = &active_turn {
                 legacy_model = None;
                 started_turns.push(turn_id.clone());
-                if let Some(at) = timestamp_or_incomplete(&item, &mut stats) {
+                let at = timestamp_or_incomplete(&item, &mut stats);
+                let (model, effort) = turn_contexts
+                    .get(turn_id)
+                    .cloned()
+                    .unwrap_or_else(|| ("unknown".into(), "unknown".into()));
+                turn_event_indices.insert(turn_id.clone(), stats.turn_events.len());
+                stats.turn_events.push(TurnEvent {
+                    model,
+                    effort,
+                    started_at: at.or(session_at),
+                    duration: None,
+                    ended: false,
+                });
+                if let Some(at) = at {
                     starts.insert(turn_id.clone(), at);
                 }
             }
@@ -221,6 +245,18 @@ pub(crate) fn analyze(record: &RolloutRecord) -> Result<RolloutStats, AnalysisEr
         ) {
             let turn_id = event_turn_id(payload).or_else(|| active_turn.clone());
             let ended_at = timestamp_or_incomplete(&item, &mut stats);
+            if let Some(index) = turn_id
+                .as_ref()
+                .and_then(|turn_id| turn_event_indices.get(turn_id))
+                .copied()
+            {
+                stats.turn_events[index].ended = true;
+                if let (Some(started_at), Some(ended_at)) =
+                    (starts.get(turn_id.as_ref().unwrap()).copied(), ended_at)
+                {
+                    stats.turn_events[index].duration = Some(ended_at - started_at);
+                }
+            }
             if let Some(turn_id) = &turn_id
                 && let Some(started_at) = starts.remove(turn_id)
             {

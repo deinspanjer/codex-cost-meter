@@ -7,8 +7,10 @@ use std::{
 #[cfg(unix)]
 use std::path::PathBuf;
 
+use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 fn write_jsonl(path: &Path, rows: &[Value]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -50,6 +52,37 @@ fn fixture_home_at(home: &Path) {
     );
 }
 
+fn dated_rollout(
+    id: &str,
+    parent: Option<&str>,
+    cwd: &Path,
+    model: &str,
+    started_at: &str,
+    ended_at: &str,
+    input: u64,
+) -> Vec<Value> {
+    let mut metadata = json!({"id": id, "source": "cli", "cwd": cwd});
+    if let Some(parent) = parent {
+        metadata["parent_thread_id"] = json!(parent);
+        metadata["source"] = json!({"subagent": {"other": "worker"}});
+    }
+    vec![
+        json!({"type": "session_meta", "timestamp": started_at, "payload": metadata}),
+        json!({"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {"service_tier": "standard"}}}),
+        json!({"type": "turn_context", "payload": {"turn_id": "turn-1", "model": model, "effort": "high"}}),
+        json!({"type": "event_msg", "timestamp": started_at, "payload": {"type": "task_started", "turn_id": "turn-1"}}),
+        json!({
+            "type": "event_msg",
+            "timestamp": started_at,
+            "payload": {
+                "type": "token_count",
+                "info": {"last_token_usage": {"input_tokens": input, "total_tokens": input}},
+            },
+        }),
+        json!({"type": "event_msg", "timestamp": ended_at, "payload": {"type": "task_complete", "turn_id": "turn-1"}}),
+    ]
+}
+
 fn report_with_home(home: &Path, thread_id: &str, json: bool) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"));
     command
@@ -60,6 +93,338 @@ fn report_with_home(home: &Path, thread_id: &str, json: bool) -> Output {
         command.arg("--json");
     }
     command.output().unwrap()
+}
+
+#[test]
+fn corpus_and_project_reports_share_date_grouping_and_empty_bucket_rules() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    write_jsonl(
+        &home.path().join("sessions/root.jsonl"),
+        &dated_rollout(
+            "root",
+            None,
+            &workspace,
+            "gpt-5.6-terra",
+            "2026-08-01T23:59:00Z",
+            "2026-08-02T00:01:00Z",
+            100,
+        ),
+    );
+    write_jsonl(
+        &home.path().join("sessions/child.jsonl"),
+        &dated_rollout(
+            "child",
+            Some("root"),
+            &workspace,
+            "gpt-5.6-sol",
+            "2026-08-03T12:00:00Z",
+            "2026-08-03T12:00:30Z",
+            50,
+        ),
+    );
+
+    let corpus = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args([
+            "report",
+            "--all",
+            "--since",
+            "2026-08-01",
+            "--through",
+            "2026-08-02",
+            "--group-by",
+            "day,rollout-type,model",
+            "--include-empty",
+            "--json",
+            "--codex-home",
+        ])
+        .arg(home.path())
+        .env("TZ", "UTC")
+        .output()
+        .unwrap();
+    assert!(corpus.status.success(), "{}", stderr(&corpus));
+    let corpus: Value = serde_json::from_slice(&corpus.stdout).unwrap();
+    assert_eq!(corpus["tree"]["rollout_count"], 2);
+    assert_eq!(corpus["tree"]["input_tokens"], 100);
+    assert_eq!(corpus["tree"]["turns"], 1);
+    assert_eq!(corpus["tree"]["total_turn_duration_seconds"], 120.0);
+    assert_eq!(corpus["by_rollout_type"]["root"]["input_tokens"], 100);
+    assert_eq!(
+        corpus["by_rollout_type"]["subagent:worker"]["input_tokens"],
+        0
+    );
+    let groups = corpus["groups"].as_array().unwrap();
+    assert!(groups.iter().any(|group| {
+        group["period"] == "2026-08-01"
+            && group["rollout_type"] == "root"
+            && group["model"] == "gpt-5.6-terra"
+            && group["stats"]["input_tokens"] == 100
+            && group["stats"]["total_turn_duration_seconds"] == 120.0
+    }));
+    assert!(!groups.iter().any(|group| {
+        group["period"] == "2026-08-01"
+            && group.get("rollout_type").is_none()
+            && group.get("model").is_none()
+    }));
+    assert!(groups.iter().any(|group| {
+        group["period"] == "2026-08-02"
+            && group.get("rollout_type").is_none()
+            && group.get("model").is_none()
+            && group["stats"]["rollout_count"] == 0
+    }));
+    assert_eq!(
+        groups
+            .iter()
+            .map(|group| group["stats"]["input_tokens"].as_u64().unwrap())
+            .sum::<u64>(),
+        corpus["tree"]["input_tokens"].as_u64().unwrap()
+    );
+
+    let human = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args([
+            "report",
+            "--all",
+            "--since",
+            "2026-08-01",
+            "--through",
+            "2026-08-02",
+            "--group-by",
+            "day",
+            "--include-empty",
+            "--codex-home",
+        ])
+        .arg(home.path())
+        .env("TZ", "UTC")
+        .output()
+        .unwrap();
+    assert!(human.status.success(), "{}", stderr(&human));
+    let human = String::from_utf8(human.stdout).unwrap();
+    assert!(human.contains("Codex corpus report"));
+    assert!(human.contains("Selected range (2026-08-01 through 2026-08-02)"));
+    assert!(human.contains("Groups\n"));
+    assert!(human.contains("2026-08-02"));
+
+    let project = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "--project"])
+        .arg(&workspace)
+        .args([
+            "--since",
+            "2026-08-01",
+            "--through",
+            "2026-08-02",
+            "--json",
+            "--codex-home",
+        ])
+        .arg(home.path())
+        .env("TZ", "UTC")
+        .output()
+        .unwrap();
+    assert!(project.status.success(), "{}", stderr(&project));
+    let project: Value = serde_json::from_slice(&project.stdout).unwrap();
+    assert_eq!(project["selection"]["workspace_fallbacks"], 1);
+    assert_eq!(project["tree"]["rollout_count"], 2);
+    assert_eq!(project["tree"]["input_tokens"], 100);
+}
+
+#[test]
+fn corpus_dates_prune_only_metadata_backed_out_of_range_rollouts() {
+    let home = TempDir::new().unwrap();
+    let workspace = home.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let fixtures = [
+        ("old", 1),
+        ("future", 2),
+        ("since-boundary", 4),
+        ("through-boundary", 8),
+        ("metadata-gap", 16),
+        ("unindexed", 32),
+    ];
+    for (id, input) in fixtures {
+        write_jsonl(
+            &home.path().join(format!("sessions/{id}.jsonl")),
+            &dated_rollout(
+                id,
+                None,
+                &workspace,
+                "gpt-5.6-terra",
+                "2026-08-10T12:00:00Z",
+                "2026-08-10T12:00:01Z",
+                input,
+            ),
+        );
+    }
+    let timestamp = |value: &str| {
+        OffsetDateTime::parse(value, &Rfc3339)
+            .unwrap()
+            .unix_timestamp()
+    };
+    let database = Connection::open(home.path().join("state_5.sqlite")).unwrap();
+    database
+        .execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                created_at INTEGER,
+                updated_at INTEGER
+             );",
+        )
+        .unwrap();
+    for (id, created_at, updated_at) in [
+        ("old", "2026-07-01T00:00:00Z", "2026-07-31T23:59:59Z"),
+        ("future", "2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z"),
+        (
+            "since-boundary",
+            "2026-07-01T00:00:00Z",
+            "2026-08-01T00:00:00Z",
+        ),
+        (
+            "through-boundary",
+            "2026-08-31T23:59:59Z",
+            "2026-09-01T00:00:00Z",
+        ),
+    ] {
+        database
+            .execute(
+                "INSERT INTO threads VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    id,
+                    home.path()
+                        .join(format!("sessions/{id}.jsonl"))
+                        .to_string_lossy(),
+                    timestamp(created_at),
+                    timestamp(updated_at),
+                ],
+            )
+            .unwrap();
+    }
+    database
+        .execute(
+            "INSERT INTO threads VALUES (?1, ?2, NULL, NULL)",
+            params![
+                "metadata-gap",
+                home.path()
+                    .join("sessions/metadata-gap.jsonl")
+                    .to_string_lossy()
+            ],
+        )
+        .unwrap();
+    drop(database);
+
+    let run = |bounds: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+            .args(["report", "--all", "--json", "--codex-home"])
+            .arg(home.path())
+            .args(bounds)
+            .env("TZ", "UTC")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        output
+    };
+    let since = run(&["--since", "2026-08-01"]);
+    let since_report: Value = serde_json::from_slice(&since.stdout).unwrap();
+    assert_eq!(since_report["tree"]["rollout_count"], 5);
+    assert_eq!(since_report["tree"]["input_tokens"], 62);
+
+    let through = run(&["--through", "2026-08-31"]);
+    let through_report: Value = serde_json::from_slice(&through.stdout).unwrap();
+    assert_eq!(through_report["tree"]["rollout_count"], 5);
+    assert_eq!(through_report["tree"]["input_tokens"], 61);
+
+    fs::remove_file(home.path().join("sessions/old.jsonl")).unwrap();
+    fs::remove_file(home.path().join("sessions/future.jsonl")).unwrap();
+    let bounded = run(&["--since", "2026-08-01", "--through", "2026-08-31"]);
+    let bounded_report: Value = serde_json::from_slice(&bounded.stdout).unwrap();
+    assert_eq!(bounded_report["tree"]["rollout_count"], 4);
+    assert_eq!(bounded_report["tree"]["input_tokens"], 60);
+    assert!(!stderr(&bounded).contains("rollout scan could not read"));
+}
+
+#[test]
+fn date_options_reject_exact_threads_and_unbounded_empty_rows() {
+    let home = fixture_home();
+    let exact = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "root", "--since", "2026-08-01", "--codex-home"])
+        .arg(home.path())
+        .output()
+        .unwrap();
+    assert!(!exact.status.success());
+    assert!(stderr(&exact).contains("only available for project or --all reports"));
+
+    let empty = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args([
+            "report",
+            "--all",
+            "--since",
+            "2026-08-01",
+            "--group-by",
+            "day",
+            "--include-empty",
+            "--codex-home",
+        ])
+        .arg(home.path())
+        .output()
+        .unwrap();
+    assert!(!empty.status.success());
+    assert!(stderr(&empty).contains("requires both --since and --through"));
+
+    let mixed = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "--all", "--project", "--codex-home"])
+        .arg(home.path())
+        .output()
+        .unwrap();
+    assert!(!mixed.status.success());
+    assert!(stderr(&mixed).contains("cannot be used with"));
+}
+
+#[test]
+fn filtered_reports_exclude_untimestamped_data_without_changing_lifetime_totals() {
+    let home = TempDir::new().unwrap();
+    write_jsonl(
+        &home.path().join("sessions/root.jsonl"),
+        &[
+            json!({"type": "session_meta", "payload": {"id": "root", "source": "cli", "cwd": "/tmp/project"}}),
+            json!({"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {"service_tier": "standard"}}}),
+            json!({"type": "turn_context", "payload": {"model": "gpt-5.6-terra", "effort": "high"}}),
+            json!({"type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 42, "total_tokens": 42}}}}),
+        ],
+    );
+
+    let lifetime = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args(["report", "--all", "--json", "--codex-home"])
+        .arg(home.path())
+        .output()
+        .unwrap();
+    assert!(lifetime.status.success(), "{}", stderr(&lifetime));
+    let lifetime: Value = serde_json::from_slice(&lifetime.stdout).unwrap();
+    assert_eq!(lifetime["tree"]["input_tokens"], 42);
+
+    let filtered = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args([
+            "report",
+            "--all",
+            "--since",
+            "2026-08-01",
+            "--through",
+            "2026-08-01",
+            "--json",
+            "--codex-home",
+        ])
+        .arg(home.path())
+        .output()
+        .unwrap();
+    assert!(filtered.status.success(), "{}", stderr(&filtered));
+    let filtered: Value = serde_json::from_slice(&filtered.stdout).unwrap();
+    assert_eq!(filtered["tree"]["input_tokens"], 0);
+    assert_eq!(filtered["tree"]["incomplete_input"], true);
+    assert!(
+        filtered["incomplete_input_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("usable timestamp"))
+    );
 }
 
 #[test]

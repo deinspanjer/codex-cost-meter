@@ -9,10 +9,11 @@ use thiserror::Error;
 
 use crate::{
     cache::RolloutCache,
+    date_filter::{Filter, GroupDimension},
     pricing::{Catalog, PricingError, ServiceTier, Usage},
     progress::Progress,
     rollout::{
-        analysis::{AnalysisError, RolloutStats},
+        analysis::{AnalysisError, RolloutStats, TurnEvent, UsageEvent},
         discovery::RolloutIndex,
     },
     session_index::Snapshot,
@@ -30,6 +31,8 @@ pub(crate) enum ReportError {
     },
     #[error(transparent)]
     Pricing(#[from] PricingError),
+    #[error(transparent)]
+    DateFilter(#[from] crate::date_filter::Error),
 }
 
 #[derive(Debug, Serialize)]
@@ -45,10 +48,30 @@ pub(crate) struct Report {
 #[derive(Debug, Serialize)]
 pub(crate) struct ProjectReport {
     pub selection: ProjectSelection,
+    pub date_range: DateRangeReport,
     pub tree: StatsReport,
     pub by_model: BTreeMap<String, ModelReport>,
+    pub by_rollout_type: BTreeMap<String, StatsReport>,
+    pub groups: Vec<GroupReport>,
     pub pricing: PricingReport,
     pub incomplete_input_warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DateRangeReport {
+    pub since: Option<String>,
+    pub through: Option<String>,
+    pub group_by: Vec<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct GroupReport {
+    pub period: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollout_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub stats: StatsReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -233,58 +256,245 @@ impl ReportContext {
         &self,
         selection: ProjectSelection,
         thread_ids: &[String],
+        filter: &Filter,
     ) -> Result<ProjectReport, ReportError> {
-        self.build_project_inner(selection, thread_ids, None)
+        self.build_project_inner(selection, thread_ids, filter, None)
+    }
+
+    pub(crate) fn build_corpus_with_progress(
+        &self,
+        filter: &Filter,
+        progress: &mut Progress,
+    ) -> Result<ProjectReport, ReportError> {
+        let ids = self
+            .index
+            .records()
+            .map(|record| record.id.clone())
+            .collect::<BTreeSet<_>>();
+        progress.start_analysis(ids.len());
+        self.build_scope(
+            ProjectSelection {
+                target: "all rollouts".into(),
+                resolver: "corpus",
+                missing_source_roots: 0,
+                direct_assignments: 0,
+                workspace_fallbacks: 0,
+                projectless_threads: 0,
+                projectless_exclusions: 0,
+                other_project_exclusions: 0,
+                incomplete_root_reports: 0,
+                unpriced_root_reports: 0,
+            },
+            ids,
+            None,
+            filter,
+            Some(progress),
+        )
     }
 
     pub(crate) fn build_project_with_progress(
         &self,
         selection: ProjectSelection,
         thread_ids: &[String],
+        filter: &Filter,
         progress: &mut Progress,
     ) -> Result<ProjectReport, ReportError> {
         progress.start_analysis(thread_ids.iter().map(|id| self.rollout_count(id)).sum());
-        self.build_project_inner(selection, thread_ids, Some(progress))
+        self.build_project_inner(selection, thread_ids, filter, Some(progress))
     }
 
     fn build_project_inner(
         &self,
-        mut selection: ProjectSelection,
+        selection: ProjectSelection,
         thread_ids: &[String],
+        filter: &Filter,
+        progress: Option<&mut Progress>,
+    ) -> Result<ProjectReport, ReportError> {
+        let mut ids = BTreeSet::new();
+        let mut roots = HashMap::new();
+        for thread_id in thread_ids {
+            ids.insert(thread_id.clone());
+            roots.insert(thread_id.clone(), thread_id.clone());
+            if let Some(descendants) = self.index.descendants(thread_id) {
+                roots.extend(descendants.iter().map(|id| (id.clone(), thread_id.clone())));
+                ids.extend(descendants);
+            }
+        }
+        self.build_scope(selection, ids, Some(roots), filter, progress)
+    }
+
+    fn build_scope(
+        &self,
+        mut selection: ProjectSelection,
+        ids: BTreeSet<String>,
+        roots: Option<HashMap<String, String>>,
+        filter: &Filter,
         mut progress: Option<&mut Progress>,
     ) -> Result<ProjectReport, ReportError> {
-        let mut tree = empty_stats();
-        let mut by_model = BTreeMap::new();
-        let mut warnings = BTreeSet::new();
-        for thread_id in thread_ids {
-            let report = match self.build_inner(thread_id, progress.as_deref_mut()) {
-                Ok(report) => report,
-                Err(
-                    ReportError::RolloutNotFound { .. }
-                    | ReportError::SelectedRolloutUnreadable { .. },
-                ) => {
-                    selection.incomplete_root_reports += 1;
-                    tree.incomplete_input = true;
-                    warnings.insert("selected root rollout could not be read".into());
-                    continue;
+        let mut total = Aggregate::default();
+        let mut by_type = BTreeMap::<String, Aggregate>::new();
+        let mut grouped = BTreeMap::<GroupKey, Aggregate>::new();
+        let mut root_totals = BTreeMap::<String, Aggregate>::new();
+        let mut warnings = self
+            .index
+            .warnings()
+            .iter()
+            .map(|warning| {
+                format!(
+                    "rollout scan could not read {} ({})",
+                    warning.path.display(),
+                    warning.error
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        let scan_incomplete = !self.index.warnings().is_empty()
+            || self.index.malformed_lines_skipped() > 0
+            || self.index.oversized_lines_skipped() > 0;
+        total.incomplete |= scan_incomplete;
+        if self.index.malformed_lines_skipped() > 0 {
+            warnings.insert("rollout scan skipped malformed JSONL records".into());
+            total.incomplete = true;
+        }
+        if self.index.oversized_lines_skipped() > 0 {
+            warnings.insert("rollout scan skipped oversized JSONL records".into());
+            total.incomplete = true;
+        }
+
+        for id in ids {
+            let Some(record) = self.index.record(&id) else {
+                total.add_unreadable();
+                if let Some(root) = roots.as_ref().and_then(|roots| roots.get(&id)) {
+                    root_totals
+                        .entry(root.clone())
+                        .or_default()
+                        .add_unreadable();
                 }
-                Err(error) => return Err(error),
+                warnings.insert("selected root rollout could not be read".into());
+                if let Some(progress) = progress.as_deref_mut() {
+                    progress.analyzed_rollout();
+                }
+                continue;
             };
-            selection.incomplete_root_reports += usize::from(report.tree.incomplete_input);
-            selection.unpriced_root_reports += usize::from(
-                !report.tree.unpriced_models.is_empty()
-                    || !report.tree.unpriced_service_tiers.is_empty(),
-            );
-            merge_stats(&mut tree, &report.tree);
-            for (name, model) in report.by_model {
-                merge_model(by_model.entry(name).or_insert_with(empty_model), &model);
+            let rollout_type = record.kind.report_type();
+            let type_total = by_type.entry(rollout_type.clone()).or_default();
+            match self.cache.analyze(record) {
+                Ok(stats) => {
+                    if filter.is_filtered() {
+                        total.add_scoped(&stats, &self.catalog, filter)?;
+                        type_total.add_scoped(&stats, &self.catalog, filter)?;
+                        if let Some(root) = roots.as_ref().and_then(|roots| roots.get(&id)) {
+                            root_totals.entry(root.clone()).or_default().add_scoped(
+                                &stats,
+                                &self.catalog,
+                                filter,
+                            )?;
+                        }
+                    } else {
+                        total.add(&stats, &self.catalog);
+                        type_total.add(&stats, &self.catalog);
+                        if let Some(root) = roots.as_ref().and_then(|roots| roots.get(&id)) {
+                            root_totals
+                                .entry(root.clone())
+                                .or_default()
+                                .add(&stats, &self.catalog);
+                        }
+                    }
+                    if filter.is_filtered()
+                        && (stats.unattributed_tokens > 0
+                            || stats.events.iter().any(|event| event.at.is_none())
+                            || stats
+                                .turn_events
+                                .iter()
+                                .any(|turn| turn.started_at.is_none()))
+                    {
+                        warnings.insert(
+                            "date-filtered report excluded usage or turns without a usable timestamp"
+                                .into(),
+                        );
+                    }
+                    if !filter.group_by.is_empty() {
+                        add_groups(&mut grouped, &stats, &rollout_type, &self.catalog, filter)?;
+                    }
+                }
+                Err(_) => {
+                    total.add_unreadable();
+                    type_total.add_unreadable();
+                    if let Some(root) = roots.as_ref().and_then(|roots| roots.get(&id)) {
+                        root_totals
+                            .entry(root.clone())
+                            .or_default()
+                            .add_unreadable();
+                    }
+                    warnings.insert(format!("rollout {id} could not be read"));
+                }
             }
-            warnings.extend(report.incomplete_input_warnings);
+            if let Some(progress) = progress.as_deref_mut() {
+                progress.analyzed_rollout();
+            }
+        }
+
+        for period in filter.empty_bucket_starts()? {
+            if grouped.keys().any(|key| key.period == period) {
+                continue;
+            }
+            grouped
+                .entry(GroupKey {
+                    period,
+                    rollout_type: None,
+                    model: None,
+                })
+                .or_default();
+        }
+        let by_model = total.model_reports();
+        let tree = total.report();
+        if scan_incomplete {
+            for stats in root_totals.values_mut() {
+                stats.incomplete = true;
+            }
+        }
+        if root_totals.is_empty() {
+            selection.incomplete_root_reports += usize::from(tree.incomplete_input);
+            selection.unpriced_root_reports += usize::from(
+                !tree.unpriced_models.is_empty() || !tree.unpriced_service_tiers.is_empty(),
+            );
+        } else {
+            selection.incomplete_root_reports += root_totals
+                .values()
+                .filter(|stats| stats.incomplete)
+                .count();
+            selection.unpriced_root_reports += root_totals
+                .values()
+                .filter(|stats| {
+                    !stats.unpriced_models.is_empty() || !stats.unpriced_service_tiers.is_empty()
+                })
+                .count();
         }
         Ok(ProjectReport {
             selection,
+            date_range: DateRangeReport {
+                since: filter.since.map(|date| date.to_string()),
+                through: filter.through.map(|date| date.to_string()),
+                group_by: filter
+                    .group_by
+                    .iter()
+                    .map(|dimension| dimension.as_str())
+                    .collect(),
+            },
             tree,
             by_model,
+            by_rollout_type: by_type
+                .into_iter()
+                .map(|(kind, stats)| (kind, stats.report()))
+                .collect(),
+            groups: grouped
+                .into_iter()
+                .map(|(key, stats)| GroupReport {
+                    period: key.period.to_string(),
+                    rollout_type: key.rollout_type,
+                    model: key.model,
+                    stats: stats.report(),
+                })
+                .collect(),
             pricing: pricing_report(&self.catalog),
             incomplete_input_warnings: warnings.into_iter().collect(),
         })
@@ -313,6 +523,27 @@ impl ReportContext {
         })
     }
 
+    pub(crate) fn new_corpus_cached_with_progress(
+        codex_home: &Path,
+        filter: &Filter,
+        cache: Rc<RolloutCache>,
+        progress: &mut Progress,
+    ) -> Result<Self, PricingError> {
+        progress.start_indexing();
+        Ok(Self {
+            codex_home: codex_home.into(),
+            index: RolloutIndex::build_corpus_with_cache_progress(
+                codex_home,
+                filter,
+                Some(&cache),
+                || progress.indexed_file(),
+            ),
+            catalog: Catalog::embedded()?,
+            session_index: Snapshot::load(codex_home),
+            cache,
+        })
+    }
+
     pub(crate) fn new_for_cached_with_progress(
         codex_home: &Path,
         thread_ids: &[String],
@@ -329,126 +560,6 @@ impl ReportContext {
             session_index: Snapshot::load(codex_home),
             cache,
         })
-    }
-}
-
-fn empty_stats() -> StatsReport {
-    StatsReport {
-        rollout_count: 0,
-        majority_turn_model: None,
-        majority_reasoning_level: None,
-        input_tokens: 0,
-        input_cache_write_tokens: 0,
-        input_cache_read_tokens: 0,
-        reasoning_tokens: 0,
-        output_tokens: 0,
-        turns: 0,
-        completed_or_aborted_turns: 0,
-        incomplete_turns: 0,
-        total_turn_duration_seconds: 0.0,
-        estimated_cost_usd: Some(0.0),
-        known_model_cost_usd: 0.0,
-        unpriced_models: BTreeMap::new(),
-        unpriced_service_tiers: BTreeMap::new(),
-        assumed_standard_tokens: 0,
-        unattributed_usage_tokens: None,
-        incomplete_input: false,
-    }
-}
-
-fn empty_model() -> ModelReport {
-    ModelReport {
-        turns: 0,
-        input_tokens: 0,
-        input_cache_write_tokens: 0,
-        input_cache_read_tokens: 0,
-        reasoning_tokens: 0,
-        output_tokens: 0,
-        total_turn_duration_seconds: 0.0,
-        estimated_cost_usd: Some(0.0),
-        known_model_cost_usd: 0.0,
-        by_service_tier: BTreeMap::new(),
-    }
-}
-
-fn merge_stats(total: &mut StatsReport, next: &StatsReport) {
-    total.rollout_count += next.rollout_count;
-    total.input_tokens += next.input_tokens;
-    total.input_cache_write_tokens += next.input_cache_write_tokens;
-    total.input_cache_read_tokens += next.input_cache_read_tokens;
-    total.reasoning_tokens += next.reasoning_tokens;
-    total.output_tokens += next.output_tokens;
-    total.turns += next.turns;
-    total.completed_or_aborted_turns += next.completed_or_aborted_turns;
-    total.incomplete_turns += next.incomplete_turns;
-    total.total_turn_duration_seconds += next.total_turn_duration_seconds;
-    total.estimated_cost_usd = total
-        .estimated_cost_usd
-        .zip(next.estimated_cost_usd)
-        .map(|(left, right)| left + right);
-    total.known_model_cost_usd += next.known_model_cost_usd;
-    for (model, tokens) in &next.unpriced_models {
-        *total.unpriced_models.entry(model.clone()).or_default() += tokens;
-    }
-    for (tier, tokens) in &next.unpriced_service_tiers {
-        *total
-            .unpriced_service_tiers
-            .entry(tier.clone())
-            .or_default() += tokens;
-    }
-    total.assumed_standard_tokens = total
-        .assumed_standard_tokens
-        .saturating_add(next.assumed_standard_tokens);
-    total.unattributed_usage_tokens = match (
-        total.unattributed_usage_tokens,
-        next.unattributed_usage_tokens,
-    ) {
-        (None, None) => None,
-        (left, right) => Some(left.unwrap_or_default() + right.unwrap_or_default()),
-    };
-    total.incomplete_input |= next.incomplete_input;
-}
-
-fn merge_model(total: &mut ModelReport, next: &ModelReport) {
-    total.turns += next.turns;
-    total.input_tokens += next.input_tokens;
-    total.input_cache_write_tokens += next.input_cache_write_tokens;
-    total.input_cache_read_tokens += next.input_cache_read_tokens;
-    total.reasoning_tokens += next.reasoning_tokens;
-    total.output_tokens += next.output_tokens;
-    total.total_turn_duration_seconds += next.total_turn_duration_seconds;
-    total.estimated_cost_usd = total
-        .estimated_cost_usd
-        .zip(next.estimated_cost_usd)
-        .map(|(left, right)| left + right);
-    total.known_model_cost_usd += next.known_model_cost_usd;
-    for (tier, next) in &next.by_service_tier {
-        let total = total
-            .by_service_tier
-            .entry(tier.clone())
-            .or_insert_with(empty_model_tier);
-        total.input_tokens += next.input_tokens;
-        total.input_cache_write_tokens += next.input_cache_write_tokens;
-        total.input_cache_read_tokens += next.input_cache_read_tokens;
-        total.reasoning_tokens += next.reasoning_tokens;
-        total.output_tokens += next.output_tokens;
-        total.estimated_cost_usd = total
-            .estimated_cost_usd
-            .zip(next.estimated_cost_usd)
-            .map(|(left, right)| left + right);
-        total.known_model_cost_usd += next.known_model_cost_usd;
-    }
-}
-
-fn empty_model_tier() -> ModelTierReport {
-    ModelTierReport {
-        input_tokens: 0,
-        input_cache_write_tokens: 0,
-        input_cache_read_tokens: 0,
-        reasoning_tokens: 0,
-        output_tokens: 0,
-        estimated_cost_usd: Some(0.0),
-        known_model_cost_usd: 0.0,
     }
 }
 
@@ -502,6 +613,69 @@ struct ModelTierAggregate {
     incomplete: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct GroupKey {
+    period: jiff::civil::Date,
+    rollout_type: Option<String>,
+    model: Option<String>,
+}
+
+fn add_groups(
+    groups: &mut BTreeMap<GroupKey, Aggregate>,
+    stats: &RolloutStats,
+    rollout_type: &str,
+    catalog: &Catalog,
+    filter: &Filter,
+) -> Result<(), crate::date_filter::Error> {
+    let mut seen = BTreeSet::new();
+    for event in &stats.events {
+        let Some(date) = filter.local_date(event.at)? else {
+            continue;
+        };
+        if !filter.includes(event.at)? {
+            continue;
+        }
+        let key = GroupKey {
+            period: filter.bucket_start(date)?,
+            rollout_type: filter
+                .groups_by(GroupDimension::RolloutType)
+                .then(|| rollout_type.to_owned()),
+            model: filter
+                .groups_by(GroupDimension::Model)
+                .then(|| event.model.clone()),
+        };
+        if seen.insert(key.clone()) {
+            groups.entry(key.clone()).or_default().rollout_count += 1;
+        }
+        groups
+            .entry(key)
+            .or_default()
+            .add_event(event, catalog, true);
+    }
+    for turn in &stats.turn_events {
+        let Some(date) = filter.local_date(turn.started_at)? else {
+            continue;
+        };
+        if !filter.includes(turn.started_at)? {
+            continue;
+        }
+        let key = GroupKey {
+            period: filter.bucket_start(date)?,
+            rollout_type: filter
+                .groups_by(GroupDimension::RolloutType)
+                .then(|| rollout_type.to_owned()),
+            model: filter
+                .groups_by(GroupDimension::Model)
+                .then(|| turn.model.clone()),
+        };
+        if seen.insert(key.clone()) {
+            groups.entry(key.clone()).or_default().rollout_count += 1;
+        }
+        groups.entry(key).or_default().add_turn(turn);
+    }
+    Ok(())
+}
+
 impl Aggregate {
     fn add(&mut self, stats: &RolloutStats, catalog: &Catalog) {
         self.rollout_count = self.rollout_count.saturating_add(1);
@@ -538,66 +712,124 @@ impl Aggregate {
             self.models.entry(model.clone()).or_default().turns += count;
         }
         for event in &stats.events {
-            let model = self.models.entry(event.model.clone()).or_default();
-            model.usage.input = model.usage.input.saturating_add(event.usage.input);
-            model.usage.cached_input = model
-                .usage
-                .cached_input
-                .saturating_add(event.usage.cached_input);
-            model.usage.cache_write_input = model
-                .usage
-                .cache_write_input
-                .saturating_add(event.usage.cache_write_input);
-            model.usage.output = model.usage.output.saturating_add(event.usage.output);
-            model.reasoning_output = model
-                .reasoning_output
-                .saturating_add(event.reasoning_output);
-            let tier = model
-                .by_service_tier
-                .entry(service_tier_key(&event.service_tier).into())
-                .or_default();
-            tier.usage.input = tier.usage.input.saturating_add(event.usage.input);
-            tier.usage.cached_input = tier
-                .usage
-                .cached_input
-                .saturating_add(event.usage.cached_input);
-            tier.usage.cache_write_input = tier
-                .usage
-                .cache_write_input
-                .saturating_add(event.usage.cache_write_input);
-            tier.usage.output = tier.usage.output.saturating_add(event.usage.output);
-            tier.reasoning_output = tier.reasoning_output.saturating_add(event.reasoning_output);
+            self.add_event(event, catalog, false);
+        }
+    }
 
-            let tokens = event.usage.input.saturating_add(event.usage.output);
-            if matches!(event.service_tier, ServiceTier::AssumedStandard) {
-                self.assumed_standard_tokens = self.assumed_standard_tokens.saturating_add(tokens);
-            }
-            if let ServiceTier::Unpriced(tier) = &event.service_tier {
-                *self.unpriced_service_tiers.entry(tier.clone()).or_default() += tokens;
-                model.incomplete = true;
-                let tier = model
-                    .by_service_tier
-                    .get_mut(service_tier_key(&event.service_tier))
-                    .expect("tier exists");
-                tier.incomplete = true;
+    fn add_scoped(
+        &mut self,
+        stats: &RolloutStats,
+        catalog: &Catalog,
+        filter: &Filter,
+    ) -> Result<(), crate::date_filter::Error> {
+        self.rollout_count = self.rollout_count.saturating_add(1);
+        self.incomplete |= stats.incomplete_usage || stats.unattributed_tokens > 0;
+        for event in &stats.events {
+            if event.at.is_none() {
                 self.incomplete = true;
-                continue;
+            } else if filter.includes(event.at)? {
+                self.add_event(event, catalog, true);
             }
+        }
+        for turn in &stats.turn_events {
+            if turn.started_at.is_none() {
+                self.incomplete = true;
+            } else if filter.includes(turn.started_at)? {
+                self.add_turn(turn);
+            }
+        }
+        Ok(())
+    }
 
-            let cost = catalog.cost(&event.model, event.at, &event.service_tier, event.usage);
-            self.known_cost += cost.known;
-            model.known_cost += cost.known;
+    fn add_turn(&mut self, turn: &TurnEvent) {
+        self.turns = self.turns.saturating_add(1);
+        self.ended_turns = self.ended_turns.saturating_add(usize::from(turn.ended));
+        *self
+            .turn_models
+            .entry((turn.model.clone(), turn.effort.clone()))
+            .or_default() += 1;
+        let model = self.models.entry(turn.model.clone()).or_default();
+        model.turns = model.turns.saturating_add(1);
+        if let Some(duration) = turn.duration {
+            let seconds = duration.as_seconds_f64();
+            self.duration_seconds += seconds;
+            model.duration_seconds += seconds;
+        }
+    }
+
+    fn add_event(&mut self, event: &UsageEvent, catalog: &Catalog, add_total: bool) {
+        if add_total {
+            self.usage.input = self.usage.input.saturating_add(event.usage.input);
+            self.usage.cached_input = self
+                .usage
+                .cached_input
+                .saturating_add(event.usage.cached_input);
+            self.usage.cache_write_input = self
+                .usage
+                .cache_write_input
+                .saturating_add(event.usage.cache_write_input);
+            self.usage.output = self.usage.output.saturating_add(event.usage.output);
+            self.reasoning_output = self.reasoning_output.saturating_add(event.reasoning_output);
+        }
+        let model = self.models.entry(event.model.clone()).or_default();
+        model.usage.input = model.usage.input.saturating_add(event.usage.input);
+        model.usage.cached_input = model
+            .usage
+            .cached_input
+            .saturating_add(event.usage.cached_input);
+        model.usage.cache_write_input = model
+            .usage
+            .cache_write_input
+            .saturating_add(event.usage.cache_write_input);
+        model.usage.output = model.usage.output.saturating_add(event.usage.output);
+        model.reasoning_output = model
+            .reasoning_output
+            .saturating_add(event.reasoning_output);
+        let tier = model
+            .by_service_tier
+            .entry(service_tier_key(&event.service_tier).into())
+            .or_default();
+        tier.usage.input = tier.usage.input.saturating_add(event.usage.input);
+        tier.usage.cached_input = tier
+            .usage
+            .cached_input
+            .saturating_add(event.usage.cached_input);
+        tier.usage.cache_write_input = tier
+            .usage
+            .cache_write_input
+            .saturating_add(event.usage.cache_write_input);
+        tier.usage.output = tier.usage.output.saturating_add(event.usage.output);
+        tier.reasoning_output = tier.reasoning_output.saturating_add(event.reasoning_output);
+
+        let tokens = event.usage.input.saturating_add(event.usage.output);
+        if matches!(event.service_tier, ServiceTier::AssumedStandard) {
+            self.assumed_standard_tokens = self.assumed_standard_tokens.saturating_add(tokens);
+        }
+        if let ServiceTier::Unpriced(tier) = &event.service_tier {
+            *self.unpriced_service_tiers.entry(tier.clone()).or_default() += tokens;
+            model.incomplete = true;
             let tier = model
                 .by_service_tier
                 .get_mut(service_tier_key(&event.service_tier))
                 .expect("tier exists");
-            tier.known_cost += cost.known;
-            if cost.complete.is_none() {
-                *self.unpriced_models.entry(event.model.clone()).or_default() += tokens;
-                model.incomplete = true;
-                tier.incomplete = true;
-                self.incomplete = true;
-            }
+            tier.incomplete = true;
+            self.incomplete = true;
+            return;
+        }
+
+        let cost = catalog.cost(&event.model, event.at, &event.service_tier, event.usage);
+        self.known_cost += cost.known;
+        model.known_cost += cost.known;
+        let tier = model
+            .by_service_tier
+            .get_mut(service_tier_key(&event.service_tier))
+            .expect("tier exists");
+        tier.known_cost += cost.known;
+        if cost.complete.is_none() {
+            *self.unpriced_models.entry(event.model.clone()).or_default() += tokens;
+            model.incomplete = true;
+            tier.incomplete = true;
+            self.incomplete = true;
         }
     }
 

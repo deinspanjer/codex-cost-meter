@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.0.0]
+
+- Add inclusive local-calendar corpus and project reports with explicit date bounds, composable grouping, sparse or explicit empty buckets, and metadata-backed candidate pruning.
+- Reuse an existing rollout cache read-only when write access is unavailable, with explicit warnings when the cache cannot be updated or created.
+
 ## [0.8.2]
 
 - Cache derived rollout analysis in an app-owned SQLite database, add selected-workset `--refresh`, and avoid unrelated rollout processing during exact, project, and update commands.

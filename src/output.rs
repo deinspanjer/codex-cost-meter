@@ -100,25 +100,74 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
         || report
             .by_model
             .values()
-            .any(|model| model.input_cache_write_tokens > 0);
-    let mut rendered = format!(
-        "Codex project report\nProject: {}\nResolver: {}\nThreads: {} direct, {} workspace fallback, {} projectless, {} projectless excluded, {} other-project excluded\n",
-        safe_text(&selection.target),
-        safe_text(selection.resolver),
-        human_number(selection.direct_assignments as u64),
-        human_number(selection.workspace_fallbacks as u64),
-        human_number(selection.projectless_threads as u64),
-        human_number(selection.projectless_exclusions as u64),
-        human_number(selection.other_project_exclusions as u64),
-    );
-    rendered.push_str("\nLifetime\n");
-    rendered.push_str(&stats_table(show_cache_write, [("Project", &report.tree)]));
+            .any(|model| model.input_cache_write_tokens > 0)
+        || report
+            .groups
+            .iter()
+            .any(|group| group.stats.input_cache_write_tokens > 0);
+    let title = if selection.resolver == "corpus" {
+        "Codex corpus report"
+    } else {
+        "Codex project report"
+    };
+    let mut rendered = if selection.resolver == "corpus" {
+        format!(
+            "{}\nScope: {}\nRollouts: {}\n",
+            title,
+            safe_text(&selection.target),
+            human_number(report.tree.rollout_count as u64),
+        )
+    } else {
+        format!(
+            "{}\nScope: {}\nResolver: {}\nThreads: {} direct, {} workspace fallback, {} projectless, {} projectless excluded, {} other-project excluded\n",
+            title,
+            safe_text(&selection.target),
+            safe_text(selection.resolver),
+            human_number(selection.direct_assignments as u64),
+            human_number(selection.workspace_fallbacks as u64),
+            human_number(selection.projectless_threads as u64),
+            human_number(selection.projectless_exclusions as u64),
+            human_number(selection.other_project_exclusions as u64),
+        )
+    };
+    let range = match (&report.date_range.since, &report.date_range.through) {
+        (None, None) => "Lifetime".into(),
+        (since, through) => format!(
+            "Selected range ({} through {})",
+            since.as_deref().unwrap_or("unbounded"),
+            through.as_deref().unwrap_or("unbounded")
+        ),
+    };
+    let scope_label = if selection.resolver == "corpus" {
+        "Corpus"
+    } else {
+        "Project"
+    };
+    let _ = writeln!(rendered, "\n{range}");
+    rendered.push_str(&stats_table(
+        show_cache_write,
+        [(scope_label, &report.tree)],
+    ));
     rendered.push_str("\nModels\n");
     rendered.push_str(&model_table_from_models(
         &report.by_model,
         &report.tree,
         show_cache_write,
     ));
+    if !report.by_rollout_type.is_empty() {
+        rendered.push_str("\nRollout types\n");
+        rendered.push_str(&stats_table(
+            show_cache_write,
+            report
+                .by_rollout_type
+                .iter()
+                .map(|(kind, stats)| (kind.as_str(), stats)),
+        ));
+    }
+    if !report.groups.is_empty() {
+        rendered.push_str("\nGroups\n");
+        rendered.push_str(&group_table(report, show_cache_write));
+    }
     let _ = writeln!(
         rendered,
         "\nPricing as of: {}",
@@ -134,7 +183,9 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
         "Pricing source: {}",
         safe_text(&report.pricing.source)
     );
-    if selection.incomplete_root_reports > 0 || selection.unpriced_root_reports > 0 {
+    if selection.resolver != "corpus"
+        && (selection.incomplete_root_reports > 0 || selection.unpriced_root_reports > 0)
+    {
         let _ = writeln!(
             rendered,
             "Incomplete root reports: {}   Unpriced root reports: {}",
@@ -156,6 +207,21 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
     rendered
         .push_str("Notes: model and aggregate durations are agent-turn time and can overlap.\n");
     rendered
+}
+
+fn group_table(report: &ProjectReport, show_cache_write: bool) -> String {
+    let mut table = vec![stats_headers("Group", show_cache_write)];
+    for group in &report.groups {
+        let mut label = group.period.clone();
+        if let Some(kind) = &group.rollout_type {
+            let _ = write!(label, " / {}", safe_text(kind));
+        }
+        if let Some(model) = &group.model {
+            let _ = write!(label, " / {}", safe_text(model));
+        }
+        table.push(stats_row(&label, &group.stats, show_cache_write));
+    }
+    text_table(&table)
 }
 
 pub(crate) fn json(report: &impl Serialize) -> Result<String, serde_json::Error> {
@@ -424,8 +490,8 @@ mod tests {
 
     use super::{human, json, project_human};
     use crate::report::{
-        ModelReport, ModelTierReport, PricingReport, ProjectReport, ProjectSelection, Report,
-        RolloutReport, StatsReport,
+        DateRangeReport, ModelReport, ModelTierReport, PricingReport, ProjectReport,
+        ProjectSelection, Report, RolloutReport, StatsReport,
     };
 
     fn stats(cost: Option<f64>, known_cost: f64) -> StatsReport {
@@ -639,8 +705,15 @@ mod tests {
                 incomplete_root_reports: 1,
                 unpriced_root_reports: 0,
             },
+            date_range: DateRangeReport {
+                since: None,
+                through: None,
+                group_by: Vec::new(),
+            },
             tree: report.tree,
             by_model: report.by_model,
+            by_rollout_type: BTreeMap::new(),
+            groups: Vec::new(),
             pricing: report.pricing,
             incomplete_input_warnings: vec!["some input was incomplete".into()],
         };

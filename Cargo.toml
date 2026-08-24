@@ -1,6 +1,6 @@
 [package]
 name = "codex-cost-meter"
-version = "0.8.2"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.97.1"
 license = "MIT"
@@ -13,6 +13,7 @@ serde_json = "1.0"
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 thiserror = "2.0"
 time = { version = "0.3", features = ["formatting", "macros", "parsing", "serde"] }
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-bundle-platform", "tzdb-zoneinfo"] }
 
 [dev-dependencies]
 tempfile = "3.15"
