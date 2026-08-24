@@ -901,7 +901,7 @@ mod tests {
         let mut project = ProjectReport {
             selection: ProjectSelection {
                 target: "Project".into(),
-                resolver: "project_name".into(),
+                resolver: "project_name",
                 missing_source_roots: 0,
                 direct_assignments: 0,
                 workspace_fallbacks: 0,
@@ -926,7 +926,7 @@ mod tests {
         let rendered = project_human(&project);
         let models = rendered.split_once("Models\n").unwrap().1;
         assert!(models.starts_with("No model usage.\n"));
-        project.selection.resolver = "corpus".into();
+        project.selection.resolver = "corpus";
         assert!(project_human(&project).contains("Models\nNo model usage.\n"));
     }
 
@@ -1029,7 +1029,7 @@ mod tests {
                 .contains("announcement-date estimates, not observed routing or billing cutovers")
         );
 
-        project.selection.resolver = "corpus".into();
+        project.selection.resolver = "corpus";
         let corpus = project_human(&project);
         assert!(corpus.contains("gpt-5.6 -> gpt-5.6-terra"));
         assert!(corpus.contains("codex-auto-review before 2026-07-30 -> gpt-5.4"));
