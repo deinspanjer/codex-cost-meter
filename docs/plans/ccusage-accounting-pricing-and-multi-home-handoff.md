@@ -4,6 +4,8 @@
 
 Close the confirmed long-context and Fast/Priority pricing gaps, add multi-home reporting, and resolve replay accounting without trading a possible overcount for an opaque undercount. Preserve the existing historical-price, incomplete-input, and lower-bound guarantees.
 
+The date-reporting prerequisite is complete: project and `--all` corpus reports now support inclusive OS-local `--since`/`--through` bounds, day/week/month grouping, optional rollout-type/model dimensions, and explicit empty buckets. `--all` uses available Codex thread timestamps to skip indexed rollouts updated before `--since` or created after `--through`, while retaining unindexed or metadata-incomplete candidates. Unlike ccusage's focused Codex date views, filtered local reports retain pricing provenance and visibly qualify untimestamped data that had to be excluded. Multi-home discovery and replay-accounting decisions remain in this handoff.
+
 Read [`../research/ccusage-codex-primary-source-findings.md`](../research/ccusage-codex-primary-source-findings.md) before implementation. Recheck current official OpenAI pricing on the implementation day because long-context and Fast pricing changed rapidly after launch.
 
 ## Known facts

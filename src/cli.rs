@@ -5,6 +5,7 @@ use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
+    date_filter::{GroupDimension, parse_date},
     title::{MetricList, TitleFormat},
     update::UpdateOptions,
 };
@@ -23,7 +24,7 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    #[command(about = "Report usage and estimated cost for one Codex task.")]
+    #[command(about = "Report usage and estimated cost by task, project, or corpus.")]
     Report(ReportArgs),
     #[command(about = "Preview or apply bounded Codex task-title updates.")]
     Update(UpdateArgs),
@@ -133,6 +134,24 @@ pub(crate) struct ReportArgs {
         help = "Report a Desktop Project or path; without a value, derive it from the task."
     )]
     pub(crate) project: Option<String>,
+    #[arg(long, conflicts_with_all = ["thread_id", "project"], help = "Report every discovered rollout.")]
+    pub(crate) all: bool,
+    #[arg(long, value_parser = parse_date, help = "Include local calendar dates on or after this ISO date.")]
+    pub(crate) since: Option<jiff::civil::Date>,
+    #[arg(long, value_parser = parse_date, help = "Include local calendar dates through this ISO date.")]
+    pub(crate) through: Option<jiff::civil::Date>,
+    #[arg(
+        long,
+        value_delimiter = ',',
+        help = "Group by one time dimension (day, week, or month) and optional rollout-type or model."
+    )]
+    pub(crate) group_by: Vec<GroupDimension>,
+    #[arg(
+        long,
+        requires = "group_by",
+        help = "Include zero-valued time buckets; requires --since and --through."
+    )]
+    pub(crate) include_empty: bool,
     #[arg(long, help = "Write the report as JSON.")]
     pub(crate) json: bool,
     #[arg(
@@ -237,6 +256,26 @@ pub(crate) enum CliError {
 impl ReportArgs {
     pub(crate) fn codex_home(&self) -> Result<PathBuf, CliError> {
         resolve_codex_home(&self.codex_home)
+    }
+
+    pub(crate) fn date_filter(
+        &self,
+    ) -> Result<crate::date_filter::Filter, crate::date_filter::Error> {
+        if self.thread_id.is_some()
+            && self.project.is_none()
+            && (self.since.is_some()
+                || self.through.is_some()
+                || !self.group_by.is_empty()
+                || self.include_empty)
+        {
+            return Err(crate::date_filter::Error::ExactThread);
+        }
+        crate::date_filter::Filter::try_from(crate::date_filter::Options {
+            since: self.since,
+            through: self.through,
+            group_by: self.group_by.clone(),
+            include_empty: self.include_empty,
+        })
     }
 }
 

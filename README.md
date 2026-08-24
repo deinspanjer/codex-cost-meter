@@ -2,7 +2,7 @@
 
 ## Overview
 
-`codex-cost-meter` is a small cross-platform utility for exact-thread usage and estimated API-list-price cost. Its capabilities include descendant accounting, bounded root-title updates, and current-user schedules for eligible idle updates on macOS, Windows, and Linux. It is diagnostic, not a ChatGPT billing record.
+`codex-cost-meter` is a small cross-platform utility for exact-thread, project, and all-rollout usage with estimated API-list-price cost. Its capabilities include local-calendar date ranges and grouping, descendant accounting, bounded root-title updates, and current-user schedules for eligible idle updates on macOS, Windows, and Linux. It is diagnostic, not a ChatGPT billing record.
 
 v0.8 supports macOS 14+ on Apple Silicon and Intel, Windows x64, and Linux x86_64 and aarch64. Linux schedules through a current-user systemd service and timer; macOS and Windows use their native current-user schedulers. All three platforms can install, inspect, resume, remove, and uninstall their schedule; Windows arm64 remains deferred. See the user guide for platform requirements and lifecycle details.
 
@@ -19,6 +19,14 @@ codex-cost-meter report <SESSION_ID>
 ```
 
 Then [find your session ID](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#find-your-session-id). Windows and Linux users can install a tagged source release with Cargo or use the checksummed archives from the [latest stable release](https://github.com/deinspanjer/codex-cost-meter/releases/latest).
+
+For a date-scoped aggregate across every discovered rollout, run:
+
+```text
+codex-cost-meter report --all --since 2026-08-01 --through 2026-08-31 --group-by day
+```
+
+The same date and grouping options work with project reports. Bounds and buckets use the operating system's local calendar; `--all` also uses available Codex created/updated timestamps to avoid opening indexed rollouts that cannot overlap the range. See [corpus and date reports](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#corpus-and-date-reports) for the complete contract.
 
 For Homebrew upgrades, Cargo commands, direct downloads, and platform trust guidance, see [install and run](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#install-and-run).
 

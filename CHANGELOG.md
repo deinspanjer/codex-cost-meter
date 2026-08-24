@@ -6,6 +6,11 @@
 
 - Exclude proven legacy-fork rollout replay from usage totals while preserving the first genuine child request.
 
+## [1.0.0]
+
+- Add inclusive local-calendar corpus and project reports with explicit date bounds, composable grouping, sparse or explicit empty buckets, and metadata-backed candidate pruning.
+- Reuse an existing rollout cache read-only when write access is unavailable, with explicit warnings when the cache cannot be updated or created.
+
 ## [0.9.0]
 
 - Attribute rollout usage to Standard, Fast, or unavailable service tiers, with current Fast and long-context pricing plus per-model tier detail.

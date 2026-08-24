@@ -6,28 +6,35 @@ use std::{
     time::{Duration as StdDuration, UNIX_EPOCH},
 };
 
-use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use time::Duration;
 
 use crate::{
     pricing::Usage,
     rollout::{
-        analysis::{AnalysisError, RolloutStats, UsageEvent, analyze, analyze_skipping},
+        analysis::{AnalysisError, RolloutStats, TurnEvent, UsageEvent, analyze, analyze_skipping},
         discovery::{ForkHistoryMode, RolloutKind, RolloutRecord},
     },
 };
 
 const CACHE_FILENAME: &str = "codex-cost-meter.sqlite";
 const DISCOVERY_VERSION: i64 = 2;
-const ANALYSIS_VERSION: i64 = 4;
+const ANALYSIS_VERSION: i64 = 5;
 
 pub(crate) struct RolloutCache {
     path: PathBuf,
-    connection: RefCell<Option<Connection>>,
+    connection: RefCell<Option<CacheConnection>>,
     open_attempted: RefCell<bool>,
     notices: RefCell<Vec<String>>,
     refresh: bool,
+    #[cfg(test)]
+    force_writable_failure: bool,
+}
+
+struct CacheConnection {
+    connection: Connection,
+    writable: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -58,6 +65,7 @@ struct CachedStats {
     known_usage: Usage,
     reasoning_output: u64,
     events: Vec<UsageEvent>,
+    turn_events: Vec<TurnEvent>,
     unattributed_tokens: u64,
     turns: usize,
     ended_turns: usize,
@@ -85,6 +93,16 @@ impl RolloutCache {
             open_attempted: RefCell::new(false),
             notices: RefCell::new(Vec::new()),
             refresh,
+            #[cfg(test)]
+            force_writable_failure: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn open_with_writable_failure(home: &Path, refresh: bool) -> Self {
+        Self {
+            force_writable_failure: true,
+            ..Self::open(home, refresh)
         }
     }
 
@@ -129,6 +147,9 @@ impl RolloutCache {
         malformed_lines_skipped: usize,
         oversized_lines_skipped: usize,
     ) {
+        if !self.is_writable() {
+            return;
+        }
         let cached = CachedDiscovery {
             id: record.id.clone(),
             parent_id: record.parent_id.clone(),
@@ -308,6 +329,9 @@ impl RolloutCache {
     }
 
     fn store_analysis(&self, path: &Path, revision: FileRevision, stats: &RolloutStats) {
+        if !self.is_writable() {
+            return;
+        }
         let json = match serde_json::to_string(&CachedStats::from(stats)) {
             Ok(json) => json,
             Err(error) => {
@@ -342,7 +366,7 @@ impl RolloutCache {
         self.ensure_open();
         let result = {
             let connection = self.connection.borrow();
-            operation(connection.as_ref()?).map_err(|error| error.to_string())
+            operation(&connection.as_ref()?.connection).map_err(|error| error.to_string())
         };
         match result {
             Ok(value) => Some(value),
@@ -370,22 +394,58 @@ impl RolloutCache {
                 return;
             }
         };
-        let connection = match Connection::open(&self.path) {
-            Ok(connection) => connection,
-            Err(error) => {
-                self.open_error(error);
-                return;
+        match self.open_writable() {
+            Ok(connection) => {
+                *self.connection.borrow_mut() = Some(CacheConnection {
+                    connection,
+                    writable: true,
+                });
+                if !existed {
+                    self.notices
+                        .borrow_mut()
+                        .push(format!("created rollout cache at {}", self.path.display()));
+                }
             }
-        };
-        if let Err(error) = make_private(&self.path) {
-            self.open_error(error);
-            return;
+            Err(error) if existed => match self.open_read_only() {
+                Ok(connection) => {
+                    *self.connection.borrow_mut() = Some(CacheConnection {
+                        connection,
+                        writable: false,
+                    });
+                    self.notices.borrow_mut().push(format!(
+                        "rollout cache at {} is being used read-only; run with write permission to update the cache",
+                        self.path.display()
+                    ));
+                }
+                Err(read_error) => self.open_error(format!(
+                    "writable access failed ({error}); read-only access failed ({read_error})"
+                )),
+            },
+            Err(error) => self.notices.borrow_mut().push(format!(
+                "could not create rollout cache at {}: {error}; run with write permission to create and update the cache; continuing without cache",
+                self.path.display()
+            )),
         }
-        let connection: rusqlite::Result<Connection> = (|| {
-            connection.busy_timeout(StdDuration::from_millis(100))?;
-            connection.pragma_update(None, "journal_mode", "WAL")?;
-            connection.pragma_update(None, "synchronous", "NORMAL")?;
-            connection.execute_batch(
+    }
+
+    fn open_writable(&self) -> Result<Connection, String> {
+        #[cfg(test)]
+        if self.force_writable_failure {
+            return Err("forced writable failure".into());
+        }
+        let connection = Connection::open(&self.path).map_err(|error| error.to_string())?;
+        make_private(&self.path).map_err(|error| error.to_string())?;
+        connection
+            .busy_timeout(StdDuration::from_millis(100))
+            .map_err(|error| error.to_string())?;
+        connection
+            .pragma_update(None, "journal_mode", "WAL")
+            .map_err(|error| error.to_string())?;
+        connection
+            .pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute_batch(
                 "CREATE TABLE IF NOT EXISTS rollout_cache (
                     rollout_path TEXT PRIMARY KEY,
                     discovery_version INTEGER NOT NULL,
@@ -395,20 +455,41 @@ impl RolloutCache {
                     analysis_version INTEGER,
                     analysis_json TEXT
                 );",
-            )?;
-            Ok(connection)
-        })();
-        match connection {
-            Ok(connection) => {
-                *self.connection.borrow_mut() = Some(connection);
-                if !existed {
-                    self.notices
-                        .borrow_mut()
-                        .push(format!("created rollout cache at {}", self.path.display()));
-                }
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(connection)
+    }
+
+    fn open_read_only(&self) -> Result<Connection, String> {
+        let ordinary = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| error.to_string())
+            .and_then(validate_read_only);
+        match ordinary {
+            Ok(connection) => Ok(connection),
+            Err(error) if sqlite_sidecars_absent(&self.path) => {
+                let uri = immutable_sqlite_uri(&self.path)?;
+                Connection::open_with_flags(
+                    uri,
+                    OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+                )
+                .map_err(|immutable_error| immutable_error.to_string())
+                .and_then(validate_read_only)
+                .map_err(|immutable_error| {
+                    format!(
+                        "ordinary read-only open failed ({error}); immutable read-only open failed ({immutable_error})"
+                    )
+                })
             }
-            Err(error) => self.open_error(error),
+            Err(error) => Err(error),
         }
+    }
+
+    fn is_writable(&self) -> bool {
+        self.ensure_open();
+        self.connection
+            .borrow()
+            .as_ref()
+            .is_some_and(|connection| connection.writable)
     }
 
     fn open_error(&self, error: impl std::fmt::Display) {
@@ -426,6 +507,51 @@ impl RolloutCache {
             ));
         }
     }
+}
+
+fn validate_read_only(connection: Connection) -> Result<Connection, String> {
+    connection
+        .busy_timeout(StdDuration::from_millis(100))
+        .map_err(|error| error.to_string())?;
+    connection
+        .prepare(
+            "SELECT rollout_path, discovery_version, discovery_json,
+                    modified_ns, file_size, analysis_version, analysis_json
+             FROM rollout_cache LIMIT 0",
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(connection)
+}
+
+fn sqlite_sidecars_absent(path: &Path) -> bool {
+    ["-wal", "-shm"].iter().all(|suffix| {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        matches!(
+            fs::symlink_metadata(sidecar),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        )
+    })
+}
+
+fn immutable_sqlite_uri(path: &Path) -> Result<String, String> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| "cache path is not valid UTF-8".to_owned())?
+        .replace('\\', "/");
+    let mut uri = String::from("file:");
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"/-._~:".contains(&byte) {
+            uri.push(char::from(byte));
+        } else {
+            uri.push('%');
+            uri.push(char::from(HEX[usize::from(byte >> 4)]));
+            uri.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    uri.push_str("?immutable=1");
+    Ok(uri)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -464,6 +590,7 @@ impl From<&RolloutStats> for CachedStats {
             known_usage: stats.known_usage,
             reasoning_output: stats.reasoning_output,
             events: stats.events.clone(),
+            turn_events: stats.turn_events.clone(),
             unattributed_tokens: stats.unattributed_tokens,
             turns: stats.turns,
             ended_turns: stats.ended_turns,
@@ -492,6 +619,7 @@ impl From<CachedStats> for RolloutStats {
             known_usage: stats.known_usage,
             reasoning_output: stats.reasoning_output,
             events: stats.events,
+            turn_events: stats.turn_events,
             unattributed_tokens: stats.unattributed_tokens,
             turns: stats.turns,
             ended_turns: stats.ended_turns,
@@ -514,10 +642,37 @@ impl From<CachedStats> for RolloutStats {
 mod tests {
     use std::fs;
 
+    use serde_json::json;
     use tempfile::TempDir;
 
     use super::RolloutCache;
     use crate::rollout::discovery::{ForkHistoryMode, RolloutKind, RolloutRecord};
+
+    fn record(path: std::path::PathBuf, id: &str) -> RolloutRecord {
+        RolloutRecord {
+            id: id.into(),
+            parent_id: None,
+            fork_history_mode: None,
+            kind: RolloutKind::Root,
+            cwd: None,
+            path,
+        }
+    }
+
+    fn write_rollout(path: &std::path::Path, id: &str, input: u64) {
+        let rows = [
+            json!({"type": "session_meta", "timestamp": "2026-08-21T00:00:00Z", "payload": {"id": id}}),
+            json!({"type": "turn_context", "payload": {"model": "gpt-5.6-terra"}}),
+            json!({"type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": input, "total_tokens": input}}}}),
+        ];
+        fs::write(
+            path,
+            rows.into_iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn unchanged_analysis_round_trips_through_sqlite() {
@@ -527,8 +682,10 @@ mod tests {
             &path,
             concat!(
                 "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-21T00:00:00Z\",\"payload\":{\"id\":\"root\"}}\n",
-                "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.6-terra\"}}\n",
+                "{\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"turn-1\",\"model\":\"gpt-5.6-terra\"}}\n",
+                "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-21T00:00:01Z\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-1\"}}\n",
                 "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":1,\"total_tokens\":1}}}}\n",
+                "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-21T00:00:03Z\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-1\"}}\n",
             ),
         )
         .unwrap();
@@ -564,7 +721,14 @@ mod tests {
         assert_eq!(hit_after_replay.known_usage.input, 999);
         assert_eq!(refreshed.known_usage, first.known_usage);
         assert_eq!(refreshed.events.len(), first.events.len());
+        assert_eq!(refreshed.turn_events, first.turn_events);
         assert_eq!(refreshed.turn_models, first.turn_models);
+        assert!(
+            cache
+                .take_notices()
+                .iter()
+                .any(|notice| notice.contains("created rollout cache"))
+        );
 
         #[cfg(unix)]
         {
@@ -579,6 +743,62 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn read_only_cache_reuses_hits_without_storing_misses() {
+        let home = TempDir::new().unwrap();
+        let hit_path = home.path().join("hit.jsonl");
+        let miss_path = home.path().join("miss.jsonl");
+        write_rollout(&hit_path, "hit", 1);
+        write_rollout(&miss_path, "miss", 2);
+        let hit = record(hit_path.clone(), "hit");
+        let miss = record(miss_path.clone(), "miss");
+        let seed = RolloutCache::open(home.path(), false);
+        seed.store_discovery(&hit, 0, 0);
+        assert_eq!(seed.analyze(&hit).unwrap().known_usage.input, 1);
+        drop(seed);
+
+        let cache_path = home.path().join(super::CACHE_FILENAME);
+        let before = fs::read(&cache_path).unwrap();
+        let cache = RolloutCache::open_with_writable_failure(home.path(), false);
+
+        assert_eq!(cache.analyze(&hit).unwrap().known_usage.input, 1);
+        cache.store_discovery(&miss, 0, 0);
+        assert_eq!(cache.analyze(&miss).unwrap().known_usage.input, 2);
+        assert!(cache.discovery(&miss.path).is_none());
+        assert_eq!(cache.analyze(&hit).unwrap().known_usage.input, 1);
+        assert_eq!(fs::read(&cache_path).unwrap(), before);
+        let notices = cache.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("being used read-only"));
+        assert!(notices[0].contains("write permission to update the cache"));
+    }
+
+    #[test]
+    fn failed_creation_and_unusable_existing_cache_have_distinct_notices() {
+        let missing_home = TempDir::new().unwrap();
+        let missing = RolloutCache::open_with_writable_failure(missing_home.path(), false);
+        let missing_record = record(missing_home.path().join("missing.jsonl"), "missing");
+        missing.store_discovery(&missing_record, 0, 0);
+        let notices = missing.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("could not create rollout cache"));
+        assert!(notices[0].contains("write permission"));
+
+        let invalid_home = TempDir::new().unwrap();
+        fs::write(
+            invalid_home.path().join(super::CACHE_FILENAME),
+            "not sqlite",
+        )
+        .unwrap();
+        let invalid = RolloutCache::open_with_writable_failure(invalid_home.path(), false);
+        let invalid_record = record(invalid_home.path().join("invalid.jsonl"), "invalid");
+        invalid.store_discovery(&invalid_record, 0, 0);
+        let notices = invalid.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("rollout cache unavailable"));
+        assert!(notices[0].contains("read-only access failed"));
     }
 
     #[test]

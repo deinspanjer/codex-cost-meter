@@ -1,5 +1,6 @@
 mod cache;
 mod cli;
+mod date_filter;
 mod output;
 mod pricing;
 mod progress;
@@ -36,6 +37,8 @@ use crate::{
 enum AppError {
     #[error(transparent)]
     Cli(#[from] cli::CliError),
+    #[error(transparent)]
+    DateFilter(#[from] date_filter::Error),
     #[error(transparent)]
     Report(#[from] ReportError),
     #[error(transparent)]
@@ -114,16 +117,32 @@ fn run_with_writers(
 ) -> Result<(), AppError> {
     match cli.command {
         Command::Report(args) => {
+            let filter = args.date_filter()?;
             let home = args.codex_home()?;
             let cache = Rc::new(cache::RolloutCache::open(&home, args.refresh));
             let mut progress =
                 progress::Progress::new(error_writer, args.progress, stderr_is_terminal);
             let rendered = (|| -> Result<String, AppError> {
-                if let Some(project_ref) = args.project {
+                if args.all {
+                    let context = report::ReportContext::new_corpus_cached_with_progress(
+                        &home,
+                        &filter,
+                        Rc::clone(&cache),
+                        &mut progress,
+                    )
+                    .map_err(ReportError::from)?;
+                    let report = context.build_corpus_with_progress(&filter, &mut progress)?;
+                    if args.json {
+                        Ok(format!("{}\n", output::json(&report)?))
+                    } else {
+                        Ok(output::project_human(&report))
+                    }
+                } else if let Some(project_ref) = args.project {
                     let report = project::build_with_progress(
                         &home,
                         args.thread_id.as_deref(),
                         &project_ref,
+                        &filter,
                         &mut progress,
                         Rc::clone(&cache),
                     )?;
@@ -149,6 +168,7 @@ fn run_with_writers(
                         &home,
                         None,
                         "",
+                        &filter,
                         &mut progress,
                         Rc::clone(&cache),
                     )?;

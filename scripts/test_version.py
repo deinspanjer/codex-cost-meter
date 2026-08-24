@@ -110,6 +110,28 @@ class VersionToolTests(unittest.TestCase):
         )
         self.assertEqual(self.run_tool("notes", "1.2.3").stdout, "- Keep this\n")
 
+    def test_update_formula_pins_current_release_and_checksum(self):
+        self.write_project(name="codex-cost-meter", version="1.2.3")
+        formula = self.root / "Formula/codex-cost-meter.rb"
+        formula.parent.mkdir()
+        formula.write_text(
+            "class CodexCostMeter < Formula\n"
+            '  url "https://github.com/example/codex-cost-meter/archive/refs/tags/v1.2.2.tar.gz"\n'
+            f'  sha256 "{"0" * 64}"\n'
+            "end\n",
+            encoding="utf-8",
+        )
+
+        self.run_tool("update-formula", "--sha256", "a" * 64)
+
+        self.assertEqual(
+            formula.read_text(encoding="utf-8"),
+            "class CodexCostMeter < Formula\n"
+            '  url "https://github.com/example/codex-cost-meter/archive/refs/tags/v1.2.3.tar.gz"\n'
+            f'  sha256 "{"a" * 64}"\n'
+            "end\n",
+        )
+
     def test_changed_requires_a_nonzero_untagged_version(self):
         self.git("init", "-q")
         self.git("config", "user.email", "test@example.com")
