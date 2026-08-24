@@ -60,8 +60,12 @@
     ]
   },
   "proxies": {
-    "gpt-5.6": "gpt-5.6-sol",
-    "codex-auto-review": "gpt-5.6-luna"
-  },
-  "undated_proxies": ["codex-auto-review"]
+    "gpt-5.6": [
+      {"target": "gpt-5.6-sol"}
+    ],
+    "codex-auto-review": [
+      {"target": "gpt-5.4"},
+      {"effective_from": "2026-07-30", "target": "gpt-5.6-luna"}
+    ]
+  }
 }

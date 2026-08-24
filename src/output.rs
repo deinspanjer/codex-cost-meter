@@ -3,7 +3,7 @@ use std::fmt::Write;
 use serde::Serialize;
 
 use crate::{
-    report::{ModelReport, ModelTierReport, ProjectReport, Report, StatsReport},
+    report::{ModelReport, ModelTierReport, PricingReport, ProjectReport, Report, StatsReport},
     title::compact_tokens,
 };
 
@@ -75,12 +75,7 @@ pub(crate) fn human(report: &Report) -> String {
         "Pricing source: {}",
         safe_text(&report.pricing.source)
     );
-    if !report.pricing.model_proxies.is_empty() {
-        rendered.push_str("Model proxies:\n");
-        for (model, target) in &report.pricing.model_proxies {
-            let _ = writeln!(rendered, "  {} -> {}", safe_text(model), safe_text(target));
-        }
-    }
+    append_model_proxies(&mut rendered, &report.pricing);
     if !report.incomplete_input_warnings.is_empty() {
         rendered.push_str("Incomplete input:\n");
         for warning in &report.incomplete_input_warnings {
@@ -183,6 +178,7 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
         "Pricing source: {}",
         safe_text(&report.pricing.source)
     );
+    append_model_proxies(&mut rendered, &report.pricing);
     if selection.resolver != "corpus"
         && (selection.incomplete_root_reports > 0 || selection.unpriced_root_reports > 0)
     {
@@ -207,6 +203,55 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
     rendered
         .push_str("Notes: model and aggregate durations are agent-turn time and can overlap.\n");
     rendered
+}
+
+fn append_model_proxies(rendered: &mut String, pricing: &PricingReport) {
+    if pricing.model_proxy_histories.is_empty() {
+        return;
+    }
+    rendered.push_str("Model proxies:\n");
+    for (model, points) in &pricing.model_proxy_histories {
+        if let [point] = points.as_slice()
+            && point.effective_from.is_none()
+        {
+            let _ = writeln!(
+                rendered,
+                "  {} -> {}",
+                safe_text(model),
+                safe_text(&point.target)
+            );
+            continue;
+        }
+        for (index, point) in points.iter().enumerate() {
+            match &point.effective_from {
+                Some(date) => {
+                    let _ = writeln!(
+                        rendered,
+                        "  {} from {} -> {}",
+                        safe_text(model),
+                        safe_text(date),
+                        safe_text(&point.target)
+                    );
+                }
+                None => {
+                    let next_date = points
+                        .get(index + 1)
+                        .and_then(|next| next.effective_from.as_deref())
+                        .unwrap_or("earliest dated change");
+                    let _ = writeln!(
+                        rendered,
+                        "  {} before {} -> {}",
+                        safe_text(model),
+                        safe_text(next_date),
+                        safe_text(&point.target)
+                    );
+                }
+            }
+        }
+        if model == "codex-auto-review" {
+            rendered.push_str("  Note: codex-auto-review boundaries are announcement-date estimates, not observed routing or billing cutovers.\n");
+        }
+    }
 }
 
 fn group_table(report: &ProjectReport, show_cache_write: bool) -> String {
@@ -490,8 +535,8 @@ mod tests {
 
     use super::{human, json, project_human};
     use crate::report::{
-        DateRangeReport, ModelReport, ModelTierReport, PricingReport, ProjectReport,
-        ProjectSelection, Report, RolloutReport, StatsReport,
+        DateRangeReport, ModelProxyPointReport, ModelReport, ModelTierReport, PricingReport,
+        ProjectReport, ProjectSelection, Report, RolloutReport, StatsReport,
     };
 
     fn stats(cost: Option<f64>, known_cost: f64) -> StatsReport {
@@ -589,6 +634,29 @@ mod tests {
         );
         let mut proxies = BTreeMap::new();
         proxies.insert("gpt-5.6".into(), "gpt-5.6-terra".into());
+        proxies.insert("codex-auto-review".into(), "gpt-5.6-luna".into());
+        let model_proxy_histories = BTreeMap::from([
+            (
+                "gpt-5.6".into(),
+                vec![ModelProxyPointReport {
+                    target: "gpt-5.6-terra".into(),
+                    effective_from: None,
+                }],
+            ),
+            (
+                "codex-auto-review".into(),
+                vec![
+                    ModelProxyPointReport {
+                        target: "gpt-5.4".into(),
+                        effective_from: None,
+                    },
+                    ModelProxyPointReport {
+                        target: "gpt-5.6-luna".into(),
+                        effective_from: Some("2026-07-30".into()),
+                    },
+                ],
+            ),
+        ]);
         Report {
             rollout: RolloutReport {
                 rollout_id: "root".into(),
@@ -607,6 +675,7 @@ mod tests {
                 as_of: "2026-08-13".into(),
                 source: "https://example.invalid/prices".into(),
                 model_proxies: proxies,
+                model_proxy_histories,
             },
             incomplete_input_warnings: vec!["some usage could not be priced".into()],
         }
@@ -634,6 +703,12 @@ mod tests {
         assert!(models.find("gpt-5.6-terra").unwrap() < models.find("cheap").unwrap());
         assert!(rendered.contains("Total"));
         assert!(rendered.contains("gpt-5.6 -> gpt-5.6-terra"));
+        assert!(rendered.contains("codex-auto-review before 2026-07-30 -> gpt-5.4"));
+        assert!(rendered.contains("codex-auto-review from 2026-07-30 -> gpt-5.6-luna"));
+        assert!(
+            rendered
+                .contains("announcement-date estimates, not observed routing or billing cutovers")
+        );
         assert!(rendered.contains("Pricing as of: 2026-08-13"));
         assert!(rendered.contains("cache read is included in input"));
         assert!(rendered.contains("reasoning is included in output"));
@@ -731,6 +806,19 @@ mod tests {
         assert!(rendered.contains("269 incomplete"));
         assert!(rendered.contains("Incomplete root reports: 12"));
         assert!(rendered.contains("+ means known lower-bound cost"));
+        assert!(rendered.contains("gpt-5.6 -> gpt-5.6-terra"));
+        assert!(rendered.contains("codex-auto-review before 2026-07-30 -> gpt-5.4"));
+        assert!(rendered.contains("codex-auto-review from 2026-07-30 -> gpt-5.6-luna"));
+        assert!(
+            rendered
+                .contains("announcement-date estimates, not observed routing or billing cutovers")
+        );
+
+        project.selection.resolver = "corpus".into();
+        let corpus = project_human(&project);
+        assert!(corpus.contains("gpt-5.6 -> gpt-5.6-terra"));
+        assert!(corpus.contains("codex-auto-review before 2026-07-30 -> gpt-5.4"));
+        assert!(corpus.contains("codex-auto-review from 2026-07-30 -> gpt-5.6-luna"));
     }
 
     #[test]
@@ -745,5 +833,17 @@ mod tests {
             json_value!(0.15)
         );
         assert_eq!(actual["pricing"]["as_of"], json_value!("2026-08-13"));
+        assert_eq!(
+            actual["pricing"]["model_proxies"]["codex-auto-review"],
+            json_value!("gpt-5.6-luna")
+        );
+        assert_eq!(
+            actual["pricing"]["model_proxy_histories"]["codex-auto-review"][0],
+            json_value!({"target": "gpt-5.4"})
+        );
+        assert_eq!(
+            actual["pricing"]["model_proxy_histories"]["codex-auto-review"][1],
+            json_value!({"target": "gpt-5.6-luna", "effective_from": "2026-07-30"})
+        );
     }
 }

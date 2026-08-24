@@ -110,6 +110,8 @@ Date filtering attributes tokens and cost to each usage-event timestamp, while t
 
 Cost uses the embedded historical catalog and is an API-list-price approximation, not a billing record. Each request uses the service tier most recently applied in the rollout settings; current Codex token records do not reveal the tier actually served, so a Fast request that was downgraded cannot be corrected to Standard pricing. Missing tier metadata is priced at Standard rates. It is definitive Standard only when the usage timestamp and creator version place it before the first public Fast-capable package; otherwise it appears as `Standard (assumed)` and contributes to `assumed_standard_tokens`. Explicit unsupported tiers remain unpriced.
 
+`codex-auto-review` is an internal routing identity, not a public foundation-model ID recorded in local telemetry. OpenAI documented GPT-5.4 Thinking with low reasoning at launch and announced a migration to GPT-5.6 Luna on July 30, 2026. The catalog therefore prices Auto-review through GPT-5.4 before July 30 and GPT-5.6 Luna from July 30 onward. This is an announcement-date estimator boundary, not proof of the routed or billed model for an individual request or an exact account-level cutover. Human output shows the dated mapping; JSON preserves the latest target in `model_proxies` and the full typed history in `model_proxy_histories`. See the [Auto-review pricing evidence](docs/research/codex-auto-review-pricing-evidence.md).
+
 Fast first appeared in public opt-in prerelease `0.108.0-alpha.2` on March 2 PST (March 3 UTC) and became generally available in stable `0.111.0` on March 5. Applied-tier snapshots were not persisted until stable `0.144.0` on July 9. The analyzer uses each usage event's timestamp because the canonical `session_meta.cli_version` identifies the rollout creator, not the client that may later resume and append to it.
 
 Requests above a model's published input threshold use its long-context rate cell. Explicit Priority/Fast markers at or after stable `0.144.0` use the model-specific Fast premium captured in the embedded catalog; missing attribution always uses the Standard rate, with post-release assumptions labeled separately. Fast markers before the exact stable `0.144.0` publication time remain unpriced because durable rollout evidence was not yet available. Unsupported applied tiers appear under `unpriced_service_tiers`; unavailable model, date, tier, context, or token-component rates appear under `unpriced_models`. Both make the complete estimate unavailable while preserving known cost. Reasoning is included in output usage; cache reads are included in input usage. See the [attribution evidence](docs/research/fast-mode-attribution-evidence.md) for the official timeline and representative local chronology.
@@ -144,13 +146,17 @@ codex-auto-review  1                             300K       275K        12K     
 Total              4 (4 complete, 0 incomplete)  2M         1.7M        145K     100K       12m 4.0s  $3.89
 
 Agent-turn time: 9m 3.0s (agent time can overlap).
-Pricing as of: 2026-08-06
-Pricing source: https://developers.openai.com/api/docs/pricing
+Pricing as of: 2026-08-22
+Pricing source: https://developers.openai.com/api/docs/pricing, https://openai.com/api-fast-mode/
 Model proxies:
-  codex-auto-review -> gpt-5.6-luna
+  codex-auto-review before 2026-07-30 -> gpt-5.4
+  codex-auto-review from 2026-07-30 -> gpt-5.6-luna
+  Note: codex-auto-review boundaries are announcement-date estimates, not observed routing or billing cutovers.
   gpt-5.6 -> gpt-5.6-sol
 Notes: cache read is included in input; reasoning is included in output; agent time can overlap.
 ```
+
+The worked example uses the catalog's effective-dated Auto-review proxy history. The July 30 boundary remains an evidence-backed estimate rather than observed request routing.
 
 ## Preview or apply title updates
 

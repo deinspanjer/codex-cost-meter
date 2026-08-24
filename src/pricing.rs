@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -34,8 +34,24 @@ pub(crate) struct Catalog {
     source: String,
     histories: HashMap<String, Vec<PricePoint>>,
     long_context_thresholds: HashMap<String, u64>,
-    proxies: HashMap<String, String>,
-    undated_proxies: HashSet<String>,
+    proxies: HashMap<String, Vec<ProxyPoint>>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct ProxyPoint {
+    #[serde(default, deserialize_with = "deserialize_optional_date")]
+    effective_from: Option<Date>,
+    target: String,
+}
+
+impl ProxyPoint {
+    pub(crate) fn effective_from(&self) -> Option<Date> {
+        self.effective_from
+    }
+
+    pub(crate) fn target(&self) -> &str {
+        &self.target
+    }
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -114,6 +130,21 @@ where
     .map_err(serde::de::Error::custom)
 }
 
+fn deserialize_optional_date<'de, D>(deserializer: D) -> Result<Option<Date>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?
+        .map(|value| {
+            Date::parse(
+                &value,
+                time::macros::format_description!("[year]-[month]-[day]"),
+            )
+            .map_err(serde::de::Error::custom)
+        })
+        .transpose()
+}
+
 #[derive(Deserialize)]
 struct RawCatalog {
     #[serde(default)]
@@ -123,8 +154,7 @@ struct RawCatalog {
     histories: HashMap<String, Vec<PricePoint>>,
     #[serde(default)]
     long_context_thresholds: HashMap<String, u64>,
-    proxies: HashMap<String, String>,
-    undated_proxies: HashSet<String>,
+    proxies: HashMap<String, Vec<ProxyPoint>>,
 }
 
 #[derive(Debug, Error)]
@@ -137,8 +167,12 @@ pub(crate) enum PricingError {
     NonIncreasingEffectiveDate { model: String, effective_from: Date },
     #[error("proxy {proxy} has no target history: {target}")]
     UnresolvedProxy { proxy: String, target: String },
-    #[error("undated proxy is not a proxy: {0}")]
-    InvalidUndatedProxy(String),
+    #[error("proxy has no target points: {0}")]
+    EmptyProxyHistory(String),
+    #[error("proxy {0} has an undated target after its first point")]
+    InvalidProxyBaseline(String),
+    #[error("non-increasing proxy date for {proxy}: {effective_from}")]
+    NonIncreasingProxyDate { proxy: String, effective_from: Date },
     #[error("invalid long-context threshold model: {0}")]
     InvalidLongContextThreshold(String),
 }
@@ -186,17 +220,31 @@ impl Catalog {
             }
         }
 
-        for (proxy, target) in &raw.proxies {
-            if !raw.histories.contains_key(target) {
-                return Err(PricingError::UnresolvedProxy {
-                    proxy: proxy.clone(),
-                    target: target.clone(),
-                });
+        for (proxy, points) in &raw.proxies {
+            if points.is_empty() {
+                return Err(PricingError::EmptyProxyHistory(proxy.clone()));
             }
-        }
-        for proxy in &raw.undated_proxies {
-            if !raw.proxies.contains_key(proxy) {
-                return Err(PricingError::InvalidUndatedProxy(proxy.clone()));
+            let mut previous = None;
+            for (index, point) in points.iter().enumerate() {
+                if !raw.histories.contains_key(&point.target) {
+                    return Err(PricingError::UnresolvedProxy {
+                        proxy: proxy.clone(),
+                        target: point.target.clone(),
+                    });
+                }
+                let Some(effective_from) = point.effective_from else {
+                    if index > 0 {
+                        return Err(PricingError::InvalidProxyBaseline(proxy.clone()));
+                    }
+                    continue;
+                };
+                if previous.is_some_and(|date| effective_from <= date) {
+                    return Err(PricingError::NonIncreasingProxyDate {
+                        proxy: proxy.clone(),
+                        effective_from,
+                    });
+                }
+                previous = Some(effective_from);
             }
         }
 
@@ -206,7 +254,6 @@ impl Catalog {
             histories: raw.histories,
             long_context_thresholds: raw.long_context_thresholds,
             proxies: raw.proxies,
-            undated_proxies: raw.undated_proxies,
         })
     }
 
@@ -225,7 +272,26 @@ impl Catalog {
                 complete: None,
             };
         }
-        let target = self.proxies.get(model).map_or(model, String::as_str);
+        let target = match self.proxies.get(model) {
+            None => model,
+            Some(points) => {
+                let point = match at {
+                    None => points.last(),
+                    Some(at) => points.iter().rev().find(|point| {
+                        point
+                            .effective_from
+                            .is_none_or(|effective_from| effective_from <= at.date())
+                    }),
+                };
+                let Some(point) = point else {
+                    return CostResult {
+                        known: 0.0,
+                        complete: None,
+                    };
+                };
+                point.target()
+            }
+        };
         let Some(history) = self.histories.get(target) else {
             return CostResult {
                 known: 0.0,
@@ -234,7 +300,6 @@ impl Catalog {
         };
         let rates = match at {
             None => history.last(),
-            Some(_) if self.undated_proxies.contains(model) => history.last(),
             Some(at) => history
                 .iter()
                 .rev()
@@ -288,7 +353,7 @@ impl Catalog {
         &self.source
     }
 
-    pub(crate) fn proxies(&self) -> &HashMap<String, String> {
+    pub(crate) fn proxies(&self) -> &HashMap<String, Vec<ProxyPoint>> {
         &self.proxies
     }
 }
@@ -422,9 +487,10 @@ mod tests {
     }
 
     #[test]
-    fn uses_the_newest_rate_for_an_undated_proxy() {
+    fn selects_effective_proxy_targets_and_latest_missing_time_target() {
         let catalog = Catalog::embedded().unwrap();
         let before = datetime!(2026-07-29 12:00 UTC);
+        let boundary = datetime!(2026-07-30 00:00 UTC);
         let usage = Usage {
             output: 1_000_000,
             ..Usage::default()
@@ -439,7 +505,30 @@ mod tests {
                     usage,
                 )
                 .complete,
+            Some(15.0)
+        );
+        assert_eq!(
+            catalog
+                .cost(
+                    "codex-auto-review",
+                    Some(boundary),
+                    &ServiceTier::Standard,
+                    usage,
+                )
+                .complete,
             Some(1.2)
+        );
+        assert_eq!(
+            catalog
+                .cost("codex-auto-review", None, &ServiceTier::Standard, usage)
+                .complete,
+            Some(1.2)
+        );
+        assert_eq!(
+            catalog
+                .cost("gpt-5.6", Some(before), &ServiceTier::Standard, usage)
+                .complete,
+            Some(30.0)
         );
     }
 
@@ -449,34 +538,46 @@ mod tests {
             NegativeRate,
             NonIncreasingDate,
             UnresolvedProxy,
-            InvalidUndatedProxy,
+            EmptyProxyHistory,
+            InvalidProxyBaseline,
+            NonIncreasingProxyDate,
             InvalidLongContextThreshold,
         }
 
         let cases = [
             (
                 "negative rate",
-                r#"{"histories":{"model":[{"effective_from":"2026-01-01","input":-1.0,"cached_input":null,"cache_write_input":null,"output":null}]},"proxies":{},"undated_proxies":[]}"#,
+                r#"{"histories":{"model":[{"effective_from":"2026-01-01","input":-1.0,"cached_input":null,"cache_write_input":null,"output":null}]},"proxies":{}}"#,
                 ExpectedError::NegativeRate,
             ),
             (
                 "equal effective dates",
-                r#"{"histories":{"model":[{"effective_from":"2026-01-01","input":1.0,"cached_input":null,"cache_write_input":null,"output":null},{"effective_from":"2026-01-01","input":2.0,"cached_input":null,"cache_write_input":null,"output":null}]},"proxies":{},"undated_proxies":[]}"#,
+                r#"{"histories":{"model":[{"effective_from":"2026-01-01","input":1.0,"cached_input":null,"cache_write_input":null,"output":null},{"effective_from":"2026-01-01","input":2.0,"cached_input":null,"cache_write_input":null,"output":null}]},"proxies":{}}"#,
                 ExpectedError::NonIncreasingDate,
             ),
             (
                 "unresolved proxy",
-                r#"{"histories":{},"proxies":{"alias":"missing"},"undated_proxies":[]}"#,
+                r#"{"histories":{},"proxies":{"alias":[{"target":"missing"}]}}"#,
                 ExpectedError::UnresolvedProxy,
             ),
             (
-                "undated non-proxy",
-                r#"{"histories":{},"proxies":{},"undated_proxies":["alias"]}"#,
-                ExpectedError::InvalidUndatedProxy,
+                "empty proxy history",
+                r#"{"histories":{},"proxies":{"alias":[]}}"#,
+                ExpectedError::EmptyProxyHistory,
+            ),
+            (
+                "undated point after first",
+                r#"{"histories":{"model":[{"effective_from":"2026-01-01","input":1.0,"cached_input":null,"cache_write_input":null,"output":null}]},"proxies":{"alias":[{"effective_from":"2026-01-01","target":"model"},{"target":"model"}]}}"#,
+                ExpectedError::InvalidProxyBaseline,
+            ),
+            (
+                "equal proxy dates",
+                r#"{"histories":{"model":[{"effective_from":"2026-01-01","input":1.0,"cached_input":null,"cache_write_input":null,"output":null}]},"proxies":{"alias":[{"effective_from":"2026-01-01","target":"model"},{"effective_from":"2026-01-01","target":"model"}]}}"#,
+                ExpectedError::NonIncreasingProxyDate,
             ),
             (
                 "threshold without history",
-                r#"{"histories":{},"long_context_thresholds":{"missing":272000},"proxies":{},"undated_proxies":[]}"#,
+                r#"{"histories":{},"long_context_thresholds":{"missing":272000},"proxies":{}}"#,
                 ExpectedError::InvalidLongContextThreshold,
             ),
         ];
@@ -496,8 +597,14 @@ mod tests {
                         ExpectedError::UnresolvedProxy,
                         PricingError::UnresolvedProxy { .. }
                     ) | (
-                        ExpectedError::InvalidUndatedProxy,
-                        PricingError::InvalidUndatedProxy(_)
+                        ExpectedError::EmptyProxyHistory,
+                        PricingError::EmptyProxyHistory(_)
+                    ) | (
+                        ExpectedError::InvalidProxyBaseline,
+                        PricingError::InvalidProxyBaseline(_)
+                    ) | (
+                        ExpectedError::NonIncreasingProxyDate,
+                        PricingError::NonIncreasingProxyDate { .. }
                     ) | (
                         ExpectedError::InvalidLongContextThreshold,
                         PricingError::InvalidLongContextThreshold(_)
