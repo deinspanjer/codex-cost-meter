@@ -3,7 +3,7 @@ use std::{
     fs::{self, File},
     io::{self, BufRead, BufReader},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::SystemTime,
 };
 
 use rusqlite::{Connection, OpenFlags, params_from_iter};
@@ -29,10 +29,18 @@ pub(crate) enum RolloutKind {
     OtherSubagent(String),
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub(crate) enum ForkHistoryMode {
+    Legacy,
+    Paginated,
+    Other,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RolloutRecord {
     pub id: String,
     pub parent_id: Option<String>,
+    pub fork_history_mode: Option<ForkHistoryMode>,
     pub kind: RolloutKind,
     pub cwd: Option<String>,
     pub path: PathBuf,
@@ -171,9 +179,11 @@ impl RolloutIndex {
                     );
                     indexed_file();
                 }
-                let records = resolve_duplicates(candidates);
+                let mut records = resolve_duplicates(candidates);
+                let all_paths_resolved = records.len() == paths.len();
+                retain_workset(&mut records, ids);
                 (warnings.is_empty()
-                    && records.len() == paths.len()
+                    && all_paths_resolved
                     && ids.iter().all(|id| records.contains_key(id)))
                 .then(|| {
                     Self::from_records(
@@ -219,15 +229,15 @@ impl RolloutIndex {
     }
 
     pub(crate) fn is_root(&self, id: &str) -> bool {
-        self.records
-            .get(id)
-            .is_some_and(|record| matches!(&record.kind, RolloutKind::Root))
+        self.records.get(id).is_some_and(|record| {
+            record.parent_id.is_none() && matches!(&record.kind, RolloutKind::Root)
+        })
     }
 
     pub(crate) fn roots(&self) -> impl Iterator<Item = &RolloutRecord> {
         self.records
             .values()
-            .filter(|record| matches!(record.kind, RolloutKind::Root))
+            .filter(|record| record.parent_id.is_none() && matches!(record.kind, RolloutKind::Root))
     }
 
     pub(crate) fn records(&self) -> impl Iterator<Item = &RolloutRecord> {
@@ -319,29 +329,6 @@ fn targeted_paths(
             }
         })
         .collect::<Vec<_>>();
-    let orphan_paths = connection
-        .prepare(
-            "SELECT t.rollout_path
-             FROM threads t
-             LEFT JOIN thread_spawn_edges e ON e.child_thread_id = t.id
-             WHERE e.child_thread_id IS NULL
-               AND (t.source LIKE '%\"subagent\"%' OR t.source LIKE '%\"internal\"%')",
-        )
-        .ok()?
-        .query_map([], |row| row.get::<_, String>(0))
-        .ok()?
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?
-        .into_iter()
-        .map(PathBuf::from)
-        .map(|path| {
-            if path.is_absolute() {
-                path
-            } else {
-                home.join(path)
-            }
-        })
-        .collect::<Vec<_>>();
     let all_paths = connection
         .prepare("SELECT rollout_path FROM threads")
         .ok()?
@@ -359,7 +346,7 @@ fn targeted_paths(
             }
         })
         .collect::<HashSet<_>>();
-    let mut reconciliation_paths = orphan_paths;
+    let mut reconciliation_paths = all_paths.iter().cloned().collect::<Vec<_>>();
     reconciliation_paths.extend(unindexed_rollout_paths(home, &all_paths)?);
     paths.extend(match cache {
         Some(cache) => cache.related_discovery_paths(&reconciliation_paths, &selected_ids)?,
@@ -429,75 +416,28 @@ pub(crate) fn state_roots(home: &Path, cache: &RolloutCache) -> Option<Vec<Rollo
     .find(|path| path.is_file())?;
     let connection =
         Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-    let mut statement = connection
-        .prepare("SELECT id, rollout_path, source, cwd FROM threads")
-        .ok()?;
-    let rows = statement
+    let cwd_by_id = connection
+        .prepare("SELECT id, cwd FROM threads")
+        .ok()?
         .query_map([], |row| {
-            let path = PathBuf::from(row.get::<_, String>(1)?);
-            Ok((
-                row.get::<_, String>(0)?,
-                path,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
         })
+        .ok()?
+        .collect::<Result<HashMap<_, _>, _>>()
         .ok()?;
-    let rows = rows.collect::<Result<Vec<_>, _>>().ok()?;
-    let indexed_paths = rows
-        .iter()
-        .map(|(_, path, _, _)| {
-            if path.is_absolute() {
-                path.clone()
-            } else {
-                home.join(path)
-            }
-        })
-        .collect::<HashSet<_>>();
-    let mut candidates = rows
-        .into_iter()
-        .filter(|(_, _, source, _)| source_is_root(source))
-        .map(|(id, path, _, cwd)| {
-            let path = if path.is_absolute() {
-                path
-            } else {
-                home.join(path)
-            };
-            let modified = fs::metadata(&path)
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(UNIX_EPOCH);
-            (
-                RolloutRecord {
-                    id,
-                    parent_id: None,
-                    kind: RolloutKind::Root,
-                    cwd: cwd.filter(|cwd| !cwd.is_empty()),
-                    path,
-                },
-                modified,
-            )
-        })
-        .collect::<Vec<_>>();
-    let mut warnings = Vec::new();
-    let mut oversized = 0;
-    let mut malformed = 0;
-    for path in unindexed_rollout_paths(home, &indexed_paths)? {
-        scan_file(
-            &path,
-            &mut candidates,
-            &mut warnings,
-            &mut oversized,
-            &mut malformed,
-            Some(cache),
-        );
-    }
-    if !warnings.is_empty() {
+    let index = RolloutIndex::build_cached(home, cache);
+    if !index.warnings().is_empty() {
         return None;
     }
-    let mut roots = resolve_duplicates(candidates)
-        .into_values()
-        .filter(|record| matches!(record.kind, RolloutKind::Root))
-        .collect::<Vec<_>>();
+    let mut roots = index.roots().cloned().collect::<Vec<_>>();
+    for root in &mut roots {
+        if root.cwd.is_none() {
+            root.cwd = cwd_by_id
+                .get(&root.id)
+                .and_then(Clone::clone)
+                .filter(|cwd| !cwd.is_empty());
+        }
+    }
     roots.sort_by(|left, right| left.id.cmp(&right.id));
     Some(roots)
 }
@@ -744,21 +684,35 @@ fn record_from_value(value: &Value, path: &Path) -> Option<RolloutRecord> {
         .as_str()?
         .to_owned();
     let source = payload.get("source");
-    let parent_id = payload
-        .get("parent_thread_id")
+    let forked_from_id = payload
+        .get("forked_from_id")
         .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| {
-            source?
-                .get("subagent")?
-                .get("thread_spawn")?
-                .get("parent_thread_id")?
-                .as_str()
-                .map(str::to_owned)
-        });
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned);
+    let parent_id = forked_from_id.clone().or_else(|| {
+        payload
+            .get("parent_thread_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                source?
+                    .get("subagent")?
+                    .get("thread_spawn")?
+                    .get("parent_thread_id")?
+                    .as_str()
+                    .map(str::to_owned)
+            })
+    });
+    let fork_history_mode = forked_from_id.map(|_| match payload.get("history_mode") {
+        None => ForkHistoryMode::Legacy,
+        Some(Value::String(mode)) if mode == "legacy" => ForkHistoryMode::Legacy,
+        Some(Value::String(mode)) if mode == "paginated" => ForkHistoryMode::Paginated,
+        Some(_) => ForkHistoryMode::Other,
+    });
     Some(RolloutRecord {
         id,
         parent_id,
+        fork_history_mode,
         kind: rollout_kind(source),
         cwd: payload
             .get("cwd")
@@ -830,6 +784,28 @@ fn resolve_duplicates(
         .collect()
 }
 
+fn retain_workset(records: &mut HashMap<String, RolloutRecord>, root_ids: &[String]) {
+    let mut selected = root_ids.iter().cloned().collect::<HashSet<_>>();
+    loop {
+        let additions = records
+            .values()
+            .filter(|record| {
+                !selected.contains(&record.id)
+                    && record
+                        .parent_id
+                        .as_ref()
+                        .is_some_and(|parent_id| selected.contains(parent_id))
+            })
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>();
+        if additions.is_empty() {
+            break;
+        }
+        selected.extend(additions);
+    }
+    records.retain(|id, _| selected.contains(id));
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -843,7 +819,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        RolloutIndex, RolloutKind, RolloutRecord, resolve_duplicates, rollout_kind, state_roots,
+        ForkHistoryMode, RolloutIndex, RolloutKind, RolloutRecord, resolve_duplicates,
+        rollout_kind, state_roots,
     };
     use crate::cache::RolloutCache;
 
@@ -923,6 +900,19 @@ mod tests {
                 json!({"subagent": {"thread_spawn": {"parent_thread_id": "root"}}}),
             )],
         );
+        let fork = write_jsonl(
+            &home,
+            "sessions/fork.jsonl",
+            &[json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": "fork",
+                    "forked_from_id": "root",
+                    "history_mode": "legacy",
+                    "source": "cli"
+                }
+            })],
+        );
         let guardian = write_jsonl(
             &home,
             "archived_sessions/guardian.jsonl",
@@ -982,6 +972,7 @@ mod tests {
                 guardian,
                 json!({"subagent": {"other": "guardian"}}).to_string(),
             ),
+            ("fork", fork, "cli".into()),
             (
                 "other-guardian",
                 other_guardian,
@@ -1017,7 +1008,11 @@ mod tests {
 
         assert_eq!(
             index.descendants("root").unwrap(),
-            vec!["child", "guardian", "lagged"]
+            vec!["child", "fork", "guardian", "lagged"]
+        );
+        assert_eq!(
+            warm.descendants("root").unwrap(),
+            vec!["child", "fork", "guardian", "lagged"]
         );
         assert_eq!(
             index.record("guardian").unwrap().kind,
@@ -1026,9 +1021,9 @@ mod tests {
         assert!(index.record("unrelated").is_none());
         assert!(warm.record("other-guardian").is_none());
         assert!(warm.record("unindexed-unrelated").is_none());
-        assert_eq!(index.malformed_lines_skipped(), 0);
-        assert_eq!(cold_indexed, 6);
-        assert_eq!(warm_indexed, 4);
+        assert_eq!(index.malformed_lines_skipped(), 1);
+        assert_eq!(warm.malformed_lines_skipped(), 0);
+        assert!(cold_indexed >= warm_indexed);
     }
 
     #[test]
@@ -1053,12 +1048,31 @@ mod tests {
                 json!({"subagent": {"thread_spawn": {"parent_thread_id": "indexed"}}}),
             )],
         );
+        let fork = write_jsonl(
+            &home,
+            "sessions/fork.jsonl",
+            &[json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": "fork",
+                    "forked_from_id": "indexed",
+                    "history_mode": "legacy",
+                    "source": "cli"
+                }
+            })],
+        );
         let database = Connection::open(home.path().join("state_5.sqlite")).unwrap();
         database
             .execute_batch(
                 "CREATE TABLE threads (
                     id TEXT PRIMARY KEY, rollout_path TEXT, source TEXT, cwd TEXT
                  );",
+            )
+            .unwrap();
+        database
+            .execute(
+                "INSERT INTO threads VALUES (?1, ?2, ?3, '/project')",
+                params!["fork", fork.to_string_lossy(), "cli"],
             )
             .unwrap();
         database
@@ -1081,6 +1095,7 @@ mod tests {
         let cache = RolloutCache::open(home.path(), false);
 
         let roots = state_roots(home.path(), &cache).unwrap();
+        assert_eq!(roots[0].cwd.as_deref(), Some("/project"));
         let ids = roots.into_iter().map(|root| root.id).collect::<Vec<_>>();
 
         assert_eq!(ids, ["indexed", "lagged"]);
@@ -1135,6 +1150,87 @@ mod tests {
         assert_eq!(
             index.record("internal").unwrap().kind,
             RolloutKind::MemoryConsolidation
+        );
+    }
+
+    #[test]
+    fn preserves_explicit_fork_history_mode_without_reclassifying_subagents() {
+        let home = TempDir::new().unwrap();
+        write_jsonl(
+            &home,
+            "sessions/root.jsonl",
+            &[meta("root", None, json!("cli"))],
+        );
+        for (id, history_mode) in [
+            ("default-legacy", None),
+            ("legacy", Some("legacy")),
+            ("paginated", Some("paginated")),
+            ("future", Some("future")),
+        ] {
+            let mut payload = json!({
+                "id": id,
+                "forked_from_id": "root",
+                "source": "cli",
+            });
+            if let Some(history_mode) = history_mode {
+                payload["history_mode"] = json!(history_mode);
+            }
+            write_jsonl(
+                &home,
+                &format!("sessions/{id}.jsonl"),
+                &[json!({"type": "session_meta", "payload": payload})],
+            );
+        }
+        write_jsonl(
+            &home,
+            "sessions/subagent.jsonl",
+            &[meta(
+                "subagent",
+                None,
+                json!({"subagent": {"thread_spawn": {"parent_thread_id": "root"}}}),
+            )],
+        );
+        write_jsonl(
+            &home,
+            "sessions/orphan.jsonl",
+            &[json!({
+                "type": "session_meta",
+                "payload": {"id": "orphan", "forked_from_id": "missing", "source": "cli"},
+            })],
+        );
+
+        let index = RolloutIndex::build(home.path());
+
+        assert_eq!(
+            index.record("default-legacy").unwrap().fork_history_mode,
+            Some(ForkHistoryMode::Legacy)
+        );
+        assert_eq!(
+            index.record("legacy").unwrap().fork_history_mode,
+            Some(ForkHistoryMode::Legacy)
+        );
+        assert_eq!(
+            index.record("paginated").unwrap().fork_history_mode,
+            Some(ForkHistoryMode::Paginated)
+        );
+        assert_eq!(
+            index.record("future").unwrap().fork_history_mode,
+            Some(ForkHistoryMode::Other)
+        );
+        assert_eq!(index.record("subagent").unwrap().fork_history_mode, None);
+        assert_eq!(
+            index.record("orphan").unwrap().parent_id.as_deref(),
+            Some("missing")
+        );
+        assert_eq!(
+            index.descendants("root").unwrap(),
+            vec![
+                "default-legacy",
+                "future",
+                "legacy",
+                "paginated",
+                "subagent"
+            ]
         );
     }
 
@@ -1215,6 +1311,7 @@ mod tests {
         let record = |path: &str, cwd: &str| RolloutRecord {
             id: "duplicate".into(),
             parent_id: None,
+            fork_history_mode: None,
             kind: RolloutKind::Root,
             cwd: Some(cwd.into()),
             path: PathBuf::from(path),

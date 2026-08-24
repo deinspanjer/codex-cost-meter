@@ -16,7 +16,8 @@ Read [`../research/ccusage-codex-primary-source-findings.md`](../research/ccusag
 - ccusage separately assumes that some child files begin with historical `token_count` records copied from the parent without a new request. It compares the child's leading normalized usage tuples with the parent's pre-fork sequence and suppresses matches.
 - ccusage also has a one-second burst heuristic and a cross-session event-signature dedupe. Both can discard legitimate parallel requests.
 - `codex-cost-meter` selects one file per rollout ID and normalizes cumulative counters within each file. It does not compare usage across parent and child rollout IDs.
-- Therefore CCM overcounts only if a child physically repeats attributable parent usage records representing no new request. The existing corpus comparison found a material aggregate difference but did not prove that replay caused it or quantify exact-prefix versus heuristic removals.
+- Codex source and a 2026-08-24 read-only corpus audit confirm that legacy explicit forks physically replay parent usage records without new API requests. Of 467 explicit forks, 381 had deterministic copied prefixes; the current parser attributes about 8.75 billion known duplicate tokens and marks another 842 million replayed tokens unattributed/incomplete.
+- The child's first genuine request separately submits inherited model-visible history and remains billable according to its server-reported cached and uncached input. The audited post-prefix requests total about 31.7 million tokens and must remain counted.
 
 ### Pricing
 
@@ -35,8 +36,8 @@ Read [`../research/ccusage-codex-primary-source-findings.md`](../research/ccusag
 ## Decisions
 
 1. Keep `+` exclusively for its current meaning: the displayed value is a known lower bound because input or pricing is incomplete.
-2. Use a `~` prefix only when an included rollout has detected replay ambiguity that cannot be resolved safely. Human combinations are `~$12.34`, `$12.34+`, and `~$12.34+`. Emit a sanitized footnote stating the cause and expected direction.
-3. Retain ambiguous usage. Suppress usage only after evidence establishes a structural replay invariant. Never delete solely because events are close in time or share a cross-session signature.
+2. Exclude only the deterministic explicit-legacy-fork prefix: require `forked_from_id`, copied legacy history, an available parent, and exact leading token-component equality; stop at the first mismatch.
+3. Retain every unmatched, paginated, subagent-only, missing-parent, timing-only, and cross-session-signature candidate. Do not add a replay approximation marker for records that are neither removed nor proven ambiguous.
 4. Encode explicit long-context and Fast rates in the effective-dated catalog. Do not hardcode global multipliers: thresholds, rates, and effective dates can change independently by model.
 5. Price from the actually served tier when present. If rollouts expose only the requested/applied setting, use it as the best available estimate and mark that limitation in pricing provenance.
 6. Rename the read-only report option to `--codex-homes HOME[,HOME...]`. Keep `CODEX_HOME` and mutation commands single-path; do not add a compatibility shim for the pre-1.0 report flag.
@@ -71,25 +72,16 @@ Completion: the boundary tests prove whole-request repricing without changing or
 
 Completion: mixed-tier requests are priced independently, unknown tiers cannot produce a falsely complete estimate, and JSON identifies the pricing basis.
 
-### 4. Establish the replay invariant before changing totals
+### 4. Suppress deterministic legacy-fork replay
 
-- Build a temporary read-only audit under ignored `.superpowers/` paths. Do not add a production heuristic or permanent dependency for this investigation.
-- For every resolvable parent/child pair, compare normalized child-leading usage with the parent's usage through the child fork timestamp. Separately count:
-  - complete parent-sequence matches;
-  - partial leading matches;
-  - timing-only burst candidates;
-  - unresolved children with missing parents; and
-  - matched input, cached-input, output, and reasoning tokens.
-- Inspect sanitized examples around session metadata, turn boundaries, model/tier settings, and the first post-prefix request. Determine whether matched records are serialization replay or new requests with coincidentally equal usage.
-- Append aggregate findings and the chosen invariant to the comparative study; include no rollout IDs, prompts, paths, or other private content.
+- Preserve explicit-fork and history-mode provenance during discovery; missing history mode uses Codex's legacy default.
+- For a legacy `forked_from_id` child that embeds the available parent history, compare its leading usage tuples with parent usage through the fork timestamp. Include input, cached input, cache-write input, output, reasoning output, and total; ignore rewritten timestamps.
+- Advance the copied cumulative baseline without attributing matched records. Stop at the first mismatch and retain that record and everything after it, including the first genuine child request.
+- Keep unmatched and unsupported shapes unchanged. Do not use the one-second burst heuristic, cross-session signatures, or speculative suffix matching.
+- Bypass parent-independent analysis cache entries only for children with a nonzero matched prefix.
+- Add one report-level regression fixture covering a partial snapshot race and proving that cached, uncached, cache-write, output, and reasoning usage from the first child request remains.
 
-Decision gate:
-
-- If a deterministic structural invariant distinguishes copied usage records, implement only that invariant and add one parent/child regression fixture proving the copied records are removed while the first new child request, including cached input, remains.
-- If evidence is mixed or only heuristic, keep all usage and add replay-candidate propagation to the relevant `StatsReport` as approximation metadata. Human output uses `~`; JSON exposes an independent approximation boolean and sanitized reason. Preserve the independent `+` lower-bound state.
-- A proposal to suppress partial, timing-only, or session-agnostic matches is a data-integrity change and requires owner review.
-
-Completion: the study contains a measured conclusion, every removed event is covered by the proven invariant, and unresolved cases remain counted and visibly qualified.
+Completion: exact task and project reports remove only structurally proven copied records, retain the first new child request, and a fresh read-only corpus comparison matches the documented aggregate direction without retaining private evidence.
 
 ### 5. Add multi-home reporting
 

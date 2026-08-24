@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.1.0]
+
+- Exclude proven legacy-fork rollout replay from usage totals while preserving the first genuine child request.
+
 ## [1.0.0]
 
 - Add inclusive local-calendar corpus and project reports with explicit date bounds, composable grouping, sparse or explicit empty buckets, and metadata-backed candidate pruning.

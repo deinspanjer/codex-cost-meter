@@ -13,13 +13,13 @@ use time::Duration;
 use crate::{
     pricing::Usage,
     rollout::{
-        analysis::{AnalysisError, RolloutStats, TurnEvent, UsageEvent, analyze},
-        discovery::{RolloutKind, RolloutRecord},
+        analysis::{AnalysisError, RolloutStats, TurnEvent, UsageEvent, analyze, analyze_skipping},
+        discovery::{ForkHistoryMode, RolloutKind, RolloutRecord},
     },
 };
 
 const CACHE_FILENAME: &str = "codex-cost-meter.sqlite";
-const DISCOVERY_VERSION: i64 = 1;
+const DISCOVERY_VERSION: i64 = 2;
 const ANALYSIS_VERSION: i64 = 5;
 
 pub(crate) struct RolloutCache {
@@ -41,6 +41,7 @@ struct CacheConnection {
 struct CachedDiscovery {
     id: String,
     parent_id: Option<String>,
+    fork_history_mode: Option<ForkHistoryMode>,
     kind: RolloutKind,
     cwd: Option<String>,
     malformed_lines_skipped: usize,
@@ -130,6 +131,7 @@ impl RolloutCache {
             record: RolloutRecord {
                 id: cached.id,
                 parent_id: cached.parent_id,
+                fork_history_mode: cached.fork_history_mode,
                 kind: cached.kind,
                 cwd: cached.cwd,
                 path: path.to_path_buf(),
@@ -151,6 +153,7 @@ impl RolloutCache {
         let cached = CachedDiscovery {
             id: record.id.clone(),
             parent_id: record.parent_id.clone(),
+            fork_history_mode: record.fork_history_mode.clone(),
             kind: record.kind.clone(),
             cwd: record.cwd.clone(),
             malformed_lines_skipped,
@@ -235,13 +238,12 @@ impl RolloutCache {
         loop {
             let mut added = false;
             cached.retain(|path, discovery| {
-                let include = if matches!(discovery.kind, RolloutKind::Root) {
-                    selected_ids.contains(&discovery.id)
-                } else {
-                    discovery
-                        .parent_id
-                        .as_ref()
-                        .is_none_or(|parent_id| selected_ids.contains(parent_id))
+                let include = match &discovery.parent_id {
+                    Some(parent_id) => selected_ids.contains(parent_id),
+                    None if matches!(discovery.kind, RolloutKind::Root) => {
+                        selected_ids.contains(&discovery.id)
+                    }
+                    None => true,
                 };
                 if include {
                     selected_ids.insert(discovery.id.clone());
@@ -276,6 +278,18 @@ impl RolloutCache {
             self.store_analysis(&record.path, revision, &stats);
         }
         Ok(stats)
+    }
+
+    pub(crate) fn analyze_with_replay(
+        &self,
+        record: &RolloutRecord,
+        replay_prefix_len: usize,
+    ) -> Result<RolloutStats, AnalysisError> {
+        if replay_prefix_len == 0 {
+            self.analyze(record)
+        } else {
+            analyze_skipping(record, replay_prefix_len)
+        }
     }
 
     pub(crate) fn take_notices(&self) -> Vec<String> {
@@ -632,12 +646,13 @@ mod tests {
     use tempfile::TempDir;
 
     use super::RolloutCache;
-    use crate::rollout::discovery::{RolloutKind, RolloutRecord};
+    use crate::rollout::discovery::{ForkHistoryMode, RolloutKind, RolloutRecord};
 
     fn record(path: std::path::PathBuf, id: &str) -> RolloutRecord {
         RolloutRecord {
             id: id.into(),
             parent_id: None,
+            fork_history_mode: None,
             kind: RolloutKind::Root,
             cwd: None,
             path,
@@ -677,12 +692,17 @@ mod tests {
         let record = RolloutRecord {
             id: "root".into(),
             parent_id: None,
+            fork_history_mode: Some(ForkHistoryMode::Legacy),
             kind: RolloutKind::Root,
             cwd: None,
             path: path.clone(),
         };
         let cache = RolloutCache::open(home.path(), false);
         cache.store_discovery(&record, 0, 0);
+        assert_eq!(
+            cache.discovery(&path).unwrap().record.fork_history_mode,
+            Some(ForkHistoryMode::Legacy)
+        );
         let first = cache.analyze(&record).unwrap();
         let revision = super::file_revision(&path).unwrap();
         let mut sentinel = cache.cached_analysis(&path, revision).unwrap();
@@ -690,11 +710,15 @@ mod tests {
         cache.store_analysis(&path, revision, &sentinel);
 
         let hit = cache.analyze(&record).unwrap();
+        let replay_adjusted = cache.analyze_with_replay(&record, 1).unwrap();
+        let hit_after_replay = cache.analyze(&record).unwrap();
         let refreshed = RolloutCache::open(home.path(), true)
             .analyze(&record)
             .unwrap();
 
         assert_eq!(hit.known_usage.input, 999);
+        assert_eq!(replay_adjusted.known_usage.input, 0);
+        assert_eq!(hit_after_replay.known_usage.input, 999);
         assert_eq!(refreshed.known_usage, first.known_usage);
         assert_eq!(refreshed.events.len(), first.events.len());
         assert_eq!(refreshed.turn_events, first.turn_events);
@@ -790,6 +814,7 @@ mod tests {
         let record = RolloutRecord {
             id: "root".into(),
             parent_id: None,
+            fork_history_mode: None,
             kind: RolloutKind::Root,
             cwd: None,
             path,
