@@ -190,3 +190,77 @@ jobs:
             "$(basename "$linux_aarch64_archive")" "$(basename "$linux_aarch64_checksum")" | sort)"
           gh release edit "$tag" --draft=false
           draft_created=false
+
+  homebrew-pr:
+    name: Open Homebrew formula PR
+    needs: [version, publish]
+    if: needs.version.outputs.changed == 'true' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.HOMEBREW_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HOMEBREW_PR_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Update formula and open PR
+        shell: bash
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          version=$(python3 scripts/version.py current)
+          tag="v$version"
+          branch="automation/homebrew-$tag"
+          source_archive=$(mktemp)
+          trap 'rm -f "$source_archive"' EXIT
+          curl --fail --location --silent --show-error --retry 3 \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/archive/refs/tags/$tag.tar.gz" \
+            --output "$source_archive"
+          checksum=$(sha256sum "$source_archive" | cut -d ' ' -f 1)
+          python3 scripts/version.py update-formula --sha256 "$checksum"
+          if git diff --quiet -- Formula/codex-cost-meter.rb; then
+            echo "Homebrew formula already pins $tag."
+            exit 0
+          fi
+          pr_title="chore: update Homebrew formula to $tag"
+          pr_body=$(printf 'The %s release is public, so the source-building Homebrew formula needs its post-release pin update.\n\n- Point the formula at the %s tagged source archive\n- Record the published archive SHA-256\n\nValidation:\n- Source archive SHA-256: `%s`' "$tag" "$tag" "$checksum")
+          existing_pr=$(gh pr list --head "$branch" --state all --json url --jq '.[0].url // empty')
+          if [[ -n "$existing_pr" ]]; then
+            echo "Homebrew formula PR already exists: $existing_pr"
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            git fetch --no-tags origin "$branch"
+            changed_paths=$(git diff --name-only HEAD FETCH_HEAD)
+            if [[ "$changed_paths" != "Formula/codex-cost-meter.rb" ]] ||
+               ! git show FETCH_HEAD:Formula/codex-cost-meter.rb | cmp --silent - Formula/codex-cost-meter.rb; then
+              echo "Existing $branch does not contain only the expected formula update." >&2
+              exit 1
+            fi
+            gh pr create --base main --head "$branch" \
+              --title "$pr_title" \
+              --body "$pr_body"
+            exit 0
+          fi
+          app_user_id=$(gh api "/users/$APP_SLUG[bot]" --jq .id)
+          git config user.name "$APP_SLUG[bot]"
+          git config user.email "$app_user_id+$APP_SLUG[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add Formula/codex-cost-meter.rb
+          git commit -m "chore: update Homebrew formula to $tag
+
+          - Pin the formula to the $tag source archive
+          - Record the published archive SHA-256"
+          git push --set-upstream origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "$pr_title" \
+            --body "$pr_body"

@@ -74,7 +74,7 @@ Make these exact release changes:
 2. Keep the existing deterministic four-archive/eight-asset packaging and SHA-256 files.
 3. Before publishing the draft release, attest all eight files under `target/release/` with `actions/attest-build-provenance` pinned to commit `977bb373ede98d70efdf65b84cb5f73e068dcc2a` (the resolved `v3` action commit at the decision date).
 4. Grant only `attestations: write`, `id-token: write`, and the existing `contents: write` to the publish job. Keep repository-level permissions read-only.
-5. Keep source formula updates as an explicit post-release change: update its tag and source SHA-256, run the formula checks, and merge normally. Do not give the release workflow a repository-writing token.
+5. After publication succeeds, use a private GitHub App installed only on this repository to update the formula tag and source SHA-256 on an automation-owned branch and open a pull request. Give the installation token only `Contents: read and write` and `Pull requests: read and write`; do not write directly to `main`, approve, or auto-merge the pull request. Keep the App Client ID in a repository variable and its private key in a repository secret, with the recoverable private-key copy stored as a 1Password API Credential.
 
 Users can verify a downloaded asset with its SHA-256 file and, independently, with `gh attestation verify <ASSET> --repo deinspanjer/codex-cost-meter`. Neither check supplies OS publisher identity.
 
