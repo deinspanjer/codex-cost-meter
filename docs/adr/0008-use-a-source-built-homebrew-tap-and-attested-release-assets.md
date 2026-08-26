@@ -1,8 +1,10 @@
 # 0008: Use a source-built Homebrew tap and attested release assets
 
-Status: Accepted
+Status: Accepted; macOS signing decision amended 2026-08-25
 
 Date: 2026-08-21
+
+Amendment: The owner approved Apple Developer Program membership and production signing on 2026-08-25. The release workflow now Developer ID-signs and notarizes the Universal 2 executable before packaging; the Homebrew source-build decision and the remaining platform decisions are unchanged.
 
 ## Context
 
