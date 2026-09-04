@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
+- Keep macOS Homebrew LaunchAgents on the stable `opt` executable path across upgrades.
+
 ## [1.2.1]
 
-- Keep macOS Homebrew LaunchAgents on the stable `opt` executable path across upgrades.
+- Developer ID-sign and notarize macOS release binaries before packaging and publication.
 
 ## [1.2.0]
 

@@ -3,6 +3,7 @@
 - Research and resolve [ccusage issue #950](https://github.com/ccusage/ccusage/issues/950): distinguish duplicated historical `token_count` records from billable inherited context before changing totals, retain ambiguous usage, and avoid heuristic deletion.
 - Decide from deployment evidence whether Windows arm64 is warranted.
 - Clean Apple Silicon Homebrew install and first run are verified. Still verify the formula on clean Intel macOS, plus schedule repair after upgrade and package-manager uninstall on both architectures.
+- Verify the first Developer ID-signed and notarized direct archive on clean Apple Silicon and Intel Macs, including a quarantined browser download and first execution while online.
 - Verify tagged `cargo install --locked` on clean Windows x64 machines with SmartScreen and, where practical, Smart App Control enabled; record policy and first-run outcomes without promising warning-free execution.
 - After that Windows verification, publish a portable WinGet manifest for the checksummed x64 ZIP and a Scoop manifest in an appropriate bucket; verify install, upgrade, schedule repair, and uninstall for each.
 - Verify the source-building Homebrew formula on Linuxbrew x86_64 and aarch64 before documenting it as a supported Linux package-manager path.
@@ -19,4 +20,4 @@
 - Research whether the desktop app offers a practical extension point for a per-thread context-menu update action.
 - Research hooks that could update a thread's cost at turn completion, turn start, or idle time.
 - Add a `doctor` command once multiple concrete diagnostics justify it; include rollout-cache integrity, writability, and explicit repair.
-- Reconsider Apple Developer ID, SignPath Foundation, Azure Artifact Signing, or Microsoft Store MSIX only if measured direct-download friction justifies the account, cost, and packaging work.
+- Reconsider SignPath Foundation, Azure Artifact Signing, or Microsoft Store MSIX only if measured Windows direct-download friction justifies the account, cost, and packaging work.
