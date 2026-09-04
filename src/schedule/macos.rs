@@ -189,12 +189,35 @@ fn install_with_runner(
     options: &InstallOptions,
     runner: &mut impl CommandRunner,
 ) -> Result<(), LifecycleError> {
-    let canonical_executable = fs::canonicalize(&options.executable)
-        .map_err(|source| LifecycleError::CurrentExecutable { source })?;
-    write_plist(&paths.plist, &property_list(options, &canonical_executable))?;
+    let executable = scheduled_executable(&options.executable)?;
+    write_plist(&paths.plist, &property_list(options, &executable))?;
     let uid = current_uid(runner)?;
     bootout(runner, &uid)?;
     bootstrap(runner, &uid, &paths.plist)
+}
+
+fn scheduled_executable(executable: &Path) -> Result<PathBuf, LifecycleError> {
+    let executable = fs::canonicalize(executable)
+        .map_err(|source| LifecycleError::CurrentExecutable { source })?;
+    Ok(homebrew_opt_executable(&executable).unwrap_or(executable))
+}
+
+fn homebrew_opt_executable(executable: &Path) -> Option<PathBuf> {
+    let bin = executable.parent()?;
+    let version = bin.parent()?;
+    let formula = version.parent()?;
+    let cellar = formula.parent()?;
+    if bin.file_name()? != "bin"
+        || formula.file_name()? != "codex-cost-meter"
+        || cellar.file_name()? != "Cellar"
+        || executable.file_name()? != "codex-cost-meter"
+    {
+        return None;
+    }
+    let opt = cellar
+        .parent()?
+        .join("opt/codex-cost-meter/bin/codex-cost-meter");
+    (fs::canonicalize(&opt).ok()? == executable).then_some(opt)
 }
 
 fn inspect_with_runner(
@@ -585,6 +608,33 @@ mod tests {
                     ],
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn install_uses_the_homebrew_opt_executable_when_available() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+        let cellar_executable = directory
+            .path()
+            .join("homebrew/Cellar/codex-cost-meter/1.2.0/bin/codex-cost-meter");
+        let opt_executable = directory
+            .path()
+            .join("homebrew/opt/codex-cost-meter/bin/codex-cost-meter");
+        fs::create_dir_all(cellar_executable.parent().unwrap()).unwrap();
+        fs::create_dir_all(opt_executable.parent().unwrap()).unwrap();
+        fs::write(&cellar_executable, "binary").unwrap();
+        std::os::unix::fs::symlink(&cellar_executable, &opt_executable).unwrap();
+        let mut options = options(&directory);
+        options.executable = cellar_executable;
+        let mut runner = successful_runner();
+
+        install_with_runner(&paths, &options, &mut runner).unwrap();
+
+        assert!(
+            fs::read_to_string(paths.plist())
+                .unwrap()
+                .contains(opt_executable.to_str().unwrap())
         );
     }
 
