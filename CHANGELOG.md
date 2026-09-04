@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.2.1]
+
+- Keep macOS Homebrew LaunchAgents on the stable `opt` executable path across upgrades.
+
 ## [1.2.0]
 
 - Price `codex-auto-review` through its dated GPT-5.4 and GPT-5.6 Luna proxy history and expose the qualified mapping in human and structured reports.

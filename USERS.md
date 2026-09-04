@@ -12,7 +12,7 @@ brew install deinspanjer/codex-cost-meter/codex-cost-meter
 codex-cost-meter report <THREAD_ID>
 ```
 
-After `brew upgrade codex-cost-meter`, rerun `codex-cost-meter schedule install` if scheduled updates were installed; the schedule stores the resolved versioned Cellar path. To uninstall, use `codex-cost-meter schedule remove` followed by `brew uninstall codex-cost-meter`. Do not run the utility's self-uninstall on a Homebrew-owned executable.
+On macOS, Homebrew-installed schedules use Homebrew's stable `opt` executable path and survive upgrades. To uninstall, use `codex-cost-meter schedule remove` followed by `brew uninstall codex-cost-meter`. Do not run the utility's self-uninstall on a Homebrew-owned executable.
 
 ### Cargo source install
 

@@ -50,7 +50,7 @@ brew install deinspanjer/codex-cost-meter/codex-cost-meter
 
 The formula pins a release source archive by SHA-256, declares Rust as a build dependency, and uses Homebrew's `std_cargo_args`, which includes `cargo install --locked`. It installs no service and performs no post-install mutation.
 
-The application resolves the installed executable before writing a native schedule. A Homebrew upgrade changes the resolved Cellar path, so users with a schedule must rerun `codex-cost-meter schedule install` after an upgrade. They must use `schedule remove` followed by `brew uninstall`, not the application's self-uninstall, so Homebrew retains ownership of its Cellar files.
+The application uses Homebrew's stable `opt` executable path when writing a native schedule, while direct and Cargo installs retain their canonical executable path. Homebrew upgrades therefore preserve scheduled updates. Users must use `schedule remove` followed by `brew uninstall`, not the application's self-uninstall, so Homebrew retains ownership of its Cellar files.
 
 The same formula is intentionally not restricted to macOS and is a candidate Linuxbrew path. Linux support remains unclaimed until it passes the clean-machine checks below.
 
