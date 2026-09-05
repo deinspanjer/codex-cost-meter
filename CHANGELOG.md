@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.2.3]
+
+- Add GPT-6 Astra pricing for Standard, Fast, cache writes, and long context from September 3; correct Sol's reduced-price start date to August 21.
+
 ## [1.2.2]
 
 - Keep macOS Homebrew LaunchAgents on the stable `opt` executable path across upgrades.

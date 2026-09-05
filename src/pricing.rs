@@ -365,6 +365,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prices_astra_from_release_across_context_and_tiers() {
+        let catalog = Catalog::embedded().unwrap();
+        let release = datetime!(2026-09-03 0:00 UTC);
+        for (input, standard, fast) in [(272_000, 3.405, 6.81), (272_001, 6.43502, 12.87004)] {
+            let usage = Usage {
+                input,
+                cached_input: 10_000,
+                cache_write_input: 10_000,
+                output: 15_000,
+            };
+            for (tier, expected) in [(ServiceTier::Standard, standard), (ServiceTier::Fast, fast)] {
+                let cost = catalog.cost("gpt-6-astra", Some(release), &tier, usage);
+                assert!((cost.complete.unwrap() - expected).abs() < 1e-12);
+                assert_eq!(catalog.cost("gpt-6-astra", None, &tier, usage), cost);
+                assert_eq!(
+                    catalog
+                        .cost(
+                            "gpt-6-astra",
+                            Some(release - time::Duration::seconds(1)),
+                            &tier,
+                            usage
+                        )
+                        .complete,
+                    None
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sol_discount_starts_august_21_and_preserves_prior_prices() {
+        let catalog = Catalog::embedded().unwrap();
+        let effective = datetime!(2026-08-21 0:00 UTC);
+        let usage = Usage {
+            input: 100_000,
+            cached_input: 10_000,
+            cache_write_input: 10_000,
+            output: 10_000,
+        };
+        for model in ["gpt-5.6-sol", "gpt-5.6"] {
+            for (tier, before, after) in [
+                (ServiceTier::Standard, 0.7675, 0.574),
+                (ServiceTier::Fast, 1.535, 1.148),
+            ] {
+                for (at, expected) in [
+                    (effective - time::Duration::seconds(1), before),
+                    (effective, after),
+                ] {
+                    let cost = catalog
+                        .cost(model, Some(at), &tier, usage)
+                        .complete
+                        .unwrap();
+                    assert!((cost - expected).abs() < 1e-12);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn selects_the_rate_effective_at_the_event_time() {
         let catalog = Catalog::embedded().unwrap();
         let before = datetime!(2026-07-29 12:00 UTC);
