@@ -1,147 +1,114 @@
-use std::fmt::Write;
+use std::{fmt::Write, path::Path};
 
 use serde::Serialize;
 
 use crate::{
     report::{ModelReport, ModelTierReport, PricingReport, ProjectReport, Report, StatsReport},
-    title::compact_tokens,
+    title::{compact_tokens, strip_canonical_suffix},
 };
 
 pub(crate) fn human(report: &Report) -> String {
     let rollout = &report.rollout;
-    let primary_model = rollout
+    let kind = safe_text(&rollout.rollout_type);
+    let name = rollout
+        .thread_name
+        .as_deref()
+        .map(strip_canonical_suffix)
+        .filter(|name| !name.trim().is_empty())
+        .map(safe_text);
+    let identifier = short_identifier(&rollout.rollout_id);
+    let heading = if kind == "root" {
+        name.unwrap_or_else(|| "Unnamed task".into())
+    } else {
+        match name {
+            Some(name) => format!("{name} · {}", display_kind(&kind)),
+            None => display_kind(&kind),
+        }
+    };
+    let project = rollout
+        .project
+        .as_deref()
+        .map(project_display)
+        .unwrap_or_else(|| "unknown project".into());
+    let pair_label = if kind == "root" {
+        "Most root turns"
+    } else {
+        "Most turns"
+    };
+    let model = rollout
         .stats
         .majority_turn_model
         .as_deref()
         .map(safe_text)
         .unwrap_or_else(|| "unknown".into());
-    let primary_effort = rollout
+    let effort = rollout
         .stats
         .majority_reasoning_level
         .as_deref()
         .map(safe_text)
         .unwrap_or_else(|| "unknown".into());
     let mut rendered = format!(
-        "Codex rollout {}\nProject: {}\nName: {}\nType: {}   Primary: {} / {}   Descendants: {}\n",
-        safe_text(&rollout.rollout_id),
-        rollout
-            .project
-            .as_deref()
-            .map(safe_text)
-            .unwrap_or_else(|| "unknown".into()),
-        rollout
-            .thread_name
-            .as_deref()
-            .map(safe_text)
-            .unwrap_or_else(|| "unnamed".into()),
-        safe_text(&rollout.rollout_type),
-        primary_model,
-        primary_effort,
-        human_number(rollout.total_subagent_spawns as u64),
-    );
-    let show_cache_write = report.tree.input_cache_write_tokens > 0
-        || rollout.stats.input_cache_write_tokens > 0
-        || report
-            .by_model
-            .values()
-            .any(|model| model.input_cache_write_tokens > 0);
-
-    rendered.push_str("\nScope\n");
-    rendered.push_str(&stats_table(
-        show_cache_write,
-        [("Root", &rollout.stats), ("Whole tree", &report.tree)],
-    ));
-
-    append_models(
-        &mut rendered,
-        &report.by_model,
-        &report.tree,
-        show_cache_write,
+        "{heading} · {identifier}\n{project} · {} · {pair_label}: {model}/{effort}\n\n",
+        counted(report.tree.rollout_count, "rollout", "rollouts")
     );
 
-    let _ = writeln!(
-        rendered,
-        "\nAgent-turn time: {} (agent time can overlap).",
-        human_duration(rollout.total_subagent_turn_duration_seconds)
-    );
-    append_pricing(&mut rendered, &report.pricing);
-    if !report.incomplete_input_warnings.is_empty() {
-        rendered.push_str("Incomplete input:\n");
-        for warning in &report.incomplete_input_warnings {
-            let _ = writeln!(rendered, "  - {}", safe_text(warning));
-        }
+    let mut rows = vec![(
+        if kind == "root" { "Root" } else { "Selected" },
+        &rollout.stats,
+    )];
+    if report.tree.rollout_count > 1 {
+        rows.push(("All agents", &report.tree));
     }
-    append_cost_note(&mut rendered, &report.tree);
-    rendered.push_str(
-        "Notes: cache read is included in input; reasoning is included in output; agent time can overlap.\n",
+    rendered.push_str(&stats_table("Scope", rows));
+    append_models(&mut rendered, &report.by_model);
+    if report.tree.rollout_count > 1 {
+        rendered.push_str("\nAll-agent turn time sums overlapping work.\n");
+    } else {
+        rendered.push('\n');
+    }
+    append_footer(
+        &mut rendered,
+        &report.pricing,
+        &report.tree,
+        &report.incomplete_input_warnings,
     );
     rendered
 }
 
 pub(crate) fn project_human(report: &ProjectReport) -> String {
     let selection = &report.selection;
-    let show_cache_write = report.tree.input_cache_write_tokens > 0
-        || report
-            .by_model
-            .values()
-            .any(|model| model.input_cache_write_tokens > 0)
-        || report
-            .groups
-            .iter()
-            .any(|group| group.stats.input_cache_write_tokens > 0);
-    let title = if selection.resolver == "corpus" {
-        "Codex corpus report"
-    } else {
-        "Codex project report"
-    };
-    let mut rendered = if selection.resolver == "corpus" {
+    let corpus = selection.resolver == "corpus";
+    let range = date_range(report);
+    let mut rendered = if corpus {
         format!(
-            "{}\nScope: {}\nRollouts: {}\n",
-            title,
-            safe_text(&selection.target),
-            human_number(report.tree.rollout_count as u64),
+            "All Codex rollouts · {}\n{range}\n",
+            counted(report.tree.rollout_count, "rollout", "rollouts")
         )
     } else {
+        let tasks = report.by_rollout_type.get("root").map_or_else(
+            || fallback_task_count(selection),
+            |stats| stats.rollout_count,
+        );
         format!(
-            "{}\nScope: {}\nResolver: {}\nThreads: {} direct, {} workspace fallback, {} projectless, {} projectless excluded, {} other-project excluded\n",
-            title,
+            "{} · {} · {}\n{range}\n",
             safe_text(&selection.target),
-            safe_text(selection.resolver),
-            human_number(selection.direct_assignments as u64),
-            human_number(selection.workspace_fallbacks as u64),
-            human_number(selection.projectless_threads as u64),
-            human_number(selection.projectless_exclusions as u64),
-            human_number(selection.other_project_exclusions as u64),
+            counted(tasks, "task", "tasks"),
+            counted(report.tree.rollout_count, "rollout", "rollouts")
         )
     };
-    let range = match (&report.date_range.since, &report.date_range.through) {
-        (None, None) => "Lifetime".into(),
-        (since, through) => format!(
-            "Selected range ({} through {})",
-            since.as_deref().unwrap_or("unbounded"),
-            through.as_deref().unwrap_or("unbounded")
-        ),
-    };
-    let scope_label = if selection.resolver == "corpus" {
-        "Corpus"
-    } else {
-        "Project"
-    };
-    let _ = writeln!(rendered, "\n{range}");
-    rendered.push_str(&stats_table(
-        show_cache_write,
-        [(scope_label, &report.tree)],
-    ));
-    append_models(
-        &mut rendered,
-        &report.by_model,
-        &report.tree,
-        show_cache_write,
-    );
+
+    if stats_are_empty(&report.tree) {
+        rendered.push_str("No usage in the selected scope or range.\n");
+        return rendered;
+    }
+
+    rendered.push('\n');
+    rendered.push_str(&stats_table("Scope", [("Total", &report.tree)]));
+    append_models(&mut rendered, &report.by_model);
     if !report.by_rollout_type.is_empty() {
-        rendered.push_str("\nRollout types\n");
+        rendered.push_str("\nBy rollout type\n");
         rendered.push_str(&stats_table(
-            show_cache_write,
+            "Type",
             report
                 .by_rollout_type
                 .iter()
@@ -149,130 +116,22 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
         ));
     }
     if !report.groups.is_empty() {
-        rendered.push_str("\nGroups\n");
-        rendered.push_str(&group_table(report, show_cache_write));
+        rendered.push_str("\nBy group\n");
+        rendered.push_str(&group_table(report));
     }
     rendered.push('\n');
-    append_pricing(&mut rendered, &report.pricing);
-    if selection.resolver != "corpus"
-        && (selection.incomplete_root_reports > 0 || selection.unpriced_root_reports > 0)
-    {
-        let _ = writeln!(
-            rendered,
-            "Incomplete root reports: {}   Unpriced root reports: {}",
-            human_number(selection.incomplete_root_reports as u64),
-            human_number(selection.unpriced_root_reports as u64),
-        );
-        let _ = writeln!(
-            rendered,
-            "An incomplete root report has incomplete input in it or a descendant; turn counts are shown in Lifetime."
-        );
-    }
-    if !report.incomplete_input_warnings.is_empty() {
-        rendered.push_str("Input warnings:\n");
-        for warning in &report.incomplete_input_warnings {
-            let _ = writeln!(rendered, "  - {}", safe_text(warning));
-        }
-    }
-    append_cost_note(&mut rendered, &report.tree);
-    rendered
-        .push_str("Notes: model and aggregate durations are agent-turn time and can overlap.\n");
+    append_selection_notes(&mut rendered, selection, corpus);
+    append_footer(
+        &mut rendered,
+        &report.pricing,
+        &report.tree,
+        &report.incomplete_input_warnings,
+    );
     rendered
 }
 
-const HUMAN_LINE_WIDTH: usize = 116;
-
-fn append_pricing(rendered: &mut String, pricing: &PricingReport) {
-    let _ = writeln!(rendered, "Pricing as of: {}", safe_text(&pricing.as_of));
-    append_wrapped_field(rendered, "Pricing basis: ", &safe_text(pricing.basis));
-    rendered.push_str("Pricing sources:\n");
-    for source in pricing.source.split(',') {
-        append_wrapped_field(rendered, "  - ", &safe_text(source));
-    }
-    append_model_proxies(rendered, pricing);
-}
-
-fn append_wrapped_field(rendered: &mut String, prefix: &str, value: &str) {
-    let content_width = HUMAN_LINE_WIDTH.saturating_sub(prefix.chars().count());
-    let mut lines = Vec::new();
-    let mut line = String::new();
-    for word in value.split_whitespace() {
-        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > content_width {
-            lines.push(std::mem::take(&mut line));
-        }
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        line.push_str(word);
-    }
-    if !line.is_empty() || lines.is_empty() {
-        lines.push(line);
-    }
-    for (index, line) in lines.into_iter().enumerate() {
-        let label = if index == 0 {
-            prefix.to_owned()
-        } else {
-            " ".repeat(prefix.chars().count())
-        };
-        let _ = writeln!(rendered, "{label}{line}");
-    }
-}
-
-fn append_model_proxies(rendered: &mut String, pricing: &PricingReport) {
-    if pricing.model_proxy_histories.is_empty() {
-        return;
-    }
-    rendered.push_str("Model proxies:\n");
-    for (model, points) in &pricing.model_proxy_histories {
-        if let [point] = points.as_slice()
-            && point.effective_from.is_none()
-        {
-            let _ = writeln!(
-                rendered,
-                "  {} -> {}",
-                safe_text(model),
-                safe_text(&point.target)
-            );
-            continue;
-        }
-        for (index, point) in points.iter().enumerate() {
-            match &point.effective_from {
-                Some(date) => {
-                    let _ = writeln!(
-                        rendered,
-                        "  {} from {} -> {}",
-                        safe_text(model),
-                        safe_text(date),
-                        safe_text(&point.target)
-                    );
-                }
-                None => {
-                    let next_date = points
-                        .get(index + 1)
-                        .and_then(|next| next.effective_from.as_deref())
-                        .unwrap_or("earliest dated change");
-                    let _ = writeln!(
-                        rendered,
-                        "  {} before {} -> {}",
-                        safe_text(model),
-                        safe_text(next_date),
-                        safe_text(&point.target)
-                    );
-                }
-            }
-        }
-        if model == "codex-auto-review" {
-            append_wrapped_field(
-                rendered,
-                "  Note: ",
-                "codex-auto-review boundaries are announcement-date estimates, not observed routing or billing cutovers.",
-            );
-        }
-    }
-}
-
-fn group_table(report: &ProjectReport, show_cache_write: bool) -> String {
-    let mut table = vec![stats_headers("Group", show_cache_write)];
+fn group_table(report: &ProjectReport) -> String {
+    let mut table = vec![stats_headers("Group")];
     for group in &report.groups {
         let mut label = group.period.clone();
         if let Some(kind) = &group.rollout_type {
@@ -281,7 +140,7 @@ fn group_table(report: &ProjectReport, show_cache_write: bool) -> String {
         if let Some(model) = &group.model {
             let _ = write!(label, " / {}", safe_text(model));
         }
-        table.push(stats_row(&label, &group.stats, show_cache_write));
+        table.push(stats_row(&label, &group.stats));
     }
     text_table(&table)
 }
@@ -291,13 +150,13 @@ pub(crate) fn json(report: &impl Serialize) -> Result<String, serde_json::Error>
 }
 
 fn stats_table<'a>(
-    show_cache_write: bool,
+    label: &str,
     rows: impl IntoIterator<Item = (&'a str, &'a StatsReport)>,
 ) -> String {
-    let mut table = vec![stats_headers("Scope", show_cache_write)];
+    let mut table = vec![stats_headers(label)];
     table.extend(
         rows.into_iter()
-            .map(|(scope, stats)| stats_row(scope, stats, show_cache_write)),
+            .map(|(scope, stats)| stats_row(scope, stats)),
     );
     text_table(&table)
 }
@@ -305,22 +164,14 @@ fn stats_table<'a>(
 fn append_models(
     rendered: &mut String,
     by_model: &std::collections::BTreeMap<String, ModelReport>,
-    total: &StatsReport,
-    show_cache_write: bool,
 ) {
-    rendered.push_str("\nModels\n");
-    if by_model.is_empty() {
-        rendered.push_str("No model usage.\n");
-    } else {
-        rendered.push_str(&model_table_from_models(by_model, total, show_cache_write));
+    if show_model_section(by_model) {
+        rendered.push_str("\nBy model\n");
+        rendered.push_str(&model_table_from_models(by_model));
     }
 }
 
-fn model_table_from_models(
-    by_model: &std::collections::BTreeMap<String, ModelReport>,
-    total: &StatsReport,
-    show_cache_write: bool,
-) -> String {
+fn model_table_from_models(by_model: &std::collections::BTreeMap<String, ModelReport>) -> String {
     let mut models = by_model.iter().collect::<Vec<_>>();
     models.sort_by(|(left_name, left), (right_name, right)| {
         right
@@ -328,99 +179,85 @@ fn model_table_from_models(
             .total_cmp(&left.known_model_cost_usd)
             .then_with(|| left_name.cmp(right_name))
     });
-    let mut table = vec![stats_headers("Model", show_cache_write)];
+    let mut table = vec![model_headers()];
     for (name, model) in models {
         let modes = human_modes(model);
-        let label = if let [mode] = modes.as_slice() {
+        let label = if let [mode] = modes.as_slice()
+            && mode.label != "Standard"
+        {
             format!("{} [{}]", safe_text(name), mode.label)
         } else {
             safe_text(name)
         };
-        table.push(model_row(&label, model, show_cache_write));
+        table.push(model_row(&label, model));
         if modes.len() > 1 {
             table.extend(
                 modes
                     .iter()
-                    .map(|mode| model_tier_row(&mode.label, &mode.detail, show_cache_write)),
+                    .map(|mode| model_tier_row(&mode.label, &mode.detail)),
             );
         }
     }
-    table.push(stats_row("Total", total, show_cache_write));
     text_table(&table)
 }
 
-fn stats_headers(label: &str, show_cache_write: bool) -> Vec<String> {
-    let mut headers = vec![label, "Turns", "Input", "Cache read"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if show_cache_write {
-        headers.push("Cache write".into());
-    }
-    headers.extend(["Output", "Reasoning", "Duration", "Cost"].map(str::to_owned));
-    headers
+fn stats_headers(label: &str) -> Vec<String> {
+    [
+        label,
+        "Turns",
+        "Input (cached)",
+        "Output (reasoning)",
+        "Turn time",
+        "Est. cost",
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
-fn stats_row(scope: &str, stats: &StatsReport, show_cache_write: bool) -> Vec<String> {
-    let mut row = vec![
+fn stats_row(scope: &str, stats: &StatsReport) -> Vec<String> {
+    vec![
         safe_text(scope),
-        format!(
-            "{} ({} complete, {} incomplete)",
-            human_number(stats.turns as u64),
-            human_number(stats.completed_or_aborted_turns as u64),
-            human_number(stats.incomplete_turns as u64),
-        ),
-        compact_tokens(stats.input_tokens),
-        compact_tokens(stats.input_cache_read_tokens),
-    ];
-    if show_cache_write {
-        row.push(compact_tokens(stats.input_cache_write_tokens));
-    }
-    row.extend([
-        compact_tokens(stats.output_tokens),
-        compact_tokens(stats.reasoning_tokens),
+        human_turns(stats),
+        nested_tokens(stats.input_tokens, stats.input_cache_read_tokens),
+        nested_tokens(stats.output_tokens, stats.reasoning_tokens),
         human_duration(stats.total_turn_duration_seconds),
         human_cost(stats.estimated_cost_usd, stats.known_model_cost_usd),
-    ]);
-    row
+    ]
 }
 
-fn model_row(model: &str, stats: &ModelReport, show_cache_write: bool) -> Vec<String> {
-    let mut row = vec![
+fn model_headers() -> Vec<String> {
+    [
+        "Model",
+        "Turns",
+        "Input",
+        "Output",
+        "Turn time",
+        "Est. cost",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+fn model_row(model: &str, stats: &ModelReport) -> Vec<String> {
+    vec![
         safe_text(model),
         human_number(stats.turns as u64),
         compact_tokens(stats.input_tokens),
-        compact_tokens(stats.input_cache_read_tokens),
-    ];
-    if show_cache_write {
-        row.push(compact_tokens(stats.input_cache_write_tokens));
-    }
-    row.extend([
         compact_tokens(stats.output_tokens),
-        compact_tokens(stats.reasoning_tokens),
         human_duration(stats.total_turn_duration_seconds),
         human_cost(stats.estimated_cost_usd, stats.known_model_cost_usd),
-    ]);
-    row
+    ]
 }
 
-fn model_tier_row(label: &str, stats: &ModelTierReport, show_cache_write: bool) -> Vec<String> {
-    let mut row = vec![
+fn model_tier_row(label: &str, stats: &ModelTierReport) -> Vec<String> {
+    vec![
         format!("↳ {label}"),
         String::new(),
         compact_tokens(stats.input_tokens),
-        compact_tokens(stats.input_cache_read_tokens),
-    ];
-    if show_cache_write {
-        row.push(compact_tokens(stats.input_cache_write_tokens));
-    }
-    row.extend([
         compact_tokens(stats.output_tokens),
-        compact_tokens(stats.reasoning_tokens),
         String::new(),
         human_cost(stats.estimated_cost_usd, stats.known_model_cost_usd),
-    ]);
-    row
+    ]
 }
 
 struct HumanMode {
@@ -433,14 +270,8 @@ fn human_modes(model: &ModelReport) -> Vec<HumanMode> {
     let standard = model.by_service_tier.get("standard");
     let assumed = model.by_service_tier.get("assumed_standard");
     if standard.is_some() || assumed.is_some() {
-        let assumed_usage = assumed.is_some_and(tier_has_usage);
         modes.push(HumanMode {
-            label: if assumed_usage {
-                "Standard*"
-            } else {
-                "Standard"
-            }
-            .into(),
+            label: "Standard".into(),
             detail: merge_tiers([standard, assumed].into_iter().flatten()),
         });
     }
@@ -461,13 +292,13 @@ fn human_modes(model: &ModelReport) -> Vec<HumanMode> {
     modes
 }
 
-fn tier_has_usage(tier: &ModelTierReport) -> bool {
-    tier.input_tokens > 0
-        || tier.input_cache_write_tokens > 0
-        || tier.input_cache_read_tokens > 0
-        || tier.reasoning_tokens > 0
-        || tier.output_tokens > 0
-        || tier.known_model_cost_usd > 0.0
+fn show_model_section(by_model: &std::collections::BTreeMap<String, ModelReport>) -> bool {
+    if by_model.len() != 1 {
+        return !by_model.is_empty();
+    }
+    let model = by_model.values().next().expect("one model");
+    let modes = human_modes(model);
+    modes.len() > 1 || modes.first().is_some_and(|mode| mode.label != "Standard")
 }
 
 fn merge_tiers<'a>(tiers: impl IntoIterator<Item = &'a ModelTierReport>) -> ModelTierReport {
@@ -499,6 +330,140 @@ fn merge_tiers<'a>(tiers: impl IntoIterator<Item = &'a ModelTierReport>) -> Mode
             total
         },
     )
+}
+
+fn human_turns(stats: &StatsReport) -> String {
+    let turns = human_number(stats.turns as u64);
+    if stats.incomplete_turns == 0 {
+        turns
+    } else {
+        format!(
+            "{turns} ({} incomplete)",
+            human_number(stats.incomplete_turns as u64)
+        )
+    }
+}
+
+fn nested_tokens(total: u64, component: u64) -> String {
+    format!("{} ({})", compact_tokens(total), compact_tokens(component))
+}
+
+fn short_identifier(value: &str) -> String {
+    let safe = safe_text(value);
+    safe.chars().take(8).collect()
+}
+
+fn project_display(value: &str) -> String {
+    Path::new(value)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(safe_text)
+        .unwrap_or_else(|| safe_text(value))
+}
+
+fn display_kind(value: &str) -> String {
+    let value = value.replace('_', " ");
+    let mut characters = value.chars();
+    match characters.next() {
+        Some(first) => first.to_uppercase().chain(characters).collect(),
+        None => "Rollout".into(),
+    }
+}
+
+fn counted(value: usize, singular: &str, plural: &str) -> String {
+    format!(
+        "{} {}",
+        human_number(value as u64),
+        if value == 1 { singular } else { plural }
+    )
+}
+
+fn date_range(report: &ProjectReport) -> String {
+    match (&report.date_range.since, &report.date_range.through) {
+        (None, None) => "Lifetime".into(),
+        (since, through) => format!(
+            "{} through {}",
+            since.as_deref().unwrap_or("unbounded"),
+            through.as_deref().unwrap_or("unbounded")
+        ),
+    }
+}
+
+fn fallback_task_count(selection: &crate::report::ProjectSelection) -> usize {
+    selection
+        .direct_assignments
+        .saturating_add(selection.workspace_fallbacks)
+        .saturating_add(selection.projectless_threads)
+}
+
+fn stats_are_empty(stats: &StatsReport) -> bool {
+    stats.turns == 0
+        && stats.input_tokens == 0
+        && stats.input_cache_write_tokens == 0
+        && stats.input_cache_read_tokens == 0
+        && stats.output_tokens == 0
+        && stats.reasoning_tokens == 0
+        && stats.known_model_cost_usd == 0.0
+}
+
+fn append_selection_notes(
+    rendered: &mut String,
+    selection: &crate::report::ProjectSelection,
+    corpus: bool,
+) {
+    if corpus {
+        return;
+    }
+    if selection.incomplete_root_reports > 0 || selection.unpriced_root_reports > 0 {
+        let _ = writeln!(
+            rendered,
+            "Task trees: {} incomplete · {} with partial cost.",
+            human_number(selection.incomplete_root_reports as u64),
+            human_number(selection.unpriced_root_reports as u64)
+        );
+    }
+    if selection.missing_source_roots > 0
+        || selection.projectless_exclusions > 0
+        || selection.other_project_exclusions > 0
+    {
+        let _ = writeln!(
+            rendered,
+            "Excluded: {} missing source · {} projectless · {} other project.",
+            human_number(selection.missing_source_roots as u64),
+            human_number(selection.projectless_exclusions as u64),
+            human_number(selection.other_project_exclusions as u64)
+        );
+    }
+}
+
+fn append_footer(
+    rendered: &mut String,
+    pricing: &PricingReport,
+    stats: &StatsReport,
+    warnings: &[String],
+) {
+    let _ = writeln!(
+        rendered,
+        "Estimated API list cost using pricing dated {}.",
+        safe_text(&pricing.as_of)
+    );
+    if stats.assumed_standard_tokens > 0 {
+        let _ = writeln!(
+            rendered,
+            "Tier missing for {} tokens; Standard pricing assumed.",
+            compact_tokens(stats.assumed_standard_tokens)
+        );
+    }
+    if stats.estimated_cost_usd.is_none() {
+        rendered.push_str("+ is the known priced minimum; the complete estimate is unavailable.\n");
+    }
+    if !warnings.is_empty() {
+        rendered.push_str("Input warnings:\n");
+        for warning in warnings {
+            let _ = writeln!(rendered, "  - {}", safe_text(warning));
+        }
+    }
 }
 
 fn human_number(value: u64) -> String {
@@ -546,24 +511,6 @@ fn human_cost(estimated: Option<f64>, known: f64) -> String {
     match estimated {
         Some(cost) => format!("${cost:.2}"),
         None => format!("${known:.2}+"),
-    }
-}
-
-fn append_cost_note(rendered: &mut String, stats: &StatsReport) {
-    if stats.assumed_standard_tokens > 0 {
-        let _ = writeln!(
-            rendered,
-            "* Standard includes {} tokens without a recorded tier that were priced as Standard.",
-            human_number(stats.assumed_standard_tokens)
-        );
-        rendered.push_str(
-            "Tier history: Fast became generally available in Codex CLI 0.111.0 on 2026-03-05; applied-tier snapshots were not persisted until 0.144.0 on 2026-07-09.\n",
-        );
-    }
-    if stats.estimated_cost_usd.is_none() {
-        rendered.push_str(
-            "Cost note: + means known lower-bound cost; the complete estimate is unavailable.\n",
-        );
     }
 }
 
@@ -750,6 +697,8 @@ mod tests {
                 ],
             ),
         ]);
+        let mut tree = stats(None, 0.17);
+        tree.rollout_count = 2;
         Report {
             rollout: RolloutReport {
                 rollout_id: "root".into(),
@@ -760,7 +709,7 @@ mod tests {
                 total_subagent_turn_duration_seconds: 10.0,
                 stats: stats(Some(0.17), 0.17),
             },
-            tree: stats(None, 0.17),
+            tree,
             by_model,
             by_rollout_type: BTreeMap::new(),
             pricing: PricingReport {
@@ -778,35 +727,25 @@ mod tests {
     fn human_renders_scopes_models_pricing_and_partial_costs() {
         let rendered = human(&report());
 
-        assert!(rendered.contains("Codex rollout root\nProject: /tmp/project\nName: Rollout stats\nType: root   Primary: gpt-5.6-terra / high   Descendants: 1"));
+        assert!(rendered.starts_with(
+            "Rollout stats · root\nproject · 2 rollouts · Most root turns: gpt-5.6-terra/high\n"
+        ));
         assert!(rendered.contains("Root"));
-        assert!(rendered.contains("Whole tree"));
-        assert!(rendered.contains("Cache write"));
+        assert!(rendered.contains("All agents"));
+        assert!(rendered.contains("12K (2K)"));
+        assert!(rendered.contains("3K (1K)"));
         assert!(rendered.contains("$0.17+"));
-        assert!(rendered.contains(
-            "Pricing basis: API list pricing; applied rollout tier (served tier unavailable)"
-        ));
         assert!(rendered.contains("gpt-5.6-terra"));
-        assert!(rendered.contains("↳ Standard*"));
+        assert!(rendered.contains("↳ Standard"));
         assert!(rendered.contains("↳ Fast"));
-        assert!(!rendered.contains('⚡'));
-        assert!(rendered.contains(
-            "* Standard includes 990 tokens without a recorded tier that were priced as Standard."
-        ));
-        let models = rendered.split_once("Models\n").unwrap().1;
+        assert!(rendered.contains("Tier missing for 990 tokens; Standard pricing assumed."));
+        let models = rendered.split_once("By model\n").unwrap().1;
         assert!(models.find("gpt-5.6-terra").unwrap() < models.find("cheap").unwrap());
-        assert!(rendered.contains("Total"));
-        assert!(rendered.contains("gpt-5.6 -> gpt-5.6-terra"));
-        assert!(rendered.contains("codex-auto-review before 2026-07-30 -> gpt-5.4"));
-        assert!(rendered.contains("codex-auto-review from 2026-07-30 -> gpt-5.6-luna"));
-        assert!(
-            rendered
-                .contains("announcement-date estimates, not observed routing or billing cutovers")
-        );
-        assert!(rendered.contains("Pricing as of: 2026-08-13"));
-        assert!(rendered.contains("cache read is included in input"));
-        assert!(rendered.contains("reasoning is included in output"));
-        assert!(rendered.contains("agent time can overlap"));
+        assert!(!models.lines().any(|line| line.starts_with("Total")));
+        assert!(!rendered.contains("Pricing sources:"));
+        assert!(!rendered.contains("Model proxies:"));
+        assert!(rendered.contains("Estimated API list cost using pricing dated 2026-08-13."));
+        assert!(rendered.contains("All-agent turn time sums overlapping work."));
     }
 
     #[test]
@@ -816,7 +755,8 @@ mod tests {
         model.by_service_tier.remove("fast");
 
         let rendered = human(&report);
-        assert!(rendered.contains("gpt-5.6-terra [Standard*]"));
+        assert!(rendered.contains("gpt-5.6-terra"));
+        assert!(!rendered.contains("[Standard"));
         assert!(!rendered.contains("↳ Standard"));
         let structured: Value = serde_json::from_str(&json(&report).unwrap()).unwrap();
         assert!(structured["by_model"]["gpt-5.6-terra"]["by_service_tier"]["standard"].is_object());
@@ -825,25 +765,17 @@ mod tests {
                 .is_object()
         );
 
-        let model = report.by_model.get_mut("gpt-5.6-terra").unwrap();
-        let assumed = model.by_service_tier.remove("assumed_standard").unwrap();
-        assert!(human(&report).contains("gpt-5.6-terra [Standard]"));
+        report.by_model.remove("cheap");
+        assert!(!human(&report).contains("By model"));
 
         let model = report.by_model.get_mut("gpt-5.6-terra").unwrap();
         let fast = model.by_service_tier.remove("standard").unwrap();
         model.by_service_tier.clear();
-        model
-            .by_service_tier
-            .insert("assumed_standard".into(), assumed);
-        assert!(human(&report).contains("gpt-5.6-terra [Standard*]"));
-
-        let model = report.by_model.get_mut("gpt-5.6-terra").unwrap();
-        model.by_service_tier.clear();
         model.by_service_tier.insert("fast".into(), fast);
         let rendered = human(&report);
         assert!(rendered.contains("gpt-5.6-terra [Fast]"));
+        assert!(rendered.contains("By model"));
         assert!(!rendered.contains("↳ Fast"));
-        assert!(!rendered.contains('⚡'));
     }
 
     #[test]
@@ -859,7 +791,7 @@ mod tests {
             .unwrap();
         let standard = rendered
             .lines()
-            .find(|line| line.starts_with("↳ Standard*"))
+            .find(|line| line.starts_with("↳ Standard"))
             .unwrap();
         let fast = rendered
             .lines()
@@ -868,12 +800,7 @@ mod tests {
         let column = |line: &str, value: &str| line[..line.find(value).unwrap()].chars().count();
         assert_eq!(column(model, "12K"), column(standard, "7K"));
         assert_eq!(column(model, "12K"), column(fast, "5K"));
-        assert!(rendered.contains("Pricing sources:\n  - https://developers.openai.com/api/docs/pricing\n  - https://openai.com/api-fast-mode/"));
-        assert!(
-            rendered
-                .lines()
-                .all(|line| !line.starts_with("Pricing basis:") || line.chars().count() <= 116)
-        );
+        assert!(!rendered.contains("Pricing sources:"));
     }
 
     #[test]
@@ -885,18 +812,16 @@ mod tests {
         model.by_service_tier.insert("flex".into(), unavailable);
 
         let rendered = human(&report);
-        assert!(rendered.contains("↳ Standard*"));
+        assert!(rendered.contains("↳ Standard"));
         assert!(rendered.contains("↳ Tier unavailable (flex)"));
     }
 
     #[test]
-    fn empty_models_render_an_explicit_state() {
+    fn redundant_and_empty_model_sections_are_omitted() {
         let mut report = report();
         report.by_model.clear();
         let rendered = human(&report);
-        let models = rendered.split_once("Models\n").unwrap().1;
-        assert!(models.starts_with("No model usage.\n"));
-        assert!(!models.starts_with("Model "));
+        assert!(!rendered.contains("By model"));
 
         let mut project = ProjectReport {
             selection: ProjectSelection {
@@ -924,10 +849,19 @@ mod tests {
             incomplete_input_warnings: Vec::new(),
         };
         let rendered = project_human(&project);
-        let models = rendered.split_once("Models\n").unwrap().1;
-        assert!(models.starts_with("No model usage.\n"));
+        assert!(!rendered.contains("By model"));
+        project.tree.turns = 0;
+        project.tree.input_tokens = 0;
+        project.tree.input_cache_write_tokens = 0;
+        project.tree.input_cache_read_tokens = 0;
+        project.tree.output_tokens = 0;
+        project.tree.reasoning_tokens = 0;
+        project.tree.known_model_cost_usd = 0.0;
         project.selection.resolver = "corpus";
-        assert!(project_human(&project).contains("Models\nNo model usage.\n"));
+        let empty = project_human(&project);
+        assert!(empty.contains("No usage in the selected scope or range."));
+        assert!(!empty.contains("Scope"));
+        assert!(!empty.contains("Estimated API"));
     }
 
     #[test]
@@ -961,7 +895,47 @@ mod tests {
     }
 
     #[test]
-    fn human_omits_cache_write_column_when_unused() {
+    fn human_cleans_task_identity_and_keeps_noncanonical_titles() {
+        let mut report = report();
+        report.rollout.rollout_id = "01a0b189-574f-7a21-8de4-546018584e81".into();
+        report.rollout.project = Some("/tmp/work/platform-operator-console".into());
+        report.rollout.thread_name = Some("Fix scrolling · $332.50 · ⇥361.2M · ↦783.6K".into());
+
+        let rendered = human(&report);
+
+        assert!(rendered.starts_with(
+            "Fix scrolling · 01a0b189\nplatform-operator-console · 2 rollouts · Most root turns:"
+        ));
+        assert!(!rendered.contains("$332.50"));
+
+        report.rollout.thread_name = Some("Keep this · $332.5".into());
+        assert!(human(&report).starts_with("Keep this · $332.5 · 01a0b189"));
+
+        report.rollout.thread_name = None;
+        assert!(human(&report).starts_with("Unnamed task · 01a0b189"));
+    }
+
+    #[test]
+    fn human_labels_direct_non_root_reports() {
+        let mut report = report();
+        report.rollout.rollout_type = "subagent".into();
+        report.rollout.rollout_id = "short-id".into();
+        report.rollout.thread_name = None;
+        report.rollout.total_subagent_spawns = 0;
+        report.tree = stats(Some(0.17), 0.17);
+        report.tree.rollout_count = 1;
+
+        let rendered = human(&report);
+
+        assert!(rendered.starts_with(
+            "Subagent · short-id\nproject · 1 rollout · Most turns: gpt-5.6-terra/high"
+        ));
+        assert!(rendered.contains("Selected"));
+        assert!(!rendered.contains("All agents"));
+    }
+
+    #[test]
+    fn human_uses_nested_token_columns() {
         let mut report = report();
         report.rollout.stats.input_cache_write_tokens = 0;
         report.tree.input_cache_write_tokens = 0;
@@ -969,7 +943,19 @@ mod tests {
             model.input_cache_write_tokens = 0;
         }
 
-        assert!(!human(&report).contains("Cache write"));
+        let rendered = human(&report);
+        assert!(rendered.contains("Input (cached)"));
+        assert!(rendered.contains("Output (reasoning)"));
+        assert!(!rendered.contains("Cache write"));
+    }
+
+    #[test]
+    fn human_turns_only_calls_out_incomplete_work() {
+        let mut stats = stats(Some(0.17), 0.17);
+        assert_eq!(super::human_turns(&stats), "3 (1 incomplete)");
+        stats.completed_or_aborted_turns = 3;
+        stats.incomplete_turns = 0;
+        assert_eq!(super::human_turns(&stats), "3");
     }
 
     #[test]
@@ -980,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn project_human_keeps_nonzero_cache_write_usage_visible() {
+    fn project_human_keeps_material_qualifications_visible() {
         let report = report();
         let mut project = ProjectReport {
             selection: ProjectSelection {
@@ -996,13 +982,17 @@ mod tests {
                 unpriced_root_reports: 0,
             },
             date_range: DateRangeReport {
-                since: None,
-                through: None,
+                since: Some("2026-08-01".into()),
+                through: Some("2026-08-31".into()),
                 group_by: Vec::new(),
             },
             tree: report.tree,
             by_model: report.by_model,
-            by_rollout_type: BTreeMap::new(),
+            by_rollout_type: BTreeMap::from([("root".into(), {
+                let mut roots = stats(Some(0.17), 0.17);
+                roots.rollout_count = 1;
+                roots
+            })]),
             groups: Vec::new(),
             pricing: report.pricing,
             incomplete_input_warnings: vec!["some input was incomplete".into()],
@@ -1015,25 +1005,20 @@ mod tests {
 
         let rendered = project_human(&project);
 
-        assert!(rendered.contains("Cache write"));
+        assert!(
+            rendered.starts_with("Project · 1 task · 2 rollouts\n2026-08-01 through 2026-08-31")
+        );
         assert!(rendered.contains("Input warnings:\n  - some input was incomplete"));
         assert!(rendered.contains("15.1B"));
         assert!(rendered.contains("269 incomplete"));
-        assert!(rendered.contains("Incomplete root reports: 12"));
-        assert!(rendered.contains("+ means known lower-bound cost"));
-        assert!(rendered.contains("gpt-5.6 -> gpt-5.6-terra"));
-        assert!(rendered.contains("codex-auto-review before 2026-07-30 -> gpt-5.4"));
-        assert!(rendered.contains("codex-auto-review from 2026-07-30 -> gpt-5.6-luna"));
-        assert!(
-            rendered
-                .contains("announcement-date estimates, not observed routing or billing cutovers")
-        );
+        assert!(rendered.contains("Task trees: 12 incomplete · 0 with partial cost."));
+        assert!(rendered.contains("+ is the known priced minimum"));
+        assert!(!rendered.contains("Model proxies:"));
 
         project.selection.resolver = "corpus";
         let corpus = project_human(&project);
-        assert!(corpus.contains("gpt-5.6 -> gpt-5.6-terra"));
-        assert!(corpus.contains("codex-auto-review before 2026-07-30 -> gpt-5.4"));
-        assert!(corpus.contains("codex-auto-review from 2026-07-30 -> gpt-5.6-luna"));
+        assert!(corpus.starts_with("All Codex rollouts"));
+        assert!(!corpus.contains("Most root turns"));
     }
 
     #[test]
