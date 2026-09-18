@@ -30,20 +30,20 @@ The same date and grouping options work with project reports. Bounds and buckets
 
 For Homebrew upgrades, Cargo commands, direct downloads, and platform trust guidance, see [install and run](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#install-and-run).
 
-The opening of a human report looks like this; the full report continues with per-model and pricing details:
+Human reports keep the result compact and show extra model or pricing detail only when it changes how to interpret the totals:
 
 ```text
 $ ./codex-cost-meter report f8b0c8e4-3dfd-4f33-99e7-9eb2d02f7c71
-Codex rollout f8b0c8e4-3dfd-4f33-99e7-9eb2d02f7c71
-Project: codex-cost-meter
-Name: Example release session
-Type: root   Primary: gpt-5.6-terra / high   Descendants: 3
+Example release session · f8b0c8e4
+codex-cost-meter · 4 rollouts · Most root turns: gpt-5.6-terra/high
 
-Scope
-Scope       Turns                         Input      Cache read  Output   Reasoning  Duration  Cost
-----------  ----------------------------  ---------  ----------  -------  ---------  --------  -----
-Root        1 (1 complete, 0 incomplete)  125K       100K        18K      12K        3m 1.0s   $0.29
-Whole tree  4 (4 complete, 0 incomplete)  2M         1.7M        145K     100K       12m 4.0s  $3.89
+Scope       Turns  Input (cached)  Output (reasoning)  Turn time  Est. cost
+----------  -----  --------------  ------------------  ---------  ---------
+Root        1      125K (100K)     18K (12K)           3m 1.0s    $0.29
+All agents  4      2M (1.7M)       145K (100K)         12m 4.0s   $3.89
+
+All-agent turn time sums overlapping work.
+Estimated API list cost using pricing dated 2026-09-05.
 ```
 
 You can also [ask Codex to run the downloaded tool](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#ask-codex-to-run-it). The [user guide](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#find-your-session-id) explains how `/status` shows the session ID and `/statusline` keeps it visible.

@@ -200,9 +200,8 @@ fn corpus_and_project_reports_share_date_grouping_and_empty_bucket_rules() {
         .unwrap();
     assert!(human.status.success(), "{}", stderr(&human));
     let human = String::from_utf8(human.stdout).unwrap();
-    assert!(human.contains("Codex corpus report"));
-    assert!(human.contains("Selected range (2026-08-01 through 2026-08-02)"));
-    assert!(human.contains("Groups\n"));
+    assert!(human.starts_with("All Codex rollouts · 2 rollouts\n2026-08-01 through 2026-08-02"));
+    assert!(human.contains("By group\n"));
     assert!(human.contains("2026-08-02"));
 
     let project = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))

@@ -1,10 +1,4 @@
-# Terminal Report Presentation Specification
-
-## Purpose
-
-Provide compact, stable, and self-explanatory terminal reports across task, project, and corpus modes without changing structured report data.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Terminal progress replaces its complete prior line
 Interactive progress SHALL replace the complete previous progress line when its message changes and SHALL clear that line before final human or JSON report output. File counts SHALL use grammatically correct singular and plural labels. Non-interactive forced progress SHALL remain newline-delimited.
@@ -41,7 +35,7 @@ Human tables SHALL align columns according to displayed character width and SHAL
 - **THEN** human output omits the redundant model section
 
 #### Scenario: Report contains mixed service modes
-- **WHEN** a human report renders aggregate and child service-mode rows
+- **WHEN** a human report renders aggregate and child service-mode rows for material tier distinctions
 - **THEN** every numeric column begins at the same displayed column for all rows in that table
 
 #### Scenario: Pricing metadata contains multiple sources
@@ -51,6 +45,8 @@ Human tables SHALL align columns according to displayed character width and SHAL
 #### Scenario: Project has no model data
 - **WHEN** a project, corpus, or date-filtered selection contains no usage
 - **THEN** human output states that no usage exists in the selected scope or range and omits empty scope, model, rollout-type, group, and pricing sections
+
+## ADDED Requirements
 
 ### Requirement: Exact-rollout headers identify the result compactly
 An exact root-rollout human report SHALL show the task name without a recognized cost-meter title-metric suffix, a short rollout identifier, the project display name, the included rollout count, and the model/reasoning pair occurring in the greatest number of root turns. It SHALL label that pair `Most root turns` rather than `Primary`. An exact non-root report SHALL identify its rollout type and use `Most turns`. Full identifiers, full project paths, unmodified stored titles, and exact structured fields SHALL remain available in JSON.

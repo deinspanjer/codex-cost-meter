@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.2.4]
+
+- Streamline human reports with compact identity, nested token components, scoped turn time, conditional model detail, and concise pricing qualifications while preserving full JSON provenance.
+
 ## [1.2.3]
 
 - Add GPT-6 Astra pricing for Standard, Fast, cache writes, and long context from September 3; correct Sol's reduced-price start date to August 21.

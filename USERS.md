@@ -88,7 +88,7 @@ Codex follows your normal approval settings for the local command. Review the re
 
 ## Read the report
 
-Human output shows root and whole-tree totals, per-model usage, price metadata, and summed agent-turn time. A model with one service mode is labeled directly, such as `[Standard]`, `[Standard*]`, or `[Fast]`; only models with mixed modes receive child rows. `Standard*` combines explicit and assumed Standard usage and is explained once below the report, while JSON keeps `standard` and `assumed_standard` separate. Turns and duration stay on the aggregate model row because a tier can change between usage events within one turn; the tool does not guess how to split them. An empty Models section says `No model usage.` instead of showing a Total-only table. Token columns use compact `K`/`M`/`B` notation; JSON retains exact integers. Durations use `d`/`h`/`m`/`s`, omitting zero day, hour, and minute portions; seconds can be fractional. Model and aggregate durations can overlap. A trailing `+` on a human cost means the displayed amount is only the known partial cost. In JSON, the corresponding complete estimate is `null`; inspect `incomplete_input`, `unpriced_models`, `unpriced_service_tiers`, `unattributed_usage_tokens`, and `incomplete_input_warnings` before treating an estimate as complete.
+Human output shows compact Root and All agents totals. Cached input is nested under input, reasoning output is nested under output, and All agents turn time sums recorded root and descendant processing even when it overlaps. Complete turn counts appear alone; only nonzero incomplete counts are called out. A model section appears only when multiple models or exceptional tier evidence make it useful, and it omits a duplicate Total row. Token columns use compact `K`/`M`/`B` notation; JSON retains exact integers. Durations use `d`/`h`/`m`/`s`, omitting zero day, hour, and minute portions; seconds can be fractional. A trailing `+` means the displayed cost is only the known priced minimum. In JSON, the corresponding complete estimate is `null`; inspect `incomplete_input`, `unpriced_models`, `unpriced_service_tiers`, `unattributed_usage_tokens`, and `incomplete_input_warnings` before treating an estimate as complete.
 
 ### Corpus and date reports
 
@@ -108,9 +108,9 @@ For `--all`, available Codex thread metadata narrows discovery before rollout fi
 
 Date filtering attributes tokens and cost to each usage-event timestamp, while turns and their complete duration are attributed to the turn's start date. Data with neither an event nor session timestamp remains in unfiltered lifetime totals but is excluded and visibly marked incomplete in a filtered report. Date and grouping options apply to `--all`, `--project`, and the bare current-project report, not an exact session-ID report. JSON retains the overall `tree` total and adds `date_range`, `by_rollout_type`, and `groups`.
 
-Cost uses the embedded historical catalog and is an API-list-price approximation, not a billing record. Each request uses the service tier most recently applied in the rollout settings; current Codex token records do not reveal the tier actually served, so a Fast request that was downgraded cannot be corrected to Standard pricing. Missing tier metadata is priced at Standard rates. It is definitive Standard only when the usage timestamp and creator version place it before the first public Fast-capable package; otherwise human output marks the combined Standard mode as `Standard*` and JSON contributes it to `assumed_standard_tokens` and `by_service_tier.assumed_standard`. Explicit unsupported tiers remain unpriced.
+Cost uses the embedded historical catalog and is an API-list-price approximation, not a billing record. Each request uses the service tier most recently applied in the rollout settings; current Codex token records do not reveal the tier actually served, so a Fast request that was downgraded cannot be corrected to Standard pricing. Missing tier metadata is priced at Standard rates. Human output reports the total tokens using this assumption once; JSON contributes them to `assumed_standard_tokens` and `by_service_tier.assumed_standard`. Explicit unsupported tiers remain unpriced.
 
-`codex-auto-review` is an internal routing identity, not a public foundation-model ID recorded in local telemetry. OpenAI documented GPT-5.4 Thinking with low reasoning at launch and announced a migration to GPT-5.6 Luna on July 30, 2026. The catalog therefore prices Auto-review through GPT-5.4 before July 30 and GPT-5.6 Luna from July 30 onward. This is an announcement-date estimator boundary, not proof of the routed or billed model for an individual request or an exact account-level cutover. Human output shows the dated mapping; JSON preserves the latest target in `model_proxies` and the full typed history in `model_proxy_histories`. See the [Auto-review pricing evidence](docs/research/codex-auto-review-pricing-evidence.md).
+`codex-auto-review` is an internal routing identity, not a public foundation-model ID recorded in local telemetry. OpenAI documented GPT-5.4 Thinking with low reasoning at launch and announced a migration to GPT-5.6 Luna on July 30, 2026. The catalog therefore prices Auto-review through GPT-5.4 before July 30 and GPT-5.6 Luna from July 30 onward. This is an announcement-date estimator boundary, not proof of the routed or billed model for an individual request or an exact account-level cutover. JSON preserves the latest target in `model_proxies` and the full typed history in `model_proxy_histories`; `report --help` explains the method. See the [Auto-review pricing evidence](docs/research/codex-auto-review-pricing-evidence.md).
 
 The catalog was refreshed September 5, 2026 against [OpenAI pricing](https://developers.openai.com/api/docs/pricing). GPT-6 Astra includes Standard and Fast rates, cache writes, and the surcharge above 272,000 input tokens, starting at its September 3 release. Sol's reduced rates start August 21, as recorded in the [API changelog](https://developers.openai.com/api/docs/changelog); earlier usage retains the previous prices. The [Sol promotion](https://developers.openai.com/api/docs/models/gpt-5.6-sol) lasts at least through November 21, so no future price increase is assumed. Existing long-context histories retain their August 22 evidence boundary rather than guessing earlier rates.
 
@@ -120,47 +120,30 @@ Requests above a model's published input threshold use its long-context rate cel
 
 ### Larger worked example
 
-This deterministic worked example uses a synthetic session ID and fixture data. It shows why the whole-tree row, per-model rows, price metadata, and agent-turn time belong together when a task has descendants.
+This deterministic worked example uses a synthetic session ID and fixture data. It shows the compact identity, nested token components, and distinct Root and All agents turn time for a task with descendants.
 
 ```text
 $ ./codex-cost-meter report f8b0c8e4-3dfd-4f33-99e7-9eb2d02f7c71
-Codex rollout f8b0c8e4-3dfd-4f33-99e7-9eb2d02f7c71
-Project: codex-cost-meter
-Name: Example release session
-Type: root   Primary: gpt-5.6-terra / high   Descendants: 3
+Example release session · f8b0c8e4
+codex-cost-meter · 4 rollouts · Most root turns: gpt-5.6-terra/high
 
-Scope
-Scope       Turns                         Input      Cache read  Output   Reasoning  Duration  Cost
-----------  ----------------------------  ---------  ----------  -------  ---------  --------  -----
-Root        1 (1 complete, 0 incomplete)  125K       100K        18K      12K        3m 1.0s   $0.29
-Whole tree  4 (4 complete, 0 incomplete)  2M         1.7M        145K     100K       12m 4.0s  $3.89
+Scope       Turns  Input (cached)  Output (reasoning)  Turn time  Est. cost
+----------  -----  --------------  ------------------  ---------  ---------
+Root        1      125K (100K)     18K (12K)           3m 1.0s    $0.29
+All agents  4      2M (1.7M)       145K (100K)         12m 4.0s   $3.89
 
-Models
-Model                         Turns                         Input      Cache read  Output   Reasoning  Duration  Cost
-----------------------------  ----------------------------  ---------  ----------  -------  ---------  --------  -----
-gpt-5.6-sol [Fast]            1                             1M         850K        40K      28K        4m 0.0s   $2.38
-gpt-5.6-terra                 2                             725K       600K        93K      64K        6m 4.0s   $1.49
-↳ Standard                                                  400K       325K        45K      31K                  $0.80
-↳ Fast                                                      325K       275K        48K      33K                  $0.69
-codex-auto-review [Standard]  1                             300K       275K        12K      8K         2m 0.0s   $0.02
-Total                         4 (4 complete, 0 incomplete)  2M         1.7M        145K     100K       12m 4.0s  $3.89
+By model
+Model                    Turns  Input  Output  Turn time  Est. cost
+-----------------------  -----  -----  ------  ---------  ---------
+gpt-5.6-sol [Fast]       1      1M     40K     4m 0.0s    $2.38
+gpt-5.6-terra            2      725K   93K     6m 4.0s    $1.49
+↳ Standard                  400K   45K                $0.80
+↳ Fast                      325K   48K                $0.69
+codex-auto-review        1      300K   12K     2m 0.0s    $0.02
 
-Agent-turn time: 9m 3.0s (agent time can overlap).
-Pricing as of: 2026-08-22
-Pricing basis: API list pricing; applied rollout tier (served tier unavailable); per request model/context; output
-               includes reasoning
-Pricing sources:
-  - https://developers.openai.com/api/docs/pricing
-  - https://openai.com/api-fast-mode/
-Model proxies:
-  codex-auto-review before 2026-07-30 -> gpt-5.4
-  codex-auto-review from 2026-07-30 -> gpt-5.6-luna
-  Note: codex-auto-review boundaries are announcement-date estimates, not observed routing or billing cutovers.
-  gpt-5.6 -> gpt-5.6-sol
-Notes: cache read is included in input; reasoning is included in output; agent time can overlap.
+All-agent turn time sums overlapping work.
+Estimated API list cost using pricing dated 2026-09-05.
 ```
-
-The worked example uses the catalog's effective-dated Auto-review proxy history. The July 30 boundary remains an evidence-backed estimate rather than observed request routing.
 
 ## Preview or apply title updates
 

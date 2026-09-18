@@ -24,7 +24,10 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    #[command(about = "Report usage and estimated cost by task, project, or corpus.")]
+    #[command(
+        about = "Report usage and estimated cost by task, project, or corpus.",
+        long_about = "Report usage and estimated API-list-price cost by task, project, or corpus.\n\nHuman output nests cached input under input and reasoning under output. Turn time sums recorded turn lifecycle intervals; all-agent and aggregate values can include overlapping work. A trailing + marks a known priced minimum when the complete estimate is unavailable.\n\nPricing uses the service tier recorded in rollout settings; the tier actually served is unavailable. Missing tier data is priced as assumed Standard and identified in human output. Internal model identities can use effective-dated public-model proxies whose boundaries are estimates, not observed routing or billing cutovers.\n\nUse --json for exact token counts, full paths and identifiers, selection diagnostics, service-tier detail, pricing sources, and effective-dated model-proxy history."
+    )]
     Report(ReportArgs),
     #[command(about = "Preview or apply bounded Codex task-title updates.")]
     Update(UpdateArgs),

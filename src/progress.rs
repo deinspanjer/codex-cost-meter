@@ -69,7 +69,8 @@ impl<'a> Progress<'a> {
             self.render(&self.analysis_message(), true);
         }
         if self.terminal && self.rendered_terminal_line {
-            let _ = self.writer.write_all(b"\n");
+            let _ = self.writer.write_all(b"\r\x1b[2K");
+            let _ = self.writer.flush();
             self.rendered_terminal_line = false;
         }
     }
@@ -135,7 +136,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "\r\x1b[2KIndexing rollout metadata: 0 files\r\x1b[2KIndexing rollout metadata: 1 file\r\x1b[2KAnalyzing 0/1 rollouts\r\x1b[2KAnalyzing 1/1 rollouts\n"
+            "\r\x1b[2KIndexing rollout metadata: 0 files\r\x1b[2KIndexing rollout metadata: 1 file\r\x1b[2KAnalyzing 0/1 rollouts\r\x1b[2KAnalyzing 1/1 rollouts\r\x1b[2K"
         );
     }
 

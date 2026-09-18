@@ -19,5 +19,6 @@
 - Research whether the running ChatGPT/Codex desktop app's app server can be signaled to reload externally updated titles without relaunching or cycling windows.
 - Research whether the desktop app offers a practical extension point for a per-thread context-menu update action.
 - Research hooks that could update a thread's cost at turn completion, turn start, or idle time.
+- Explore session activity-range reporting separately from summed turn time: define meaningful idle-gap boundaries, represent disjoint active date ranges compactly, and verify how automatic continuations and scheduled wakeups appear in rollout lifecycle events.
 - Add a `doctor` command once multiple concrete diagnostics justify it; include rollout-cache integrity, writability, and explicit repair.
 - Reconsider SignPath Foundation, Azure Artifact Signing, or Microsoft Store MSIX only if measured Windows direct-download friction justifies the account, cost, and packaging work.

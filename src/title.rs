@@ -146,7 +146,7 @@ impl TitleFormat {
     }
 }
 
-fn strip_canonical_suffix(mut title: &str) -> &str {
+pub(crate) fn strip_canonical_suffix(mut title: &str) -> &str {
     while let Some((base, segment)) = title.rsplit_once(" · ") {
         if canonical_metric(segment).is_none() {
             break;
