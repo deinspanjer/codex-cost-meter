@@ -112,7 +112,7 @@ Cost uses the embedded historical catalog and is an API-list-price approximation
 
 `codex-auto-review` is an internal routing identity, not a public foundation-model ID recorded in local telemetry. OpenAI documented GPT-5.4 Thinking with low reasoning at launch and announced a migration to GPT-5.6 Luna on July 30, 2026. The catalog therefore prices Auto-review through GPT-5.4 before July 30 and GPT-5.6 Luna from July 30 onward. This is an announcement-date estimator boundary, not proof of the routed or billed model for an individual request or an exact account-level cutover. JSON preserves the latest target in `model_proxies` and the full typed history in `model_proxy_histories`; `report --help` explains the method. See the [Auto-review pricing evidence](docs/research/codex-auto-review-pricing-evidence.md).
 
-The catalog was refreshed September 5, 2026 against [OpenAI pricing](https://developers.openai.com/api/docs/pricing). GPT-6 Astra includes Standard and Fast rates, cache writes, and the surcharge above 272,000 input tokens, starting at its September 3 release. Sol's reduced rates start August 21, as recorded in the [API changelog](https://developers.openai.com/api/docs/changelog); earlier usage retains the previous prices. The [Sol promotion](https://developers.openai.com/api/docs/models/gpt-5.6-sol) lasts at least through November 21, so no future price increase is assumed. Existing long-context histories retain their August 22 evidence boundary rather than guessing earlier rates.
+The catalog was refreshed September 29, 2026. It adds GPT-6 Sol and Luna from September 22 and GPT-6.1 Sol from September 29, with separate Standard/Fast and short/long-context rates. GPT-6.1 Sol has its own cache-read price; it does not replace GPT-6 Sol's identity or history. Archived official pricing supports GPT-5.4 and Pro long-context rates from March 5, and GPT-5.5 and Pro rates from the April 24 API launch (corroborated by an April 25 capture). Other rate histories and proxy mappings remain unchanged. See the [refresh evidence and limitations](docs/research/pricing-refresh-2026-09-29.md) and [maintainer procedure](DEVELOPERS.md#updating-model-pricing).
 
 Fast first appeared in public opt-in prerelease `0.108.0-alpha.2` on March 2 PST (March 3 UTC) and became generally available in stable `0.111.0` on March 5. Applied-tier snapshots were not persisted until stable `0.144.0` on July 9. The analyzer uses each usage event's timestamp because the canonical `session_meta.cli_version` identifies the rollout creator, not the client that may later resume and append to it.
 
@@ -142,7 +142,7 @@ gpt-5.6-terra            2      725K   93K     6m 4.0s    $1.49
 codex-auto-review        1      300K   12K     2m 0.0s    $0.02
 
 All-agent turn time sums overlapping work.
-Estimated API list cost using pricing dated 2026-09-05.
+Estimated API list cost using pricing dated 2026-09-29.
 ```
 
 ## Preview or apply title updates

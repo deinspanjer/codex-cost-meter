@@ -365,6 +365,145 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prices_new_sol_and_luna_models_by_release_context_and_tier() {
+        let catalog = Catalog::embedded().unwrap();
+        // Independent totals include 10K cache reads, 10K cache writes, 15K output.
+        for (model, release, short, long) in [
+            ("gpt-6-sol", datetime!(2026-09-22 0:00 UTC), 0.681, 1.287004),
+            (
+                "gpt-6-luna",
+                datetime!(2026-09-22 0:00 UTC),
+                0.03405,
+                0.0643502,
+            ),
+            (
+                "gpt-6.1-sol",
+                datetime!(2026-09-29 0:00 UTC),
+                0.680,
+                1.285004,
+            ),
+        ] {
+            for (input, standard) in [(272_000, short), (272_001, long)] {
+                let usage = Usage {
+                    input,
+                    cached_input: 10_000,
+                    cache_write_input: 10_000,
+                    output: 15_000,
+                };
+                for (tier, expected) in [
+                    (ServiceTier::Standard, standard),
+                    (ServiceTier::Fast, standard * 2.0),
+                ] {
+                    let cost = catalog.cost(model, Some(release), &tier, usage);
+                    assert!((cost.complete.unwrap() - expected).abs() < 1e-12, "{model}");
+                    assert_eq!(catalog.cost(model, None, &tier, usage), cost);
+                    assert_eq!(
+                        catalog
+                            .cost(
+                                model,
+                                Some(release - time::Duration::seconds(1)),
+                                &tier,
+                                usage
+                            )
+                            .complete,
+                        None
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pro_long_context_requires_evidenced_rates() {
+        let catalog = Catalog::embedded().unwrap();
+        for (model, boundary) in [
+            ("gpt-5.4-pro", datetime!(2026-03-05 0:00 UTC)),
+            ("gpt-5.5-pro", datetime!(2026-04-24 0:00 UTC)),
+        ] {
+            let short = Usage {
+                input: 272_000,
+                output: 10_000,
+                ..Usage::default()
+            };
+            let long = Usage {
+                input: 272_001,
+                ..short
+            };
+            let before = boundary - time::Duration::seconds(1);
+            for at in [boundary, datetime!(2026-09-29 0:00 UTC)] {
+                let cost = catalog.cost(model, Some(at), &ServiceTier::Standard, short);
+                assert!((cost.complete.unwrap() - 9.96).abs() < 1e-12);
+            }
+            assert_eq!(
+                catalog
+                    .cost(model, Some(before), &ServiceTier::Standard, long)
+                    .complete,
+                None
+            );
+            let cost = catalog.cost(model, Some(boundary), &ServiceTier::Standard, long);
+            assert!((cost.complete.unwrap() - 19.02006).abs() < 1e-12);
+            assert_eq!(
+                catalog
+                    .cost(model, Some(boundary), &ServiceTier::Fast, long)
+                    .complete,
+                None
+            );
+            assert_eq!(
+                catalog
+                    .cost(
+                        model,
+                        Some(boundary),
+                        &ServiceTier::Standard,
+                        Usage {
+                            cached_input: 1,
+                            ..long
+                        }
+                    )
+                    .complete,
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn standard_long_context_uses_launch_rates_before_august() {
+        let catalog = Catalog::embedded().unwrap();
+        let usage = Usage {
+            input: 272_001,
+            cached_input: 10_000,
+            output: 15_000,
+            ..Usage::default()
+        };
+        for (model, boundary, expected) in [
+            ("gpt-5.4", datetime!(2026-03-05 0:00 UTC), 1.652505),
+            ("gpt-5.5", datetime!(2026-04-24 0:00 UTC), 3.30501),
+        ] {
+            assert_eq!(
+                catalog
+                    .cost(
+                        model,
+                        Some(boundary - time::Duration::seconds(1)),
+                        &ServiceTier::Standard,
+                        usage
+                    )
+                    .complete,
+                None
+            );
+            for at in [boundary, datetime!(2026-08-21 12:00 UTC)] {
+                assert!(
+                    (catalog
+                        .cost(model, Some(at), &ServiceTier::Standard, usage)
+                        .complete
+                        .unwrap()
+                        - expected)
+                        .abs()
+                        < 1e-12
+                );
+            }
+        }
+    }
+
+    #[test]
     fn prices_astra_from_release_across_context_and_tiers() {
         let catalog = Catalog::embedded().unwrap();
         let release = datetime!(2026-09-03 0:00 UTC);

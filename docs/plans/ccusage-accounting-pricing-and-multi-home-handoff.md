@@ -1,5 +1,7 @@
 # ccusage accounting, pricing, and multi-home handoff
 
+> Historical implementation handoff: tier/context pricing and replay suppression have since shipped. For recurring pricing refreshes, follow [Updating model pricing](../../DEVELOPERS.md#updating-model-pricing); statements below describe the original investigation.
+
 ## Outcome
 
 Close the confirmed long-context and Fast/Priority pricing gaps, add multi-home reporting, and resolve replay accounting without trading a possible overcount for an opaque undercount. Preserve the existing historical-price, incomplete-input, and lower-bound guarantees.
