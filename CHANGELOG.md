@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.2.5]
+
+- Add dated GPT-6 Sol, GPT-6 Luna, and GPT-6.1 Sol pricing; restore GPT-5.4/5.5 and Pro long-context pricing to evidenced launch boundaries.
+- Document the pricing refresh procedure, source evidence, and historical limitations.
+
 ## [1.2.4]
 
 - Streamline human reports with compact identity, nested token components, scoped turn time, conditional model detail, and concise pricing qualifications while preserving full JSON provenance.
