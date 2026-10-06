@@ -720,7 +720,7 @@ mod tests {
             catalog
                 .cost("codex-auto-review", None, &ServiceTier::Standard, usage)
                 .complete,
-            Some(1.2)
+            Some(0.0)
         );
         assert_eq!(
             catalog
@@ -728,6 +728,48 @@ mod tests {
                 .complete,
             Some(30.0)
         );
+    }
+
+    #[test]
+    fn auto_review_is_free_from_the_documented_chatgpt_policy_boundary() {
+        let catalog = Catalog::embedded().unwrap();
+        let boundary = datetime!(2026-10-06 0:00 UTC);
+        let usage = Usage {
+            input: 1_000_000,
+            cached_input: 100_000,
+            cache_write_input: 100_000,
+            output: 1_000_000,
+        };
+        for tier in [
+            ServiceTier::Standard,
+            ServiceTier::AssumedStandard,
+            ServiceTier::Fast,
+        ] {
+            let prior = catalog.cost(
+                "codex-auto-review",
+                Some(boundary - time::Duration::seconds(1)),
+                &tier,
+                usage,
+            );
+            assert!(prior.complete.unwrap() > 0.0);
+            for at in [
+                Some(boundary),
+                Some(boundary + time::Duration::days(1)),
+                None,
+            ] {
+                assert_eq!(
+                    catalog.cost("codex-auto-review", at, &tier, usage),
+                    CostResult {
+                        known: 0.0,
+                        complete: Some(0.0)
+                    },
+                );
+            }
+            assert_eq!(
+                prior,
+                catalog.cost("gpt-5.6-luna", Some(boundary), &tier, usage)
+            );
+        }
     }
 
     #[test]
