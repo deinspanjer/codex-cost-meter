@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.2.6]
+
+- Estimate Auto-review safety checks at $0 from the October 6 documentation observation boundary, assuming ChatGPT sign-in; preserve historical estimates, token totals, and ordinary model rates.
+
 ## [1.2.5]
 
 - Add dated GPT-6 Sol, GPT-6 Luna, and GPT-6.1 Sol pricing; restore GPT-5.4/5.5 and Pro long-context pricing to evidenced launch boundaries.

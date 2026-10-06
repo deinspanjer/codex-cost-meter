@@ -594,7 +594,7 @@ fn pricing_report(catalog: &Catalog) -> PricingReport {
         })
         .collect();
     PricingReport {
-        basis: "API list pricing; applied rollout tier (served tier unavailable); per request model/context; output includes reasoning",
+        basis: "API list pricing; applied rollout tier (served tier unavailable); per request model/context; output includes reasoning; auto-review assumes ChatGPT sign-in, free from 2026-10-06 observation boundary",
         as_of: catalog.as_of().into(),
         source: catalog.source().into(),
         model_proxies: catalog

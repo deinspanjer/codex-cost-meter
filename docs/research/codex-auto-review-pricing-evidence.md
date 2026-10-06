@@ -1,6 +1,13 @@
 # Codex Auto-review model and pricing evidence
 
-Research date: 2026-08-24.
+Research dates: 2026-08-24; Auto-review exemption checked 2026-10-06.
+
+## October 6 policy update
+
+The [OpenAI credit-based rate card](https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu-credit-based-pricing) now states that Auto-review safety checks are free when signed in with a ChatGPT account and do not count toward plan limits. Code review and other Codex tasks retain their applicable rates. The source gives no effective date and does not establish an API-key exemption.
+
+The estimator uses October 6, 2026, the documentation observation date, as its boundary and assumes ChatGPT sign-in because authentication mode is not retained by the rollout parser. Earlier dated events retain their existing model proxies; events from that date and undated events use `chatgpt-auto-review-free`, a zero-rate pricing policy target rather than a routed model. All recorded token categories remain in usage totals. The public Luna model's rates are unchanged. The historical research below records the evidence available on August 24 and is superseded by this exemption for current ChatGPT estimates.
+
 
 ## Conclusions
 
@@ -47,8 +54,9 @@ Those public model rates support an API-list-price estimate. They do not prove t
 ### Estimator policy
 
 - Treat `codex-auto-review` usage before 2026-07-30 as GPT-5.4.
-- Treat usage on or after 2026-07-30 as GPT-5.6 Luna.
-- When the event timestamp is unavailable, use the latest known target, GPT-5.6 Luna, consistent with the catalog's existing latest-rate fallback.
+- Treat usage from 2026-07-30 through 2026-10-05 as GPT-5.6 Luna.
+- Treat usage from 2026-10-06 as free, assuming ChatGPT sign-in as described above.
+- When the event timestamp is unavailable, use the latest known policy target, `chatgpt-auto-review-free`, consistent with the catalog's existing latest-rate fallback.
 - Report the mapping as an announcement-date proxy, not an observed routed or billed model.
 
 This date rule replaces the prior timeless Luna proxy, so known pre-migration reviewer usage is no longer repriced at the much lower post-migration rate. It is still an approximation: the public evidence does not establish a single UTC cutover or a uniform rollout across accounts, authentication methods, clients, regions, and product surfaces.

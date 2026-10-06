@@ -7,11 +7,17 @@ Provide reproducible model-alias pricing when an internal model identity routes 
 ## Requirements
 
 ### Requirement: Model proxies select an effective target by event date
-The system SHALL resolve a model proxy to the target effective for the usage event date before selecting that target model's effective price point. A proxy MAY have an undated baseline target followed by dated target changes.
+The system SHALL resolve a model proxy to the target effective for the usage event date before selecting that target model's effective price point. A proxy MAY have an undated baseline target followed by dated target changes. A target MAY represent a documented pricing exemption rather than a routed model.
 
 #### Scenario: Auto-review usage crosses the announced migration date
 - **WHEN** equivalent `codex-auto-review` usage events occur before and on 2026-07-30
 - **THEN** the first event uses the GPT-5.4 price history and the second uses the GPT-5.6 Luna price history
+
+#### Scenario: Auto-review uses the documented ChatGPT exemption
+- **WHEN** `codex-auto-review` usage is dated on or after 2026-10-06, or has no timestamp
+- **THEN** the estimator assumes ChatGPT sign-in and uses the zero-rate `chatgpt-auto-review-free` policy target
+- **AND** recorded tokens remain in usage totals and ordinary model rates remain unchanged
+- **AND** help documents the authentication assumption, unverified API-key applicability, and observation-date boundary rather than claiming an exact policy start date
 
 #### Scenario: Static proxy remains valid for all dates
 - **WHEN** a proxy has only an undated baseline target
