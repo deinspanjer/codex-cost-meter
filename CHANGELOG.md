@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.2.7]
+
+- Skip missing, unreadable, or malformed session rollouts during title updates, warn without pausing the schedule, and preserve the update limit for valid sessions.
+
 ## [1.2.6]
 
 - Estimate Auto-review safety checks at $0 from the October 6 documentation observation boundary, assuming ChatGPT sign-in; preserve historical estimates, token totals, and ordinary model rates.

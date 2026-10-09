@@ -253,7 +253,14 @@ pub(crate) fn run_scheduled_cached(
         return Ok(());
     }
     match update::run_cached(codex_home, options, cache) {
-        Ok(_) => {
+        Ok(result) => {
+            if result.skipped_rollouts > 0 {
+                let _ = writeln!(
+                    writer,
+                    "warning: skipped {} task(s) with missing, unreadable, or malformed rollouts",
+                    result.skipped_rollouts
+                );
+            }
             if write_status(
                 paths.status(),
                 &after_success(previous, OffsetDateTime::now_utc()),
@@ -493,6 +500,34 @@ mod tests {
             apply: true,
             title_format: TitleFormat::new(65, MetricList::default()),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_rollout_warns_without_failing_or_pausing_the_schedule() {
+        let directory = TempDir::new().unwrap();
+        let paths = Paths::new(directory.path());
+        let codex_home = directory.path().join(".codex");
+        fs::create_dir_all(&codex_home).unwrap();
+        Connection::open(codex_home.join("state_5.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT, history_mode TEXT, updated_at INTEGER, first_user_message TEXT, source TEXT, rollout_path TEXT);
+                 INSERT INTO threads VALUES ('missing', 'Private title', NULL, 'legacy', 0, NULL, 'cli', 'sessions/missing.jsonl');",
+            )
+            .unwrap();
+        let mut output = Vec::new();
+
+        run_scheduled(&paths, &codex_home, &scheduled_options(), &mut output).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "warning: skipped 1 task(s) with missing, unreadable, or malformed rollouts\n"
+        );
+        let status = read_status(paths.status()).unwrap().unwrap();
+        assert_eq!(status.result, ResultCode::Success);
+        assert_eq!(status.consecutive_failures, 0);
+        assert!(!status.paused);
     }
 
     #[cfg(unix)]
