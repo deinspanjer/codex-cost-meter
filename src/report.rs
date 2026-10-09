@@ -43,6 +43,8 @@ pub(crate) struct Report {
     pub by_rollout_type: BTreeMap<String, StatsReport>,
     pub pricing: PricingReport,
     pub incomplete_input_warnings: Vec<String>,
+    #[serde(skip)]
+    pub(crate) has_unusable_rollout: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1025,6 +1027,7 @@ fn build_with_state(
             )
         })
         .collect::<Vec<_>>();
+    let mut has_unusable_rollout = false;
 
     if index.malformed_lines_skipped() > 0 {
         warnings.push("rollout scan skipped malformed JSONL records".into());
@@ -1052,6 +1055,9 @@ fn build_with_state(
                 tree_stats.add(&stats, catalog);
                 type_stats.add(&stats, catalog);
                 if id == thread_id {
+                    has_unusable_rollout = stats.malformed_lines > 0
+                        || stats.oversized_lines > 0
+                        || stats.invalid_usage_records > 0;
                     root_stats.add(&stats, catalog);
                 } else {
                     children_stats.add(&stats, catalog);
@@ -1103,6 +1109,7 @@ fn build_with_state(
             .map(|(kind, stats)| (kind, stats.report()))
             .collect(),
         pricing: pricing_report(catalog),
+        has_unusable_rollout,
         incomplete_input_warnings: {
             if session_index.read_error().is_some() {
                 warnings.push("session index could not be read".into());

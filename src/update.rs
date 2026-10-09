@@ -50,6 +50,7 @@ pub(crate) struct ProposedUpdate {
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct UpdateResult {
     pub(crate) proposals: Vec<ProposedUpdate>,
+    pub(crate) skipped_rollouts: usize,
 }
 
 #[derive(Debug, Error)]
@@ -185,13 +186,29 @@ fn finish_updates(
     let deadline = options
         .max_runtime
         .map(|duration| Instant::now() + duration);
-    let mut proposals = Vec::with_capacity(selected.len());
+    let mut proposals = Vec::new();
+    let mut skipped_rollouts = 0;
     for row in selected {
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline)
+            || (options.idle_minutes.is_some() && proposals.len() >= options.limit)
+        {
             break;
         }
         let old_title = base_name(row, snapshot);
-        let report = context.build(&row.id)?;
+        let report = match context.build(&row.id) {
+            Ok(report) => report,
+            Err(
+                ReportError::RolloutNotFound { .. } | ReportError::SelectedRolloutUnreadable { .. },
+            ) => {
+                skipped_rollouts += 1;
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if report.has_unusable_rollout {
+            skipped_rollouts += 1;
+            continue;
+        }
         let new_title = options.title_format.compose(&old_title, &report.tree)?;
         proposals.push(ProposedUpdate {
             id: row.id.clone(),
@@ -211,7 +228,10 @@ fn finish_updates(
             OffsetDateTime::now_utc(),
         )?;
     }
-    Ok(UpdateResult { proposals })
+    Ok(UpdateResult {
+        proposals,
+        skipped_rollouts,
+    })
 }
 
 fn apply(connection: &mut Connection, proposals: &[ProposedUpdate]) -> Result<(), UpdateError> {
@@ -397,7 +417,6 @@ fn select_idle<'a>(
         .into_iter()
         .filter(|row| row.updated_at <= cutoff)
         .filter(|row| needs_update(row, snapshot, options))
-        .take(options.limit)
         .collect()
 }
 
@@ -881,6 +900,100 @@ mod tests {
             run(home.path(), &child_options),
             Err(UpdateError::RootNotFound { .. })
         ));
+    }
+
+    #[test]
+    fn missing_rollout_does_not_block_other_title_updates_or_change_the_missing_task() {
+        let home = TempDir::new().unwrap();
+        let mut columns = REQUIRED.to_vec();
+        columns.extend(["source", "rollout_path"]);
+        let database = database(&home, false, &columns);
+        let now = OffsetDateTime::now_utc().unix_timestamp() - 600;
+        for (id, updated_at) in [("missing", now), ("valid", now - 1)] {
+            insert(
+                &database,
+                id,
+                Some(id),
+                None,
+                "legacy",
+                updated_at,
+                Some(id),
+            );
+        }
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "UPDATE threads SET source = 'cli', rollout_path = 'sessions/' || id || '.jsonl'",
+                [],
+            )
+            .unwrap();
+        rollout(&home, "valid", None);
+        index(&home, &[("missing", "missing", OffsetDateTime::UNIX_EPOCH)]);
+        let original_index = fs::read(home.path().join("session_index.jsonl")).unwrap();
+        let mut options = options();
+        options.idle_minutes = Some(1);
+        options.limit = 1;
+
+        let preview = run(home.path(), &options).unwrap();
+        assert_eq!(proposal_ids(&preview), ["valid"]);
+        assert_eq!(preview.skipped_rollouts, 1);
+        assert_eq!(
+            fs::read(home.path().join("session_index.jsonl")).unwrap(),
+            original_index
+        );
+
+        options.apply = true;
+        let applied = run(home.path(), &options).unwrap();
+        assert_eq!(proposal_ids(&applied), ["valid"]);
+        assert_eq!(applied.skipped_rollouts, 1);
+        for (id, expected) in [("missing", "missing"), ("valid", "valid · ⇄100")] {
+            let title: String = connection
+                .query_row("SELECT title FROM threads WHERE id = ?1", [id], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(title, expected);
+        }
+        let snapshot = Snapshot::load(home.path());
+        assert_eq!(
+            snapshot.entry("missing").unwrap().updated_at,
+            OffsetDateTime::UNIX_EPOCH
+        );
+        assert_eq!(snapshot.entry("valid").unwrap().name, "valid · ⇄100");
+
+        options.idle_minutes = None;
+        options.thread_ids = vec!["missing".into()];
+        let explicit = run(home.path(), &options).unwrap();
+        assert!(explicit.proposals.is_empty());
+        assert_eq!(explicit.skipped_rollouts, 1);
+
+        fs::write(
+            home.path().join("sessions/missing.jsonl"),
+            "malformed JSON\n",
+        )
+        .unwrap();
+        let malformed = run(home.path(), &options).unwrap();
+        assert!(malformed.proposals.is_empty());
+        assert_eq!(malformed.skipped_rollouts, 1);
+        rollout(&home, "missing", None);
+        use std::io::Write;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(home.path().join("sessions/missing.jsonl"))
+            .unwrap()
+            .write_all(b"malformed JSON\n")
+            .unwrap();
+        options.thread_ids.push("valid".into());
+        let partially_malformed = run(home.path(), &options).unwrap();
+        assert_eq!(proposal_ids(&partially_malformed), ["valid"]);
+        assert_eq!(partially_malformed.skipped_rollouts, 1);
+        assert_eq!(
+            Snapshot::load(home.path())
+                .entry("missing")
+                .unwrap()
+                .updated_at,
+            OffsetDateTime::UNIX_EPOCH
+        );
     }
 
     #[test]

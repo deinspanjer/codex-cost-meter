@@ -385,6 +385,12 @@ fn update_output(result: &update::UpdateResult, apply: bool) -> String {
             ));
             output
         });
+    if result.skipped_rollouts > 0 {
+        rendered.push_str(&format!(
+            "warning: skipped {} task(s) with missing, unreadable, or malformed rollouts\n",
+            result.skipped_rollouts
+        ));
+    }
     if apply {
         rendered.push_str(&format!("updated {} task(s)\n", result.proposals.len()));
     } else {
@@ -456,6 +462,7 @@ mod tests {
                 old_title: "Old title".into(),
                 new_title: "New title".into(),
             }],
+            skipped_rollouts: 0,
         };
 
         let error = write_update_output(&mut FailingWriter, &result, true).unwrap_err();

@@ -700,6 +700,7 @@ mod tests {
         let mut tree = stats(None, 0.17);
         tree.rollout_count = 2;
         Report {
+            has_unusable_rollout: false,
             rollout: RolloutReport {
                 rollout_id: "root".into(),
                 rollout_type: "root".into(),
