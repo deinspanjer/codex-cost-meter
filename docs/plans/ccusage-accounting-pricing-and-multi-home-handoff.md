@@ -1,6 +1,6 @@
 # ccusage accounting, pricing, and multi-home handoff
 
-> Historical implementation handoff: tier/context pricing and replay suppression have since shipped. For recurring pricing refreshes, follow [Updating model pricing](../../DEVELOPERS.md#updating-model-pricing); statements below describe the original investigation.
+> Historical implementation handoff: tier/context pricing and replay suppression have since shipped. For recurring pricing refreshes, follow [Updating model pricing](../model-pricing.md); statements below describe the original investigation.
 
 ## Outcome
 

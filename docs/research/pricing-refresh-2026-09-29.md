@@ -1,6 +1,6 @@
 # Pricing refresh — September 29, 2026
 
-This refresh follows [Updating model pricing](../../DEVELOPERS.md#updating-model-pricing). It reviews the existing catalog and adds the newly released GPT-6 Sol, Luna, and GPT-6.1 Sol identities. Prices are API token list estimates, not subscription charges. All sources below were retrieved September 29, 2026.
+This refresh follows [Updating model pricing](../model-pricing.md). It reviews the existing catalog and adds the newly released GPT-6 Sol, Luna, and GPT-6.1 Sol identities. Prices are API token list estimates, not subscription charges. All sources below were retrieved September 29, 2026.
 
 ## Evidence and changes
 

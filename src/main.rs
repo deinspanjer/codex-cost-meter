@@ -20,7 +20,7 @@ use std::{
     rc::Rc,
 };
 
-use clap::{Parser, error::ErrorKind};
+use clap::{CommandFactory, Parser, error::ErrorKind};
 use thiserror::Error as ThisError;
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -55,6 +55,11 @@ enum AppError {
     Render(#[from] serde_json::Error),
     #[error("could not write report")]
     WriteReport {
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not write completion script")]
+    WriteCompletions {
         #[source]
         source: io::Error,
     },
@@ -116,6 +121,17 @@ fn run_with_writers(
     stderr_is_terminal: bool,
 ) -> Result<(), AppError> {
     match cli.command {
+        Command::Completions(args) => {
+            let shell = match args.shell {
+                cli::CompletionShell::Bash => clap_complete::Shell::Bash,
+                cli::CompletionShell::Zsh => clap_complete::Shell::Zsh,
+            };
+            let mut script = Vec::new();
+            clap_complete::generate(shell, &mut Cli::command(), "codex-cost-meter", &mut script);
+            writer
+                .write_all(&script)
+                .map_err(|source| AppError::WriteCompletions { source })
+        }
         Command::Report(args) => {
             let filter = args.date_filter()?;
             let home = args.codex_home()?;
@@ -452,6 +468,13 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn completion_write_failure_reports_io_error() {
+        let cli = Cli::try_parse_from(["codex-cost-meter", "completions", "bash"]).unwrap();
+        let error = run_with_writers(cli, &mut FailingWriter, &mut Vec::new(), false).unwrap_err();
+        assert!(matches!(error, AppError::WriteCompletions { .. }));
     }
 
     #[test]
