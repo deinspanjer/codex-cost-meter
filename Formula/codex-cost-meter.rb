@@ -28,8 +28,8 @@ class CodexCostMeter < Formula
   test do
     assert_match version.to_s, shell_output("#{bin}/codex-cost-meter --version")
     if version >= "1.3.0"
-      assert_predicate bash_completion/"codex-cost-meter", :exist?
-      assert_predicate zsh_completion/"_codex-cost-meter", :exist?
+      assert_path_exists bash_completion/"codex-cost-meter"
+      assert_path_exists zsh_completion/"_codex-cost-meter"
     end
   end
 end
