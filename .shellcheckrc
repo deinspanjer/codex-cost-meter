@@ -1,0 +1,2 @@
+# Keep standalone and tap checks consistent without inheriting Homebrew's exclusions.
+enable=all

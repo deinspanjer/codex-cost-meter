@@ -1,0 +1,3 @@
+config-variables:
+  - APPLE_TEAM_ID
+  - HOMEBREW_PR_APP_CLIENT_ID

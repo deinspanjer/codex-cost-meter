@@ -290,6 +290,8 @@ jobs:
             exit 0
           fi
           pr_title="chore: update Homebrew formula to $tag"
+          # Backticks in this format string are literal Markdown, not shell commands.
+          # shellcheck disable=SC2016
           pr_body=$(printf 'The %s release is public, so the source-building Homebrew formula needs its post-release pin update.\n\n- Point the formula at the %s tagged source archive\n- Record the published archive SHA-256\n\nValidation:\n- Source archive SHA-256: `%s`' "$tag" "$tag" "$checksum")
           existing_pr=$(gh pr list --head "$branch" --state all --json url --jq '.[0].url // empty')
           if [[ -n "$existing_pr" ]]; then
@@ -309,9 +311,9 @@ jobs:
               --body "$pr_body"
             exit 0
           fi
-          app_user_id=$(gh api "/users/$APP_SLUG[bot]" --jq .id)
-          git config user.name "$APP_SLUG[bot]"
-          git config user.email "$app_user_id+$APP_SLUG[bot]@users.noreply.github.com"
+          app_user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${app_user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           git switch -c "$branch"
           git add Formula/codex-cost-meter.rb
           git commit -m "chore: update Homebrew formula to $tag

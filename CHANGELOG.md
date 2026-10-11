@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.3.1]
+
+- Clean up release-tooling shell lint and configure repository-specific checks so tap-wide Homebrew style validation passes without blanket warning exclusions.
+
 ## [1.3.0]
 
 - Accept `codex://threads/<ID>` deep links in report and explicit title-update selections.
