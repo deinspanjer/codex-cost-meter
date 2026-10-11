@@ -6,7 +6,7 @@ Homebrew is the preferred macOS install path because it builds pinned source thr
 
 * **macOS:** Binaries produced by the current release workflow use Developer ID signing and Apple notarization. Users do not install publisher certificates manually. Follow organizational Gatekeeper policy rather than changing trust settings.
 * **Windows:** Microsoft describes the standard **More info** then **Run anyway** flow for a known download in [its Windows publishing guidance](https://learn.microsoft.com/windows/apps/package-and-deploy/publish-first-app#step-6-handle-smartscreen-for-new-apps). An organization can disable that bypass; follow its application-control policy rather than weakening Windows security.
-* **Build from source on macOS, Windows, or Linux:** use the repository's [build and test guide](../DEVELOPERS.md#build-and-test). It documents the required Rust version, the macOS Universal 2 targets, and the supported package command.
+* **Build from source on macOS, Windows, or Linux:** use the repository's [build and test guide](../DEVELOPERS.md#build-and-test) for the required Rust version and the [packaging guide](releases.md#packaging-and-platform-checks) for macOS Universal 2 targets and package commands.
 
 ## Release workflow state
 

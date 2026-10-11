@@ -9,6 +9,10 @@ class CodexCostMeter < Formula
 
   def install
     system "cargo", "install", *std_cargo_args
+    # Keep existing source pins installable until a completion-capable release.
+    if version >= "1.3.0"
+      generate_completions_from_executable(bin/"codex-cost-meter", "completions", shells: [:bash, :zsh])
+    end
   end
 
   def caveats
@@ -23,5 +27,9 @@ class CodexCostMeter < Formula
 
   test do
     assert_match version.to_s, shell_output("#{bin}/codex-cost-meter --version")
+    if version >= "1.3.0"
+      assert_path_exists bash_completion/"codex-cost-meter"
+      assert_path_exists zsh_completion/"_codex-cost-meter"
+    end
   end
 end

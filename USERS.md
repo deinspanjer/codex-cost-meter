@@ -14,6 +14,8 @@ codex-cost-meter report <THREAD_ID>
 
 On macOS, Homebrew-installed schedules use Homebrew's stable `opt` executable path and survive upgrades. To uninstall, use `codex-cost-meter schedule remove` followed by `brew uninstall codex-cost-meter`. Do not run the utility's self-uninstall on a Homebrew-owned executable.
 
+Bash and Zsh completions are installed by Homebrew; run `codex-cost-meter completions --help` for setup details and manual installation.
+
 ### Cargo source install
 
 With Rust 1.97.1 or newer installed, macOS, Windows, and Linux can build a pinned release directly from its tag:
@@ -76,6 +78,13 @@ The report and explicit `update --thread-id` commands need a Codex session ID. I
 
 Paste that value in place of `<THREAD_ID>` or `<SESSION_ID>` in the examples. A session ID is often useful for support and reproducibility, but it can still identify a private task; review it before sharing.
 
+You can also pass a thread deep link wherever a thread ID is accepted:
+
+```text
+codex-cost-meter report codex://threads/01a12843-3193-7a92-aba8-1f98c21c4284
+codex-cost-meter update --thread-id codex://threads/01a12843-3193-7a92-aba8-1f98c21c4284
+```
+
 ## Ask Codex to run it
 
 If you already have the executable and a copied session ID, you can ask Codex to run the report for you:
@@ -112,7 +121,7 @@ Cost uses the embedded historical catalog and is an API-list-price approximation
 
 `codex-auto-review` is an internal routing identity, not a public foundation-model ID recorded in local telemetry. OpenAI documented GPT-5.4 Thinking with low reasoning at launch and announced a migration to GPT-5.6 Luna on July 30, 2026. The catalog therefore prices Auto-review through GPT-5.4 before July 30 and GPT-5.6 Luna from July 30 through October 5. From October 6, 2026, it uses the zero-rate `chatgpt-auto-review-free` policy target: the [OpenAI rate card](https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu-credit-based-pricing) says safety checks are free for ChatGPT sign-in. This assumes ChatGPT authentication, which the parser does not retain; the source does not establish free API-key usage. October 6 is the documentation observation date, not a claimed policy start date. Undated events use the newest policy. The policy target identifies a pricing exemption, not a backing model. Reviewer tokens are still counted; code review and other model rates are unchanged. This is an announcement-date estimator boundary, not proof of the routed or billed model for an individual request or an exact account-level cutover. JSON preserves the latest target in `model_proxies` and the full typed history in `model_proxy_histories`; `report --help` explains the method. See the [Auto-review pricing evidence](docs/research/codex-auto-review-pricing-evidence.md).
 
-The Auto-review policy was refreshed October 6, 2026; ordinary model rates were last refreshed September 29, 2026. It adds GPT-6 Sol and Luna from September 22 and GPT-6.1 Sol from September 29, with separate Standard/Fast and short/long-context rates. GPT-6.1 Sol has its own cache-read price; it does not replace GPT-6 Sol's identity or history. Archived official pricing supports GPT-5.4 and Pro long-context rates from March 5, and GPT-5.5 and Pro rates from the April 24 API launch (corroborated by an April 25 capture). Other rate histories and proxy mappings remain unchanged. See the [refresh evidence and limitations](docs/research/pricing-refresh-2026-09-29.md) and [maintainer procedure](DEVELOPERS.md#updating-model-pricing).
+The Auto-review policy was refreshed October 6, 2026; ordinary model rates were last refreshed September 29, 2026. It adds GPT-6 Sol and Luna from September 22 and GPT-6.1 Sol from September 29, with separate Standard/Fast and short/long-context rates. GPT-6.1 Sol has its own cache-read price; it does not replace GPT-6 Sol's identity or history. Archived official pricing supports GPT-5.4 and Pro long-context rates from March 5, and GPT-5.5 and Pro rates from the April 24 API launch (corroborated by an April 25 capture). Other rate histories and proxy mappings remain unchanged. See the [refresh evidence and limitations](docs/research/pricing-refresh-2026-09-29.md) and [maintainer procedure](docs/model-pricing.md).
 
 Fast first appeared in public opt-in prerelease `0.108.0-alpha.2` on March 2 PST (March 3 UTC) and became generally available in stable `0.111.0` on March 5. Applied-tier snapshots were not persisted until stable `0.144.0` on July 9. The analyzer uses each usage event's timestamp because the canonical `session_meta.cli_version` identifies the rollout creator, not the client that may later resume and append to it.
 

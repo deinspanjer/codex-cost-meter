@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf, time::Duration};
 
-use clap::{ArgGroup, Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -31,12 +31,42 @@ pub(crate) enum Command {
     Report(ReportArgs),
     #[command(about = "Preview or apply bounded Codex task-title updates.")]
     Update(UpdateArgs),
+    #[command(
+        about = "Write a shell completion script to stdout.",
+        after_long_help = r#"Completes commands, options, and declared values, without looking up thread IDs or titles.
+
+Homebrew installs both scripts starting with version 1.3.0. Enable your shell's
+completion system as described at https://docs.brew.sh/Shell-Completion.
+
+Manual Bash setup (also add this line to ~/.bashrc for future sessions):
+  source <(codex-cost-meter completions bash)
+
+Manual Zsh setup:
+  mkdir -p ~/.zsh/completions
+  codex-cost-meter completions zsh > ~/.zsh/completions/_codex-cost-meter
+Add `fpath=(~/.zsh/completions $fpath)` to ~/.zshrc before completion initialization.
+If none exists, follow it with `autoload -Uz compinit; compinit`. Restart Zsh.
+Regenerate saved scripts after upgrading."#
+    )]
+    Completions(CompletionArgs),
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[command(about = "Manage scheduled idle task-title updates.")]
     Schedule(ScheduleArgs),
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[command(about = "Remove the schedule and this executable.")]
     Uninstall,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct CompletionArgs {
+    #[arg(value_enum, help = "Shell to generate completions for.")]
+    pub(crate) shell: CompletionShell,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum CompletionShell {
+    Bash,
+    Zsh,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -127,7 +157,10 @@ pub(crate) struct ScheduledUpdateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct ReportArgs {
-    #[arg(help = "Codex session ID, also called a thread or rollout ID.")]
+    #[arg(
+        value_parser = parse_thread_id,
+        help = "Codex session ID or codex://threads/<ID> link, also called a thread or rollout ID."
+    )]
     pub(crate) thread_id: Option<String>,
     #[arg(
         long,
@@ -182,7 +215,8 @@ pub(crate) struct UpdateArgs {
     #[arg(
         long = "thread-id",
         conflicts_with = "idle_minutes",
-        help = "Select a task by ID; repeat for multiple tasks."
+        value_parser = parse_thread_id,
+        help = "Select a task by ID or codex://threads/<ID> link; repeat for multiple tasks."
     )]
     pub(crate) thread_ids: Vec<String>,
     #[arg(
@@ -427,6 +461,17 @@ fn parse_positive_u64(value: &str) -> Result<u64, String> {
         .ok_or_else(|| "must be a positive integer".into())
 }
 
+fn parse_thread_id(value: &str) -> Result<String, String> {
+    if value.starts_with("codex://threads") {
+        let id = value
+            .strip_prefix("codex://threads/")
+            .filter(|id| !id.is_empty() && !id.contains(['/', '?', '#']))
+            .ok_or_else(|| "must be a thread ID or codex://threads/<ID> link".to_owned())?;
+        return Ok(id.to_owned());
+    }
+    Ok(value.to_owned())
+}
+
 fn parse_positive_usize(value: &str) -> Result<usize, String> {
     value
         .parse()
@@ -498,7 +543,7 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     use super::ScheduleCommand;
-    use super::{Cli, Command, UpdateArgs, windows_home, windows_local_app_data};
+    use super::{Cli, Command, UpdateArgs, parse_thread_id, windows_home, windows_local_app_data};
     use crate::title::MetricList;
 
     fn update(arguments: &[&str]) -> UpdateArgs {
@@ -532,6 +577,26 @@ mod tests {
         assert_eq!(arguments.title_metrics, MetricList::default());
         assert!(!arguments.apply);
         assert!(arguments.refresh);
+    }
+
+    #[test]
+    fn normalizes_thread_links_for_report_and_update_and_rejects_malformed_links() {
+        assert_eq!(parse_thread_id("plain-id").unwrap(), "plain-id");
+        assert_eq!(
+            parse_thread_id("codex://threads/abc-123").unwrap(),
+            "abc-123"
+        );
+        assert!(parse_thread_id("codex://threads/").is_err());
+        assert!(parse_thread_id("codex://threads/abc/extra").is_err());
+
+        let report =
+            Cli::try_parse_from(["codex-cost-meter", "report", "codex://threads/abc-123"]).unwrap();
+        assert!(
+            matches!(report, Cli { command: Command::Report(args) } if args.thread_id.as_deref() == Some("abc-123"))
+        );
+
+        let update = update(&["--thread-id", "codex://threads/abc-123"]);
+        assert_eq!(update.thread_ids, ["abc-123"]);
     }
 
     #[test]

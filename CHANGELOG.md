@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.3.0]
+
+- Accept `codex://threads/<ID>` deep links in report and explicit title-update selections.
+- Generate Bash and Zsh completions with `completions <SHELL>` and install them through Homebrew.
+
 ## [1.2.7]
 
 - Skip missing, unreadable, or malformed session rollouts during title updates, warn without pausing the schedule, and preserve the update limit for valid sessions.

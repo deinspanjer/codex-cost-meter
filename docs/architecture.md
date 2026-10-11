@@ -1,0 +1,21 @@
+# Architecture and tests
+
+[Developer guide](../DEVELOPERS.md)
+
+## Runtime and storage
+
+One Rust 2024 crate produces one `codex-cost-meter` binary. `cli` parses cross-platform `report`, `update`, and scheduling commands on the supported scheduler targets; `rollout::discovery` bounds and indexes JSONL without following directory symlinks; `rollout::analysis` attributes usage and preserves ambiguity; `cache` owns the disposable app SQLite cache; `pricing` embeds date-aware rates; `report` reuses one selected rollout/catalog context; `session_index` owns bounded snapshots and durable index appends; `title` owns pure metric parsing and bounded composition; `update` owns SQLite selection, the process lock, and the SQLite-then-JSONL recovery sequence; `schedule` owns bounded status, result transitions, and scheduled-run orchestration; `schedule::linux` owns the fixed current-user systemd service/timer lifecycle; `schedule::macos` owns the current-user LaunchAgent lifecycle; `schedule::windows` owns the fixed current-user Task Scheduler lifecycle and deferred self-delete; and `output` renders sanitized report output. Compile-time target gates select the native scheduler module without a cross-platform scheduler abstraction. Linux keeps its service and timer under XDG user configuration and its bounded status under XDG state; macOS and Windows retain their native paths. `data/model-prices.json` is the built-in catalog.
+
+Exact and project reporting may use Codex's SQLite projection to select rollout paths, but rollout JSONL remains authoritative and an incompatible or incomplete projection falls back to file discovery. `codex-cost-meter.sqlite` stores versioned discovery and parsed-analysis JSON keyed by rollout path; analysis reuse requires matching nanosecond modification time and size, and cache failures disable caching for the rest of that command. Pricing and report aggregation are deliberately not cached. Title updates additionally read the supported `state_5.sqlite` `threads` contract documented in the user guide. `rusqlite` uses its bundled SQLite build so the Universal 2 executable has no separately installed SQLite dependency; the standard-library file lock avoids another locking dependency. The scheduler writes one bounded, synchronized replacement status record with allowlisted remediation only; it pauses after three ordinary failures or immediately for disk-full, schema, and permission failures. macOS and Windows lifecycle modules use fixed native tool paths and private fake-runner seams, so tests cover command plans without registering a real job. Windows writes Task Scheduler XML only as a synchronized temporary file, queries the fixed task with HRESULT status, and keeps scheduler state under `LOCALAPPDATA`; its native cleanup script receives the executable as an argument rather than interpolating it. The [`python-prototype/`](../python-prototype/) directory is historical reference only, not the active architecture.
+
+Bump `DISCOVERY_VERSION` when session-metadata interpretation or cached linkage changes, and bump `ANALYSIS_VERSION` when parsed `RolloutStats` semantics change. Pricing or report-only changes need neither bump because those calculations remain live.
+
+## Shell completions
+
+`completions bash|zsh` uses `clap_complete` to generate scripts from the same Clap command definition as argument parsing.
+
+Homebrew installation is covered in the [release guide](releases.md#homebrew).
+
+## Tests
+
+Unit tests live beside the behavior they protect; `tests/report_cli.rs` covers reporting dispatch, home resolution, output, errors, and hardening, while `tests/update_cli.rs`, `tests/schedule_cli.rs`, `tests/linux_schedule_cli.rs`, and `tests/windows_schedule_cli.rs` cover update and native scheduling command contracts. Title, session-index, update, and scheduling tests use temporary homes and cover metric boundaries, root-only selection, dry-run immutability, dual-store apply/recovery, schema compatibility, lock/error handling, circuit-breaker transitions, bounded status, Linux systemd unit/command plans, Windows argument quoting, task lifecycle, and deferred cleanup. Keep tests focused on behavioral invariants, parallel-safe where possible, and input handling non-panicking and bounded.
