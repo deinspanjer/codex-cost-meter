@@ -16,6 +16,8 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
 The source-building Homebrew formula lives at `Formula/codex-cost-meter.rb`. It pins a tagged source archive and uses Homebrew's locked Cargo install arguments. Validate it from a temporary or installed tap with `brew style <TAP>`, `brew audit --strict <TAP>/codex-cost-meter`, `brew install --build-from-source <TAP>/codex-cost-meter`, `brew test <TAP>/codex-cost-meter`, and `brew uninstall codex-cost-meter`. Homebrew rejects formula paths outside a tap. Do not install a real schedule during the formula test.
 
+Tap-wide style checks use `.github/actionlint.yaml` for the repository's workflow-variable allowlist and `.shellcheckrc` to keep optional shell warnings enabled. Add new workflow variables to that allowlist; keep false-positive suppressions local to the relevant command and explain them.
+
 `completions bash|zsh` uses `clap_complete` to generate scripts from the same Clap command definition as argument parsing. The formula uses Homebrew's `generate_completions_from_executable` helper to install both scripts, gated to version 1.3.0 or newer so existing source pins remain installable. The release workflow's version/checksum update enables completion installation when it advances the pin. See [Homebrew's completion helper](https://docs.brew.sh/Formula-Cookbook#shell-completion) and [clap_complete's generator](https://docs.rs/clap_complete/latest/clap_complete/aot/fn.generate.html).
 
 ## Release and phase gates
