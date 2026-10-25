@@ -30,14 +30,19 @@ The system SHALL associate each priced usage event with the most recent service 
 - **THEN** the system prices it as assumed Standard
 
 ### Requirement: Persisted tier values are normalized conservatively
-The system SHALL normalize `fast` and `priority` as Fast and `default` and `standard` as Standard. Missing values SHALL follow the Standard fallback policy. Empty, unsupported, or unrecognized explicit values SHALL remain unpriced.
+The system SHALL normalize `fast` and `priority` as Fast, `ultrafast` as Ultrafast, and `default` and `standard` as Standard. Missing values SHALL follow the Standard fallback policy. Empty, unsupported, or unrecognized explicit values SHALL remain unpriced.
 
 #### Scenario: Priority spelling selects Fast
 - **WHEN** a usage event follows an applied tier value of `priority`
 - **THEN** the system selects Fast pricing for that event
 
+#### Scenario: Ultrafast uses its own historical rates
+- **WHEN** an event follows an applied `ultrafast` setting
+- **THEN** it uses explicit Ultrafast rates for its model, date, and context band, or remains incomplete when those rates are unavailable
+- **AND** human and JSON reports identify it separately from Fast
+
 #### Scenario: Unsupported tier is not guessed
-- **WHEN** a usage event has an applied tier other than a recognized Standard or Fast value
+- **WHEN** a usage event has an applied tier other than a recognized Standard, Fast, or Ultrafast value
 - **THEN** the report marks its price incomplete without substituting another tier
 
 ### Requirement: Pricing selects the event's effective rate grid
@@ -56,7 +61,7 @@ The system SHALL select rates using the event model, event date, attributed tier
 - **THEN** each event uses only the rate set effective on its own date
 
 ### Requirement: Uncertain combinations preserve incomplete-cost semantics
-The system SHALL return a complete best-effort estimate when every included usage event can use explicit or fallback Standard/Fast pricing and every consumed token component has an effective rate. It SHALL count post-release assumed-Standard tokens separately. Unsupported explicit tiers or unavailable rate cells SHALL retain known costs, expose the affected usage as unpriced, and mark the complete estimate unavailable.
+The system SHALL return a complete best-effort estimate when every included usage event can use explicit or fallback Standard/Fast/Ultrafast pricing and every consumed token component has an effective rate. It SHALL count post-release assumed-Standard tokens separately. Unsupported explicit tiers or unavailable rate cells SHALL retain known costs, expose the affected usage as unpriced, and mark the complete estimate unavailable.
 
 #### Scenario: Fast marker predates durable stable support
 - **WHEN** a Fast usage event predates stable `0.144.0` at 2026-07-09T16:47:12Z

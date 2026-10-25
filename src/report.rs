@@ -959,6 +959,7 @@ fn service_tier_key(tier: &ServiceTier) -> &str {
         ServiceTier::Standard => "standard",
         ServiceTier::AssumedStandard => "assumed_standard",
         ServiceTier::Fast => "fast",
+        ServiceTier::Ultrafast => "ultrafast",
         ServiceTier::Unpriced(value) => value,
     }
 }
@@ -1407,6 +1408,30 @@ mod tests {
         assert_eq!(report.tree.estimated_cost_usd, None);
         assert!(report.tree.known_model_cost_usd > 0.0);
         assert_eq!(report.tree.unpriced_models["unpriced-model"], 20);
+    }
+
+    #[test]
+    fn ultrafast_rollout_is_priced_and_survives_cache_reuse() {
+        let home = TempDir::new().unwrap();
+        write_jsonl(
+            &home,
+            "sessions/root.jsonl",
+            &[
+                json!({"type": "session_meta", "timestamp": "2026-10-08T12:00:00Z", "payload": {"id": "root", "source": "cli"}}),
+                json!({"type": "turn_context", "payload": {"model": "gpt-6.1-sol"}}),
+                json!({"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {"service_tier": "ultrafast"}}}),
+                json!({"type": "event_msg", "timestamp": "2026-10-08T12:00:01Z", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 100, "total_tokens": 100}}}}),
+            ],
+        );
+        for _ in 0..2 {
+            let report = build("root", home.path()).unwrap();
+            assert_eq!(report.tree.estimated_cost_usd, Some(0.0012));
+            assert!(report.tree.unpriced_service_tiers.is_empty());
+            assert_eq!(
+                report.by_model["gpt-6.1-sol"].by_service_tier["ultrafast"].estimated_cost_usd,
+                Some(0.0012)
+            );
+        }
     }
 
     #[test]

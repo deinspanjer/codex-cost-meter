@@ -20,6 +20,7 @@ pub(crate) enum ServiceTier {
     Standard,
     AssumedStandard,
     Fast,
+    Ultrafast,
     Unpriced(String),
 }
 
@@ -63,6 +64,7 @@ struct PricePoint {
     cache_write_input: Option<f64>,
     output: Option<f64>,
     fast: Option<Rates>,
+    ultrafast: Option<Rates>,
     long_context: Option<TierRates>,
 }
 
@@ -78,6 +80,7 @@ struct Rates {
 struct TierRates {
     standard: Rates,
     fast: Option<Rates>,
+    ultrafast: Option<Rates>,
 }
 
 impl PricePoint {
@@ -87,6 +90,7 @@ impl PricePoint {
             return match tier {
                 ServiceTier::Standard | ServiceTier::AssumedStandard => Some(rates.standard),
                 ServiceTier::Fast => rates.fast,
+                ServiceTier::Ultrafast => rates.ultrafast,
                 ServiceTier::Unpriced(_) => None,
             };
         }
@@ -98,6 +102,7 @@ impl PricePoint {
                 output: self.output,
             }),
             ServiceTier::Fast => self.fast,
+            ServiceTier::Ultrafast => self.ultrafast,
             ServiceTier::Unpriced(_) => None,
         }
     }
@@ -110,9 +115,11 @@ impl PricePoint {
             output: self.output,
         }];
         rates.extend(self.fast);
+        rates.extend(self.ultrafast);
         if let Some(long_context) = self.long_context {
             rates.push(long_context.standard);
             rates.extend(long_context.fast);
+            rates.extend(long_context.ultrafast);
         }
         rates.into_iter()
     }
@@ -363,6 +370,60 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
+
+    #[test]
+    fn ultrafast_uses_its_own_effective_date_context_and_component_rates() {
+        let catalog = Catalog::embedded().unwrap();
+        for (model, boundary, short, long) in [
+            (
+                "gpt-6-astra",
+                datetime!(2026-09-29 0:00 UTC),
+                20.43,
+                38.61012,
+            ),
+            (
+                "gpt-6.1-sol",
+                datetime!(2026-10-08 0:00 UTC),
+                4.08,
+                7.710024,
+            ),
+        ] {
+            // 252K ordinary input, 10K reads, 10K writes, and 15K output.
+            // Above the threshold, all components use long-context rates.
+            for (input, expected) in [(272_000, short), (272_001, long)] {
+                let usage = Usage {
+                    input,
+                    cached_input: 10_000,
+                    cache_write_input: 10_000,
+                    output: 15_000,
+                };
+                let before = Some(boundary - time::Duration::seconds(1));
+                assert_eq!(
+                    catalog
+                        .cost(model, before, &ServiceTier::Ultrafast, usage)
+                        .complete,
+                    None
+                );
+                for at in [Some(boundary), None] {
+                    let cost = catalog.cost(model, at, &ServiceTier::Ultrafast, usage);
+                    assert!((cost.complete.unwrap() - expected).abs() < 1e-12, "{model}");
+                }
+                // Adding a tier must not reprice Standard or Fast history.
+                for tier in [ServiceTier::Standard, ServiceTier::Fast] {
+                    assert_eq!(
+                        catalog.cost(model, before, &tier, usage),
+                        catalog.cost(model, Some(boundary), &tier, usage)
+                    );
+                }
+                assert_eq!(
+                    catalog
+                        .cost("gpt-6-sol", None, &ServiceTier::Ultrafast, usage)
+                        .complete,
+                    None
+                );
+            }
+        }
+    }
 
     #[test]
     fn prices_new_sol_and_luna_models_by_release_context_and_tier() {
