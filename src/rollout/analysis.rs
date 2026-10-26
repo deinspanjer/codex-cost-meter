@@ -8,7 +8,7 @@ use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     pricing::{ServiceTier, Usage},
-    rollout::discovery::{ForkHistoryMode, JsonlReadError, RolloutRecord, read_jsonl},
+    rollout::discovery::{ForkHistoryMode, JsonlReadError, RolloutRecord, read_rollout},
 };
 
 const FIRST_PUBLIC_FAST_RELEASE: OffsetDateTime = datetime!(2026-03-03 05:35:04 UTC);
@@ -142,7 +142,7 @@ pub(crate) fn replay_prefix_len(parent: &RolloutRecord, child: &RolloutRecord) -
     let mut session_meta_count = 0;
     let mut embeds_parent = false;
     let mut child_usage = Vec::new();
-    if read_jsonl(&child.path, |line| {
+    if read_rollout(child, |line| {
         let Ok(item) = serde_json::from_slice::<Value>(line) else {
             child_usage.push(None);
             return;
@@ -175,7 +175,7 @@ pub(crate) fn replay_prefix_len(parent: &RolloutRecord, child: &RolloutRecord) -
     };
 
     let mut parent_usage = Vec::new();
-    if read_jsonl(&parent.path, |line| {
+    if read_rollout(parent, |line| {
         let Ok(item) = serde_json::from_slice::<Value>(line) else {
             parent_usage.push(None);
             return;
@@ -230,7 +230,7 @@ pub(crate) fn analyze_skipping(
     let mut valid_turns = HashSet::new();
     let mut turn_contexts = HashMap::new();
 
-    read_jsonl(&record.path, |line| {
+    read_rollout(record, |line| {
         let Ok(item) = serde_json::from_slice::<Value>(line) else {
             return;
         };
@@ -277,7 +277,7 @@ pub(crate) fn analyze_skipping(
     let mut service_tier = ServiceTier::Unpriced("missing".into());
     let mut previous_total = None;
     let mut replay_records_remaining = replay_prefix_len;
-    let summary = read_jsonl(&record.path, |line| {
+    let summary = read_rollout(record, |line| {
         let Ok(item) = serde_json::from_slice::<Value>(line) else {
             stats.malformed_lines += 1;
             stats.incomplete_usage = true;
@@ -695,6 +695,8 @@ mod tests {
             kind,
             cwd: None,
             path,
+            page_start: None,
+            pages: Vec::new(),
         }
     }
 
@@ -794,6 +796,8 @@ mod tests {
             kind: RolloutKind::Root,
             cwd: None,
             path: parent_path,
+            page_start: None,
+            pages: Vec::new(),
         };
         let mut child = RolloutRecord {
             id: "child".into(),
@@ -802,6 +806,8 @@ mod tests {
             kind: RolloutKind::Root,
             cwd: None,
             path: child_path.clone(),
+            page_start: None,
+            pages: Vec::new(),
         };
         let child_meta = json!({"type": "session_meta", "timestamp": "2026-08-13T12:01:00Z", "payload": {"id": "child"}});
         let embedded_parent = json!({"type": "session_meta", "timestamp": "2026-08-13T12:00:00Z", "payload": {"id": "parent"}});

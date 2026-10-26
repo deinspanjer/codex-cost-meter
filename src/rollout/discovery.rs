@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
-    io::{self, BufRead, BufReader},
+    io::{self, BufRead, BufReader, Read},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -10,7 +10,7 @@ use rusqlite::{Connection, OpenFlags, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{cache::RolloutCache, date_filter::Filter};
 
@@ -44,6 +44,14 @@ pub(crate) struct RolloutRecord {
     pub kind: RolloutKind,
     pub cwd: Option<String>,
     pub path: PathBuf,
+    pub page_start: Option<(u64, OffsetDateTime)>,
+    pub pages: Vec<RolloutPage>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RolloutPage {
+    pub path: PathBuf,
+    pub ordinal: u64,
 }
 
 #[derive(Debug)]
@@ -179,8 +187,8 @@ impl RolloutIndex {
                     );
                     indexed_file();
                 }
+                let all_paths_resolved = candidates.len() == paths.len();
                 let mut records = resolve_duplicates(candidates);
-                let all_paths_resolved = records.len() == paths.len();
                 retain_workset(&mut records, ids);
                 (warnings.is_empty()
                     && all_paths_resolved
@@ -461,11 +469,7 @@ fn unindexed_rollout_paths(home: &Path, indexed: &HashSet<PathBuf>) -> Option<Ve
                 let path = entry.path();
                 if file_type.is_dir() {
                     directories.push(path);
-                } else if file_type.is_file()
-                    && path
-                        .extension()
-                        .is_some_and(|extension| extension == "jsonl")
-                    && !indexed.contains(&path)
+                } else if file_type.is_file() && is_rollout_path(&path) && !indexed.contains(&path)
                 {
                     unindexed.push(path);
                 }
@@ -539,11 +543,7 @@ fn scan_root(
             };
             if file_type.is_dir() {
                 directories.push(path);
-            } else if file_type.is_file()
-                && path
-                    .extension()
-                    .is_some_and(|extension| extension == "jsonl")
-            {
+            } else if file_type.is_file() && is_rollout_path(&path) {
                 scan_file(
                     &path,
                     candidates,
@@ -566,6 +566,16 @@ fn scan_file(
     malformed_lines_skipped: &mut usize,
     cache: Option<&RolloutCache>,
 ) {
+    // SQLite can retain the original name after Codex compresses an idle rollout.
+    let compressed = path.with_extension("jsonl.zst");
+    let path = if !path.exists()
+        && path.extension().is_some_and(|ext| ext == "jsonl")
+        && compressed.is_file()
+    {
+        compressed.as_path()
+    } else {
+        path
+    };
     let modified = match fs::metadata(path).and_then(|metadata| metadata.modified()) {
         Ok(modified) => modified,
         Err(error) => {
@@ -623,6 +633,78 @@ pub(crate) fn read_jsonl(
     })
 }
 
+fn is_rollout_path(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "jsonl")
+        || path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with(".jsonl.zst"))
+}
+
+/// Read one logical history, retaining normalization and turn state across pages.
+pub(crate) fn read_rollout(
+    record: &RolloutRecord,
+    mut visitor: impl FnMut(&[u8]),
+) -> Result<LineReadSummary, JsonlReadError> {
+    if record.pages.is_empty() {
+        return read_jsonl(&record.path, visitor);
+    }
+    let mut summary = LineReadSummary::default();
+    let mut overlap = HashSet::<Value>::new();
+    for (index, page) in record.pages.iter().enumerate() {
+        let next_start = record.pages[index + 1..]
+            .iter()
+            .map(|page| page.ordinal)
+            .min();
+        let mut next_overlap = HashSet::new();
+        if let Some(start) = next_start {
+            next_overlap.extend(
+                overlap
+                    .iter()
+                    .filter(|row| {
+                        row.get("ordinal")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|n| n >= start)
+                    })
+                    .cloned(),
+            );
+        }
+        let result = read_jsonl(&page.path, |line| {
+            let Ok(row) = serde_json::from_slice::<Value>(line) else {
+                visitor(line);
+                return;
+            };
+            // Each page repeats the session header; it is not embedded fork history.
+            if index > 0
+                && row.get("type").and_then(Value::as_str) == Some("session_meta")
+                && row
+                    .get("payload")
+                    .and_then(|payload| payload.get("id").or_else(|| payload.get("session_id")))
+                    .and_then(Value::as_str)
+                    == Some(record.id.as_str())
+            {
+                return;
+            }
+            // Ordinals can be reused at page boundaries. Only identical records
+            // are replay; distinct records sharing an ordinal must both survive.
+            let duplicate = overlap.contains(&row);
+            if let Some(start) = next_start
+                && row
+                    .get("ordinal")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|n| n >= start)
+            {
+                next_overlap.insert(row);
+            }
+            if !duplicate {
+                visitor(line);
+            }
+        })?;
+        summary.oversized_lines_skipped += result.oversized_lines_skipped;
+        overlap = next_overlap;
+    }
+    Ok(summary)
+}
+
 fn read_jsonl_until(
     path: &Path,
     mut visitor: impl FnMut(&[u8]) -> bool,
@@ -631,7 +713,17 @@ fn read_jsonl_until(
         path: path.to_path_buf(),
         source,
     })?;
-    let mut reader = BufReader::new(file);
+    let source: Box<dyn Read> = if path.extension().is_some_and(|ext| ext == "zst") {
+        Box::new(
+            zstd::stream::read::Decoder::new(file).map_err(|source| JsonlReadError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?,
+        )
+    } else {
+        Box::new(file)
+    };
+    let mut reader = BufReader::new(source);
     let mut line = Vec::with_capacity(INITIAL_JSONL_RECORD_BYTES);
     let mut oversized = false;
     let mut summary = LineReadSummary::default();
@@ -719,6 +811,13 @@ fn record_from_value(value: &Value, path: &Path) -> Option<RolloutRecord> {
             .and_then(Value::as_str)
             .map(str::to_owned),
         path: path.to_path_buf(),
+        page_start: value.get("ordinal").and_then(Value::as_u64).zip(
+            value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok()),
+        ),
+        pages: Vec::new(),
     })
 }
 
@@ -766,21 +865,56 @@ pub(crate) fn source_is_root(source: &str) -> bool {
 fn resolve_duplicates(
     candidates: Vec<(RolloutRecord, SystemTime)>,
 ) -> HashMap<String, RolloutRecord> {
-    let mut selected: HashMap<String, (RolloutRecord, SystemTime)> = HashMap::new();
+    type PageKey = (String, Option<(u64, OffsetDateTime)>);
+    let mut selected: HashMap<PageKey, (RolloutRecord, SystemTime)> = HashMap::new();
     for (record, modified) in candidates {
+        let key = (record.id.clone(), record.page_start);
         let replace = selected
-            .get(&record.id)
+            .get(&key)
             .is_none_or(|(previous, previous_modified)| {
                 modified > *previous_modified
                     || (modified == *previous_modified && record.path > previous.path)
             });
         if replace {
-            selected.insert(record.id.clone(), (record, modified));
+            selected.insert(key, (record, modified));
         }
     }
-    selected
+    let mut groups: HashMap<String, Vec<(RolloutRecord, SystemTime)>> = HashMap::new();
+    for (record, modified) in selected.into_values() {
+        groups
+            .entry(record.id.clone())
+            .or_default()
+            .push((record, modified));
+    }
+    groups
         .into_iter()
-        .map(|(id, (record, _))| (id, record))
+        .map(|(id, mut records)| {
+            records.sort_by(|(left, _), (right, _)| {
+                left.page_start
+                    .as_ref()
+                    .map(|(_, at)| at)
+                    .cmp(&right.page_start.as_ref().map(|(_, at)| at))
+                    .then_with(|| left.page_start.cmp(&right.page_start))
+            });
+            let mut record = records
+                .iter()
+                .max_by(|(left, lm), (right, rm)| {
+                    lm.cmp(rm).then_with(|| left.path.cmp(&right.path))
+                })
+                .unwrap()
+                .0
+                .clone();
+            if records.len() > 1 {
+                record.pages = records
+                    .into_iter()
+                    .map(|(page, _)| RolloutPage {
+                        path: page.path,
+                        ordinal: page.page_start.map_or(0, |(ordinal, _)| ordinal),
+                    })
+                    .collect();
+            }
+            (id, record)
+        })
         .collect()
 }
 
@@ -1315,6 +1449,8 @@ mod tests {
             kind: RolloutKind::Root,
             cwd: Some(cwd.into()),
             path: PathBuf::from(path),
+            page_start: None,
+            pages: Vec::new(),
         };
 
         let selected = resolve_duplicates(vec![
