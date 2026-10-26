@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.4.1]
+
+- Read Zstandard-compressed rollout histories and descendants without external tools.
+- Combine paginated session histories without dropping older pages or double-counting copied records; preserve usage, pricing attribution, and turns across page boundaries.
+
 ## [1.4.0]
 
 - Price explicit Ultrafast usage for GPT-6 Astra from September 29 and GPT-6.1 Sol from October 8, with dated short/long-context rates and separate report detail.

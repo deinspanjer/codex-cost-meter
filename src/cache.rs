@@ -8,7 +8,7 @@ use std::{
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
 use serde::{Deserialize, Serialize};
-use time::Duration;
+use time::{Duration, OffsetDateTime};
 
 use crate::{
     pricing::Usage,
@@ -19,8 +19,8 @@ use crate::{
 };
 
 const CACHE_FILENAME: &str = "codex-cost-meter.sqlite";
-const DISCOVERY_VERSION: i64 = 2;
-const ANALYSIS_VERSION: i64 = 6;
+const DISCOVERY_VERSION: i64 = 3;
+const ANALYSIS_VERSION: i64 = 7;
 
 pub(crate) struct RolloutCache {
     path: PathBuf,
@@ -44,6 +44,7 @@ struct CachedDiscovery {
     fork_history_mode: Option<ForkHistoryMode>,
     kind: RolloutKind,
     cwd: Option<String>,
+    page_start: Option<(u64, OffsetDateTime)>,
     malformed_lines_skipped: usize,
     oversized_lines_skipped: usize,
 }
@@ -135,6 +136,8 @@ impl RolloutCache {
                 kind: cached.kind,
                 cwd: cached.cwd,
                 path: path.to_path_buf(),
+                page_start: cached.page_start,
+                pages: Vec::new(),
             },
             malformed_lines_skipped: cached.malformed_lines_skipped,
             oversized_lines_skipped: cached.oversized_lines_skipped,
@@ -156,6 +159,7 @@ impl RolloutCache {
             fork_history_mode: record.fork_history_mode.clone(),
             kind: record.kind.clone(),
             cwd: record.cwd.clone(),
+            page_start: record.page_start,
             malformed_lines_skipped,
             oversized_lines_skipped,
         };
@@ -262,6 +266,11 @@ impl RolloutCache {
     }
 
     pub(crate) fn analyze(&self, record: &RolloutRecord) -> Result<RolloutStats, AnalysisError> {
+        // A page can change independently of the current path. Never reuse a
+        // single-file cache entry for a logical history spanning multiple files.
+        if !record.pages.is_empty() {
+            return analyze(record);
+        }
         let before = file_revision(&record.path);
         if !self.refresh
             && let Some(revision) = before
@@ -656,6 +665,8 @@ mod tests {
             kind: RolloutKind::Root,
             cwd: None,
             path,
+            page_start: None,
+            pages: Vec::new(),
         }
     }
 
@@ -718,6 +729,8 @@ mod tests {
             kind: RolloutKind::Root,
             cwd: None,
             path: path.clone(),
+            page_start: None,
+            pages: Vec::new(),
         };
         let cache = RolloutCache::open(home.path(), false);
         cache.store_discovery(&record, 0, 0);
@@ -840,6 +853,8 @@ mod tests {
             kind: RolloutKind::Root,
             cwd: None,
             path,
+            page_start: None,
+            pages: Vec::new(),
         };
         let cache = RolloutCache::open(home.path(), false);
 

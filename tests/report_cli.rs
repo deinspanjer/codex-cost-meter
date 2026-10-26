@@ -95,6 +95,164 @@ fn report_with_home(home: &Path, thread_id: &str, json: bool) -> Output {
     command.output().unwrap()
 }
 
+fn compress_rollout(path: &Path, remove_original: bool) -> std::path::PathBuf {
+    let compressed = path.with_extension("jsonl.zst");
+    fs::write(
+        &compressed,
+        zstd::encode_all(fs::read(path).unwrap().as_slice(), 1).unwrap(),
+    )
+    .unwrap();
+    if remove_original {
+        fs::remove_file(path).unwrap();
+    }
+    compressed
+}
+
+#[test]
+fn paginated_compressed_history_preserves_usage_turns_descendants_and_cache_freshness() {
+    let home = TempDir::new().unwrap();
+    let first = home.path().join("sessions/older.jsonl");
+    let current = home.path().join("sessions/current.jsonl");
+    let child = home.path().join("archived_sessions/child.jsonl");
+    let token = |ordinal: u64, at: &str, last: u64, total: u64| {
+        json!({
+            "ordinal": ordinal, "timestamp": at, "type": "event_msg",
+            "payload": {"type": "token_count", "info": {
+                "last_token_usage": {"input_tokens": last, "total_tokens": last},
+                "total_token_usage": {"input_tokens": total, "total_tokens": total}
+            }}
+        })
+    };
+    let overlap = token(8, "2026-08-13T12:00:02Z", 100, 200);
+    let mut first_rows = vec![
+        json!({"ordinal": 0, "timestamp": "2026-08-13T12:00:00Z", "type": "session_meta", "payload": {"id": "root", "cwd": "/project"}}),
+        json!({"ordinal": 1, "type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {"service_tier": "standard"}}}),
+        json!({"ordinal": 2, "type": "turn_context", "payload": {"turn_id": "turn", "model": "gpt-5.6-terra"}}),
+        json!({"ordinal": 3, "timestamp": "2026-08-13T12:00:00Z", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn"}}),
+        token(4, "2026-08-13T12:00:01Z", 100, 100),
+        overlap.clone(),
+    ];
+    write_jsonl(&first, &first_rows);
+    // Simultaneous compressed/plain representations of one page count once.
+    compress_rollout(&first, false);
+    write_jsonl(
+        &current,
+        &[
+            json!({"ordinal": 8, "timestamp": "2026-08-13T12:00:03Z", "type": "session_meta", "payload": {"id": "root", "cwd": "/project"}}),
+            overlap,
+            // An ordinal can be reused for a different, real usage event.
+            token(8, "2026-08-13T12:00:03Z", 50, 250),
+            json!({"ordinal": 9, "timestamp": "2026-08-13T12:00:04Z", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn"}}),
+        ],
+    );
+    write_jsonl(
+        &child,
+        &dated_rollout(
+            "child",
+            Some("root"),
+            Path::new("/project"),
+            "gpt-5.6-terra",
+            "2026-08-13T12:00:00Z",
+            "2026-08-13T12:00:01Z",
+            40,
+        ),
+    );
+    compress_rollout(&child, true);
+    let db = Connection::open(home.path().join("state_5.sqlite")).unwrap();
+    db.execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, created_at INTEGER, updated_at INTEGER); CREATE TABLE thread_spawn_edges (parent_thread_id TEXT, child_thread_id TEXT PRIMARY KEY);").unwrap();
+    for (id, path) in [("root", &current), ("child", &child)] {
+        db.execute(
+            "INSERT INTO threads VALUES (?1, ?2, NULL, NULL)",
+            params![id, path.to_str().unwrap()],
+        )
+        .unwrap();
+    }
+    db.execute(
+        "INSERT INTO thread_spawn_edges VALUES ('root', 'child')",
+        [],
+    )
+    .unwrap();
+    let check = |expected_root, expected_tree| {
+        let output = report_with_home(home.path(), "root", true);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["rollout"]["input_tokens"], expected_root);
+        assert_eq!(report["tree"]["input_tokens"], expected_tree);
+        assert_eq!(report["tree"]["rollout_count"], 2);
+        assert_eq!(report["rollout"]["turns"], 1);
+        assert_eq!(report["rollout"]["completed_or_aborted_turns"], 1);
+        assert_eq!(report["rollout"]["total_turn_duration_seconds"], 4.0);
+        assert!(report["tree"]["estimated_cost_usd"].is_number());
+        report
+    };
+    let before = check(250, 290);
+    check(250, 290); // warm cache must retain every page and compressed descendant
+    // A request with reset totals in an older page must invalidate the combined
+    // result, even though the latest page's size and mtime are unchanged.
+    first_rows.insert(4, token(3, "2026-08-13T12:00:00.5Z", 30, 500));
+    write_jsonl(&first, &first_rows);
+    check(280, 320);
+
+    // Corpus/date pruning must also discover unindexed older pages and compressed paths.
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .args([
+            "report",
+            "--all",
+            "--since",
+            "2026-08-13",
+            "--through",
+            "2026-08-13",
+            "--json",
+            "--codex-home",
+        ])
+        .arg(home.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let corpus: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(corpus["tree"]["input_tokens"], 320);
+    assert!(before["tree"]["known_model_cost_usd"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn damaged_compressed_descendant_marks_report_incomplete() {
+    let home = fixture_home();
+    let child = home.path().join("sessions/child.jsonl");
+    write_jsonl(
+        &child,
+        &dated_rollout(
+            "child",
+            Some("root"),
+            Path::new("/project"),
+            "gpt-5.6-terra",
+            "2026-08-13T12:00:00Z",
+            "2026-08-13T12:00:01Z",
+            40,
+        ),
+    );
+    let compressed = compress_rollout(&child, true);
+    let mut bytes = fs::read(&compressed).unwrap();
+    bytes.truncate(bytes.len() - 3);
+    fs::write(compressed, bytes).unwrap();
+    let output = report_with_home(home.path(), "root", true);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["tree"]["estimated_cost_usd"], Value::Null);
+    assert_eq!(report["tree"]["incomplete_input"], true);
+}
+
 #[test]
 fn corpus_and_project_reports_share_date_grouping_and_empty_bucket_rules() {
     let home = TempDir::new().unwrap();
