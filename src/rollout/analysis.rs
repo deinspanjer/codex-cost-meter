@@ -522,6 +522,7 @@ fn applied_service_tier(payload: &Map<String, Value>) -> ServiceTier {
     match value {
         "default" | "standard" => ServiceTier::Standard,
         "fast" | "priority" => ServiceTier::Fast,
+        "ultrafast" => ServiceTier::Ultrafast,
         "" => ServiceTier::Unpriced("empty".into()),
         value => ServiceTier::Unpriced(value.into()),
     }
@@ -874,6 +875,8 @@ mod tests {
             token_event(usage(1, 0, 0), usage(4, 0, 0)),
             settings(Some("flex")),
             token_event(usage(1, 0, 0), usage(5, 0, 0)),
+            settings(Some("ultrafast")),
+            token_event(usage(1, 0, 0), usage(6, 0, 0)),
         ]);
 
         assert_eq!(
@@ -888,6 +891,7 @@ mod tests {
                 ServiceTier::Standard,
                 ServiceTier::AssumedStandard,
                 ServiceTier::Unpriced("flex".into()),
+                ServiceTier::Ultrafast,
             ]
         );
     }

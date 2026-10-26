@@ -275,14 +275,19 @@ fn human_modes(model: &ModelReport) -> Vec<HumanMode> {
             detail: merge_tiers([standard, assumed].into_iter().flatten()),
         });
     }
-    if let Some(fast) = model.by_service_tier.get("fast") {
-        modes.push(HumanMode {
-            label: "Fast".into(),
-            detail: merge_tiers([fast]),
-        });
+    for (key, label) in [("fast", "Fast"), ("ultrafast", "Ultrafast")] {
+        if let Some(detail) = model.by_service_tier.get(key) {
+            modes.push(HumanMode {
+                label: label.into(),
+                detail: merge_tiers([detail]),
+            });
+        }
     }
     for (tier, detail) in &model.by_service_tier {
-        if !matches!(tier.as_str(), "standard" | "assumed_standard" | "fast") {
+        if !matches!(
+            tier.as_str(),
+            "standard" | "assumed_standard" | "fast" | "ultrafast"
+        ) {
             modes.push(HumanMode {
                 label: format!("Tier unavailable ({})", safe_text(tier)),
                 detail: merge_tiers([detail]),
@@ -777,6 +782,13 @@ mod tests {
         assert!(rendered.contains("gpt-5.6-terra [Fast]"));
         assert!(rendered.contains("By model"));
         assert!(!rendered.contains("↳ Fast"));
+
+        let model = report.by_model.get_mut("gpt-5.6-terra").unwrap();
+        let detail = model.by_service_tier.remove("fast").unwrap();
+        model.by_service_tier.insert("ultrafast".into(), detail);
+        let rendered = human(&report);
+        assert!(rendered.contains("gpt-5.6-terra [Ultrafast]"));
+        assert!(!rendered.contains("Tier unavailable"));
     }
 
     #[test]

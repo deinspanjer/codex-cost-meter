@@ -20,7 +20,7 @@ use crate::{
 
 const CACHE_FILENAME: &str = "codex-cost-meter.sqlite";
 const DISCOVERY_VERSION: i64 = 2;
-const ANALYSIS_VERSION: i64 = 5;
+const ANALYSIS_VERSION: i64 = 6;
 
 pub(crate) struct RolloutCache {
     path: PathBuf,
@@ -672,6 +672,28 @@ mod tests {
                 .collect::<String>(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn analysis_from_before_ultrafast_support_is_reparsed() {
+        let home = TempDir::new().unwrap();
+        let path = home.path().join("rollout.jsonl");
+        write_rollout(&path, "root", 100);
+        let record = record(path.clone(), "root");
+        let cache = RolloutCache::open(home.path(), false);
+        cache.store_discovery(&record, 0, 0);
+        let mut stale = cache.analyze(&record).unwrap();
+        stale.known_usage.input = 999;
+        let revision = super::file_revision(&path).unwrap();
+        cache.store_analysis(&path, revision, &stale);
+        assert_eq!(cache.analyze(&record).unwrap().known_usage.input, 999);
+        let connection =
+            rusqlite::Connection::open(home.path().join(super::CACHE_FILENAME)).unwrap();
+        connection
+            .execute("UPDATE rollout_cache SET analysis_version = 5", [])
+            .unwrap();
+
+        assert_eq!(cache.analyze(&record).unwrap().known_usage.input, 100);
     }
 
     #[test]
