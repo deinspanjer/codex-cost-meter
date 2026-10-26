@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.4.0]
+
 - Price explicit Ultrafast usage for GPT-6 Astra from September 29 and GPT-6.1 Sol from October 8, with dated short/long-context rates and separate report detail.
 - Refresh pricing evidence through October 25 and document the 30-minute cache-write assumption now that 12-hour writes are available.
 
