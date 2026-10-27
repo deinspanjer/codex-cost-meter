@@ -29,6 +29,8 @@ pub(crate) enum Command {
         long_about = "Report usage and estimated API-list-price cost by task, project, or corpus.\n\nHuman output nests cached input under input and reasoning under output. Turn time sums recorded turn lifecycle intervals; all-agent and aggregate values can include overlapping work. A trailing + marks a known priced minimum when the complete estimate is unavailable.\n\nPricing uses the service tier recorded in rollout settings; the tier actually served is unavailable. Missing tier data is priced as assumed Standard and identified in human output. Internal model identities can use effective-dated public-model proxies whose boundaries are estimates, not observed routing or billing cutovers. Auto-review assumes ChatGPT sign-in and is free from the October 6, 2026 documentation observation date; API-key pricing and the actual policy start date are unverified.\n\nUse --json for exact token counts, full paths and identifiers, selection diagnostics, service-tier detail, pricing sources, and effective-dated model-proxy history."
     )]
     Report(ReportArgs),
+    #[command(about = "Show embedded API token rates without reading session storage.")]
+    Rates(RatesArgs),
     #[command(about = "Preview or apply bounded Codex task-title updates.")]
     Update(UpdateArgs),
     #[command(
@@ -55,6 +57,27 @@ Regenerate saved scripts after upgrading."#
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[command(about = "Remove the schedule and this executable.")]
     Uninstall,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct RatesArgs {
+    #[arg(long, help = "Show one exact model or proxy identity.")]
+    pub(crate) model: Option<String>,
+    #[arg(long, value_parser = parse_rate_date, help = "Select rates effective on this ISO date (YYYY-MM-DD); default: latest known.")]
+    pub(crate) as_of: Option<time::Date>,
+    #[arg(
+        long,
+        help = "Write rates and provenance as JSON; unknown prices are null."
+    )]
+    pub(crate) json: bool,
+}
+
+fn parse_rate_date(value: &str) -> Result<time::Date, String> {
+    time::Date::parse(
+        value,
+        time::macros::format_description!("[year]-[month]-[day]"),
+    )
+    .map_err(|_| "expected a valid ISO date (YYYY-MM-DD)".into())
 }
 
 #[derive(Debug, Args)]

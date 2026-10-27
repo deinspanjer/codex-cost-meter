@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Add an offline `rates` table with exact model filters, historical date selection, proxy targets, context/tier detail, and JSON output.
 - Recognize GPT-6.1 Terra with dated Standard/Fast and short/long-context pricing from its October 26 launch; review existing model rates against October 27 official sources.
 
 ## [1.4.1]

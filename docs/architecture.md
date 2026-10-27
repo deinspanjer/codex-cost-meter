@@ -12,6 +12,10 @@ Rollout discovery accepts `.jsonl` and `.jsonl.zst` files; the bundled Zstandard
 
 Bump `DISCOVERY_VERSION` when session-metadata interpretation or cached linkage changes, and bump `ANALYSIS_VERSION` when parsed `RolloutStats` semantics change. Pricing or report-only changes need neither bump because those calculations remain live.
 
+## Rate table
+
+The cross-platform `rates` command reads only the embedded pricing catalog. Its sorted snapshot and cost estimation share effective-date/proxy lookup; rendering preserves separate context bands, tiers, and unknown rate cells. It does not initialize session discovery, storage, or cache. `tests/rates_cli.rs` covers the CLI's exact components, historical and proxy boundaries, unknown cells, invalid selections, and storage independence.
+
 ## Shell completions
 
 `completions bash|zsh` uses `clap_complete` to generate scripts from the same Clap command definition as argument parsing.

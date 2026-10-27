@@ -36,6 +36,8 @@ use crate::{
 #[derive(Debug, ThisError)]
 enum AppError {
     #[error(transparent)]
+    Pricing(#[from] pricing::PricingError),
+    #[error(transparent)]
     Cli(#[from] cli::CliError),
     #[error(transparent)]
     DateFilter(#[from] date_filter::Error),
@@ -121,6 +123,18 @@ fn run_with_writers(
     stderr_is_terminal: bool,
 ) -> Result<(), AppError> {
     match cli.command {
+        Command::Rates(args) => {
+            let table =
+                pricing::Catalog::embedded()?.rate_table(args.model.as_deref(), args.as_of)?;
+            let rendered = if args.json {
+                format!("{}\n", output::json(&table)?)
+            } else {
+                output::rates_human(&table)
+            };
+            writer
+                .write_all(rendered.as_bytes())
+                .map_err(|source| AppError::WriteReport { source })
+        }
         Command::Completions(args) => {
             let shell = match args.shell {
                 cli::CompletionShell::Bash => clap_complete::Shell::Bash,

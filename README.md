@@ -30,6 +30,8 @@ The same date and grouping options work with project reports. Bounds and buckets
 
 For Homebrew upgrades, Cargo commands, direct downloads, and platform trust guidance, see [install and run](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#install-and-run).
 
+Inspect embedded API token prices without scanning sessions using `codex-cost-meter rates`. Add `--model gpt-6.1-terra`, `--as-of YYYY-MM-DD`, or `--json` for exact model selection, historical rates, or structured output. See [the rate table](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#show-the-rate-table).
+
 Human reports keep the result compact and show extra model or pricing detail only when it changes how to interpret the totals:
 
 ```text

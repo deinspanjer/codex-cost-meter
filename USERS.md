@@ -156,6 +156,23 @@ All-agent turn time sums overlapping work.
 Estimated API list cost using pricing dated 2026-09-29.
 ```
 
+## Show the rate table
+
+`rates` reads the catalog embedded in the executable without scanning sessions, opening Codex databases, creating a cache, or accessing the network:
+
+```text
+codex-cost-meter rates
+codex-cost-meter rates --model gpt-6.1-terra
+codex-cost-meter rates --as-of 2026-08-20
+codex-cost-meter rates --model codex-auto-review --as-of 2026-10-05 --json
+```
+
+By default it shows the latest known prices for every catalog model and proxy, sorted by model. `--model` matches one exact identity. `--as-of YYYY-MM-DD` selects the latest price and proxy target effective on or before that date; it does not retrieve newer data or infer future price changes. Models with no price at that date are omitted from the all-model view; an explicitly selected unknown or prelaunch model is an error. A date before the entire catalog returns an empty table.
+
+Each row identifies the requested model, priced-as target, price effective date, tier, inclusive gross-input context bounds, and input/cache-read/cache-write/output rates in USD per million tokens. Unknown cells display `unknown` (JSON `null`), never zero. Tiers with no catalog prices are omitted; unknown long-context prices for a listed tier remain visible. Rates are printed without currency rounding. JSON also includes the catalog review date, requested effective date, source URLs, and proxy effective date. The catalog can retain retired models and internal policy targets for historical estimates; their presence does not establish current availability.
+
+Cache-write prices assume 30-minute retention; 12-hour writes can cost more. Proxy targets carry the routing and authentication assumptions described above. The rate table describes catalog prices; the report's separate telemetry cutoff still prevents historical Fast cost attribution before persisted tier settings were available.
+
 ## Preview or apply title updates
 
 `update` selects root tasks only. It never changes a title unless `--apply` is present, so begin with a dry run and review every proposed `id: old -> new` line:
