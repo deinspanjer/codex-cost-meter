@@ -68,12 +68,46 @@ struct PricePoint {
     long_context: Option<TierRates>,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 struct Rates {
     input: Option<f64>,
     cached_input: Option<f64>,
     cache_write_input: Option<f64>,
     output: Option<f64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct RateTable {
+    pub(crate) catalog_as_of: String,
+    pub(crate) effective_on: Option<String>,
+    source: String,
+    units: &'static str,
+    cache_write_lifetime: &'static str,
+    pub(crate) rows: Vec<RateRow>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct RateRow {
+    pub(crate) model: String,
+    pub(crate) priced_as: String,
+    pub(crate) effective_from: String,
+    pub(crate) proxy_effective_from: Option<String>,
+    pub(crate) tier: &'static str,
+    pub(crate) min_input_tokens: u64,
+    pub(crate) max_input_tokens: Option<u64>,
+    #[serde(flatten)]
+    rates: Rates,
+}
+
+impl RateRow {
+    pub(crate) fn components(&self) -> [Option<f64>; 4] {
+        [
+            self.rates.input,
+            self.rates.cached_input,
+            self.rates.cache_write_input,
+            self.rates.output,
+        ]
+    }
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -166,6 +200,8 @@ struct RawCatalog {
 
 #[derive(Debug, Error)]
 pub(crate) enum PricingError {
+    #[error("no catalog rates for {model} at the selected date")]
+    NoRates { model: String },
     #[error("invalid pricing JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("negative rate for {model} effective {effective_from}")]
@@ -185,6 +221,104 @@ pub(crate) enum PricingError {
 }
 
 impl Catalog {
+    pub(crate) fn rate_table(
+        &self,
+        model: Option<&str>,
+        at: Option<Date>,
+    ) -> Result<RateTable, PricingError> {
+        let mut models = match model {
+            Some(model) => vec![model],
+            None => self
+                .histories
+                .keys()
+                .chain(self.proxies.keys())
+                .map(String::as_str)
+                .collect(),
+        };
+        models.sort_unstable();
+        let mut rows = Vec::new();
+        for model in models {
+            let Some((target, proxy_date, point)) = self.price_point(model, at) else {
+                continue;
+            };
+            let threshold = self.long_context_thresholds.get(target).copied();
+            for (tier, name) in [
+                (ServiceTier::Standard, "standard"),
+                (ServiceTier::Fast, "fast"),
+                (ServiceTier::Ultrafast, "ultrafast"),
+            ] {
+                if point.rates(false, &tier).is_none() && point.rates(true, &tier).is_none() {
+                    continue;
+                }
+                for long in [false, true] {
+                    if long && threshold.is_none() {
+                        continue;
+                    }
+                    let rates = point.rates(long, &tier).unwrap_or(Rates {
+                        input: None,
+                        cached_input: None,
+                        cache_write_input: None,
+                        output: None,
+                    });
+                    rows.push(RateRow {
+                        model: model.into(),
+                        priced_as: target.into(),
+                        effective_from: point.effective_from.to_string(),
+                        proxy_effective_from: proxy_date.map(|date| date.to_string()),
+                        tier: name,
+                        min_input_tokens: if long { threshold.unwrap() + 1 } else { 0 },
+                        max_input_tokens: if long { None } else { threshold },
+                        rates,
+                    });
+                }
+            }
+        }
+        if rows.is_empty()
+            && let Some(model) = model
+        {
+            return Err(PricingError::NoRates {
+                model: model.into(),
+            });
+        }
+        Ok(RateTable {
+            catalog_as_of: self.as_of.clone(),
+            effective_on: at.map(|date| date.to_string()),
+            source: self.source.clone(),
+            units: "USD per 1M tokens",
+            cache_write_lifetime: "30m",
+            rows,
+        })
+    }
+
+    fn price_point<'a>(
+        &'a self,
+        model: &'a str,
+        at: Option<Date>,
+    ) -> Option<(&'a str, Option<Date>, PricePoint)> {
+        let (target, proxy_date) = match self.proxies.get(model) {
+            None => (model, None),
+            Some(points) => {
+                let point = match at {
+                    None => points.last(),
+                    Some(at) => points
+                        .iter()
+                        .rev()
+                        .find(|point| point.effective_from.is_none_or(|date| date <= at)),
+                }?;
+                (point.target(), point.effective_from)
+            }
+        };
+        let history = self.histories.get(target)?;
+        let point = match at {
+            None => history.last(),
+            Some(at) => history
+                .iter()
+                .rev()
+                .find(|point| point.effective_from <= at),
+        }?;
+        Some((target, proxy_date, *point))
+    }
+
     pub(crate) fn embedded() -> Result<Self, PricingError> {
         Self::parse(include_str!("../data/model-prices.json"))
     }
@@ -279,40 +413,7 @@ impl Catalog {
                 complete: None,
             };
         }
-        let target = match self.proxies.get(model) {
-            None => model,
-            Some(points) => {
-                let point = match at {
-                    None => points.last(),
-                    Some(at) => points.iter().rev().find(|point| {
-                        point
-                            .effective_from
-                            .is_none_or(|effective_from| effective_from <= at.date())
-                    }),
-                };
-                let Some(point) = point else {
-                    return CostResult {
-                        known: 0.0,
-                        complete: None,
-                    };
-                };
-                point.target()
-            }
-        };
-        let Some(history) = self.histories.get(target) else {
-            return CostResult {
-                known: 0.0,
-                complete: None,
-            };
-        };
-        let rates = match at {
-            None => history.last(),
-            Some(at) => history
-                .iter()
-                .rev()
-                .find(|point| point.effective_from <= at.date()),
-        };
-        let Some(price_point) = rates else {
+        let Some((target, _, price_point)) = self.price_point(model, at.map(|at| at.date())) else {
             return CostResult {
                 known: 0.0,
                 complete: None,

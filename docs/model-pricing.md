@@ -4,6 +4,8 @@
 
 Pricing is an offline, reproducible estimate of API token list cost, not a Codex subscription bill. The executable embeds `data/model-prices.json`; editing that file affects newly built binaries. Reports recompute prices from cached usage facts, so a catalog-only update needs no cache-version bump or cache deletion. A parser classification change (such as recognizing a previously unsupported tier) requires an analysis-cache version bump so old classifications are reparsed.
 
+Inspect a built executable's catalog with `codex-cost-meter rates`, optionally `--model <EXACT_ID>`, `--as-of YYYY-MM-DD`, or `--json`. This reads no session storage and uses the same effective-date and proxy lookup as cost estimation. It preserves unknown components and exposes all catalog context bands, including unknown long-context cells for otherwise listed tiers. JSON distinguishes `catalog_as_of` (review date), `effective_on` (requested selection date or null for latest), each row's price `effective_from`, and `proxy_effective_from`. It exports default 30-minute write rates only. See the [user guide](../USERS.md#show-the-rate-table).
+
 ## Evidence and historical meaning
 
 Use official [API pricing](https://developers.openai.com/api/docs/pricing), the exact model's documentation, the [API changelog](https://developers.openai.com/api/docs/changelog), dated [OpenAI launch announcements](https://openai.com/news/), archived copies of those official pages, and the [Fast-mode guide](https://developers.openai.com/api/docs/guides/fast-mode). Previous sessions and research notes explain decisions and point to sources; reopen those sources before treating them as current evidence. Third-party catalogs and search snippets are discovery aids, not pricing authority.

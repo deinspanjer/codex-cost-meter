@@ -527,6 +527,45 @@ fn safe_text(value: &str) -> String {
         .join(" ")
 }
 
+pub(crate) fn rates_human(table: &crate::pricing::RateTable) -> String {
+    let mut rows = vec![vec![
+        "Model".into(),
+        "Priced as".into(),
+        "Effective".into(),
+        "Tier".into(),
+        "Input tokens".into(),
+        "Input".into(),
+        "Cache read".into(),
+        "Write (30m)".into(),
+        "Output".into(),
+    ]];
+    for row in &table.rows {
+        let context = match (row.min_input_tokens, row.max_input_tokens) {
+            (0, None) => "all".into(),
+            (0, Some(max)) => format!("<={max}"),
+            (min, _) => format!(">={min}"),
+        };
+        let mut cells = vec![
+            row.model.clone(),
+            row.priced_as.clone(),
+            row.effective_from.clone(),
+            row.tier.into(),
+            context,
+        ];
+        cells.extend(
+            row.components()
+                .map(|rate| rate.map_or_else(|| "unknown".into(), |rate| rate.to_string())),
+        );
+        rows.push(cells);
+    }
+    format!(
+        "API list rates: USD per 1M tokens; catalog reviewed {}.\nSelection: {}. Cache writes assume 30-minute retention.\n\n{}\nUnknown prices are unavailable, not zero. Proxy targets assume documented routing/authentication; dates are estimator boundaries.\n",
+        table.catalog_as_of,
+        table.effective_on.as_deref().unwrap_or("latest known"),
+        text_table(&rows)
+    )
+}
+
 fn text_table(rows: &[Vec<String>]) -> String {
     let widths = (0..rows.first().map_or(0, Vec::len))
         .map(|column| {
