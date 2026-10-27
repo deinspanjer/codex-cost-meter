@@ -52,6 +52,9 @@ pub(crate) fn human(report: &Report) -> String {
         counted(report.tree.rollout_count, "rollout", "rollouts")
     );
 
+    if let Some(range) = &report.date_range {
+        rendered.push_str(&format!("{}\n\n", range_text(range)));
+    }
     let mut rows = vec![(
         if kind == "root" { "Root" } else { "Selected" },
         &rollout.stats,
@@ -97,7 +100,7 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
         )
     };
 
-    if stats_are_empty(&report.tree) {
+    if stats_are_empty(&report.tree) && report.by_thread.is_none() {
         rendered.push_str("No usage in the selected scope or range.\n");
         return rendered;
     }
@@ -113,6 +116,31 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
                 .by_rollout_type
                 .iter()
                 .map(|(kind, stats)| (kind.as_str(), stats)),
+        ));
+    }
+    if let Some(threads) = &report.by_thread {
+        rendered.push_str("\nBy thread (self only)\n");
+        let labels = threads
+            .iter()
+            .map(|row| {
+                format!(
+                    "{} · {}",
+                    safe_text(&row.thread_id),
+                    safe_text(
+                        row.thread_name
+                            .as_deref()
+                            .or(row.agent_label.as_deref())
+                            .unwrap_or(&row.rollout_type)
+                    )
+                )
+            })
+            .collect::<Vec<_>>();
+        rendered.push_str(&stats_table(
+            "Thread",
+            threads
+                .iter()
+                .zip(&labels)
+                .map(|(row, label)| (label.as_str(), &row.stats)),
         ));
     }
     if !report.groups.is_empty() {
@@ -385,7 +413,11 @@ fn counted(value: usize, singular: &str, plural: &str) -> String {
 }
 
 fn date_range(report: &ProjectReport) -> String {
-    match (&report.date_range.since, &report.date_range.through) {
+    range_text(&report.date_range)
+}
+
+fn range_text(range: &crate::report::DateRangeReport) -> String {
+    match (&range.since, &range.through) {
         (None, None) => "Lifetime".into(),
         (since, through) => format!(
             "{} through {}",
@@ -744,6 +776,7 @@ mod tests {
         let mut tree = stats(None, 0.17);
         tree.rollout_count = 2;
         Report {
+            date_range: None,
             has_unusable_rollout: false,
             rollout: RolloutReport {
                 rollout_id: "root".into(),
@@ -876,6 +909,7 @@ mod tests {
         assert!(!rendered.contains("By model"));
 
         let mut project = ProjectReport {
+            by_thread: None,
             selection: ProjectSelection {
                 target: "Project".into(),
                 resolver: "project_name",
@@ -1021,6 +1055,7 @@ mod tests {
     fn project_human_keeps_material_qualifications_visible() {
         let report = report();
         let mut project = ProjectReport {
+            by_thread: None,
             selection: ProjectSelection {
                 target: "Project".into(),
                 resolver: "project_name",

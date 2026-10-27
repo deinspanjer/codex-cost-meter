@@ -38,6 +38,8 @@ pub(crate) enum ReportError {
 #[derive(Debug, Serialize)]
 pub(crate) struct Report {
     pub rollout: RolloutReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date_range: Option<DateRangeReport>,
     pub tree: StatsReport,
     pub by_model: BTreeMap<String, ModelReport>,
     pub by_rollout_type: BTreeMap<String, StatsReport>,
@@ -50,6 +52,8 @@ pub(crate) struct Report {
 #[derive(Debug, Serialize)]
 pub(crate) struct ProjectReport {
     pub selection: ProjectSelection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by_thread: Option<Vec<ThreadReport>>,
     pub date_range: DateRangeReport,
     pub tree: StatsReport,
     pub by_model: BTreeMap<String, ModelReport>,
@@ -57,6 +61,30 @@ pub(crate) struct ProjectReport {
     pub groups: Vec<GroupReport>,
     pub pricing: PricingReport,
     pub incomplete_input_warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ThreadReport {
+    pub thread_id: String,
+    pub parent_thread_id: Option<String>,
+    pub thread_name: Option<String>,
+    pub rollout_type: String,
+    pub agent_label: Option<String>,
+    pub stats: StatsReport,
+}
+
+impl DateRangeReport {
+    fn from_filter(filter: &Filter) -> Self {
+        Self {
+            since: filter.since.map(|date| date.to_string()),
+            through: filter.through.map(|date| date.to_string()),
+            group_by: filter
+                .group_by
+                .iter()
+                .map(|dimension| dimension.as_str())
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -222,15 +250,6 @@ impl ReportContext {
         })
     }
 
-    pub(crate) fn build_with_progress(
-        &self,
-        thread_id: &str,
-        progress: &mut Progress,
-    ) -> Result<Report, ReportError> {
-        progress.start_analysis(self.rollout_count(thread_id));
-        self.build_inner(thread_id, Some(progress))
-    }
-
     fn build_inner(
         &self,
         thread_id: &str,
@@ -244,6 +263,7 @@ impl ReportContext {
             self.session_index(),
             &self.cache,
             progress,
+            None,
         )
     }
 
@@ -345,6 +365,7 @@ impl ReportContext {
         let mut by_type = BTreeMap::<String, Aggregate>::new();
         let mut grouped = BTreeMap::<GroupKey, Aggregate>::new();
         let mut root_totals = BTreeMap::<String, Aggregate>::new();
+        let mut by_thread = filter.by_thread.then(Vec::new);
         let mut warnings = self
             .index
             .warnings()
@@ -379,6 +400,21 @@ impl ReportContext {
                         .or_default()
                         .add_unreadable();
                 }
+                if let Some(rows) = &mut by_thread {
+                    let mut missing = Aggregate::default();
+                    missing.add_unreadable();
+                    rows.push(ThreadReport {
+                        thread_id: id.clone(),
+                        parent_thread_id: None,
+                        thread_name: self
+                            .session_index
+                            .entry(&id)
+                            .map(|entry| entry.name.clone()),
+                        rollout_type: "unknown".into(),
+                        agent_label: None,
+                        stats: missing.report(),
+                    });
+                }
                 warnings.insert("selected root rollout could not be read".into());
                 if let Some(progress) = progress.as_deref_mut() {
                     progress.analyzed_rollout();
@@ -392,8 +428,12 @@ impl ReportContext {
                 .as_deref()
                 .and_then(|parent_id| self.index.record(parent_id))
                 .map_or(0, |parent| replay_prefix_len(parent, record));
+            let mut own = Aggregate::default();
             match self.cache.analyze_with_replay(record, replay_prefix_len) {
                 Ok(stats) => {
+                    if by_thread.is_some() {
+                        own.add_filtered(&stats, &self.catalog, Some(filter))?;
+                    }
                     if filter.is_filtered() {
                         total.add_scoped(&stats, &self.catalog, filter)?;
                         type_total.add_scoped(&stats, &self.catalog, filter)?;
@@ -432,6 +472,7 @@ impl ReportContext {
                     }
                 }
                 Err(_) => {
+                    own.add_unreadable();
                     total.add_unreadable();
                     type_total.add_unreadable();
                     if let Some(root) = roots.as_ref().and_then(|roots| roots.get(&id)) {
@@ -442,6 +483,24 @@ impl ReportContext {
                     }
                     warnings.insert(format!("rollout {id} could not be read"));
                 }
+            }
+            if let Some(rows) = &mut by_thread {
+                rows.push(ThreadReport {
+                    thread_id: id,
+                    parent_thread_id: record.parent_id.clone(),
+                    thread_name: self
+                        .session_index
+                        .entry(&record.id)
+                        .map(|entry| entry.name.clone()),
+                    rollout_type: record.kind.report_type(),
+                    agent_label: match &record.kind {
+                        crate::rollout::discovery::RolloutKind::OtherSubagent(label) => {
+                            Some(label.clone())
+                        }
+                        _ => None,
+                    },
+                    stats: own.report(),
+                });
             }
             if let Some(progress) = progress.as_deref_mut() {
                 progress.analyzed_rollout();
@@ -486,15 +545,8 @@ impl ReportContext {
         }
         Ok(ProjectReport {
             selection,
-            date_range: DateRangeReport {
-                since: filter.since.map(|date| date.to_string()),
-                through: filter.through.map(|date| date.to_string()),
-                group_by: filter
-                    .group_by
-                    .iter()
-                    .map(|dimension| dimension.as_str())
-                    .collect(),
-            },
+            by_thread,
+            date_range: DateRangeReport::from_filter(filter),
             tree,
             by_model,
             by_rollout_type: by_type
@@ -757,6 +809,20 @@ impl Aggregate {
         }
     }
 
+    fn add_filtered(
+        &mut self,
+        stats: &RolloutStats,
+        catalog: &Catalog,
+        filter: Option<&Filter>,
+    ) -> Result<(), crate::date_filter::Error> {
+        if let Some(filter) = filter.filter(|filter| filter.is_filtered()) {
+            self.add_scoped(stats, catalog, filter)
+        } else {
+            self.add(stats, catalog);
+            Ok(())
+        }
+    }
+
     fn add_scoped(
         &mut self,
         stats: &RolloutStats,
@@ -974,9 +1040,25 @@ pub(crate) fn build_with_progress(
     codex_home: &Path,
     progress: &mut Progress,
     cache: Rc<RolloutCache>,
+    filter: &Filter,
 ) -> Result<Report, ReportError> {
-    ReportContext::new_for_cached_with_progress(codex_home, &[thread_id.into()], cache, progress)?
-        .build_with_progress(thread_id, progress)
+    let context = ReportContext::new_for_cached_with_progress(
+        codex_home,
+        &[thread_id.into()],
+        cache,
+        progress,
+    )?;
+    progress.start_analysis(context.rollout_count(thread_id));
+    build_with_state(
+        thread_id,
+        codex_home,
+        &context.index,
+        &context.catalog,
+        &context.session_index,
+        &context.cache,
+        Some(progress),
+        Some(filter),
+    )
 }
 
 #[cfg(test)]
@@ -994,9 +1076,11 @@ fn build_with_index(
         &Snapshot::load(codex_home),
         &RolloutCache::open(codex_home, false),
         None,
+        None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_with_state(
     thread_id: &str,
     codex_home: &Path,
@@ -1005,6 +1089,7 @@ fn build_with_state(
     session_index: &Snapshot,
     cache: &RolloutCache,
     mut progress: Option<&mut Progress>,
+    filter: Option<&Filter>,
 ) -> Result<Report, ReportError> {
     let root = index
         .record(thread_id)
@@ -1053,15 +1138,28 @@ fn build_with_state(
         let type_stats = by_rollout_type.entry(rollout_type).or_default();
         match cache.analyze_with_replay(record, replay_prefix_len) {
             Ok(stats) => {
-                tree_stats.add(&stats, catalog);
-                type_stats.add(&stats, catalog);
+                if filter.is_some_and(|filter| filter.is_filtered())
+                    && (stats.unattributed_tokens > 0
+                        || stats.events.iter().any(|event| event.at.is_none())
+                        || stats
+                            .turn_events
+                            .iter()
+                            .any(|turn| turn.started_at.is_none()))
+                {
+                    warnings.push(
+                        "date-filtered report excluded usage or turns without a usable timestamp"
+                            .into(),
+                    );
+                }
+                tree_stats.add_filtered(&stats, catalog, filter)?;
+                type_stats.add_filtered(&stats, catalog, filter)?;
                 if id == thread_id {
                     has_unusable_rollout = stats.malformed_lines > 0
                         || stats.oversized_lines > 0
                         || stats.invalid_usage_records > 0;
-                    root_stats.add(&stats, catalog);
+                    root_stats.add_filtered(&stats, catalog, filter)?;
                 } else {
-                    children_stats.add(&stats, catalog);
+                    children_stats.add_filtered(&stats, catalog, filter)?;
                 }
             }
             Err(source) if id == thread_id => {
@@ -1087,6 +1185,9 @@ fn build_with_state(
     let root_stats = root_stats.report();
     let children_stats = children_stats.report();
     Ok(Report {
+        date_range: filter
+            .filter(|filter| filter.is_filtered())
+            .map(DateRangeReport::from_filter),
         rollout: RolloutReport {
             rollout_id: thread_id.into(),
             rollout_type: root.kind.report_type(),

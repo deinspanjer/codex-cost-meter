@@ -10,7 +10,7 @@ Exact and project reporting may use Codex's SQLite projection to select rollout 
 
 Rollout discovery accepts `.jsonl` and `.jsonl.zst` files; the bundled Zstandard decoder streams decompressed bytes through the same bounded-record reader. SQLite paths that still name a compressed file's former `.jsonl` name resolve to its `.jsonl.zst` sibling. Native page headers identify pages by ordinal and timestamp within a session. Copies of a page retain the existing modification-time/path tie-break; distinct pages are read in timestamp order as one logical rollout. Repeated page headers are omitted, and exact overlapping records are deduplicated while distinct records with reused ordinals survive. Normalization, model/tier attribution, turn lifecycles, and legacy fork replay operate over the combined stream. Multi-page analysis bypasses single-file cache entries so changes to any page are immediately visible; discovery and single-file analysis remain cached.
 
-Bump `DISCOVERY_VERSION` when session-metadata interpretation or cached linkage changes, and bump `ANALYSIS_VERSION` when parsed `RolloutStats` semantics change. Pricing or report-only changes need neither bump because those calculations remain live.
+Bump `DISCOVERY_VERSION` when session-metadata interpretation or cached linkage changes, and bump `ANALYSIS_VERSION` when parsed `RolloutStats` semantics change. Pricing or report-only changes need neither bump because those calculations remain live. Per-thread report rows are transient views over existing usage facts; exact-thread date bounds reuse the same scoped event aggregation as project/corpus reports.
 
 ## Rate table
 
