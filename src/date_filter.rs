@@ -55,6 +55,7 @@ pub(crate) struct Filter {
     pub(crate) group_by: Vec<GroupDimension>,
     pub(crate) include_empty: bool,
     pub(crate) timezone: Option<TimeZone>,
+    pub(crate) by_thread: bool,
 }
 
 impl Filter {
@@ -159,7 +160,7 @@ pub(crate) enum Error {
     TimeDimension,
     #[error("--group-by cannot repeat a dimension")]
     DuplicateDimension,
-    #[error("date and grouping options are only available for project or --all reports")]
+    #[error("grouping and --by-thread are only available for project or --all reports")]
     ExactThread,
     #[error("could not resolve the host local timezone: {0}")]
     Timezone(#[source] jiff::Error),
@@ -209,6 +210,7 @@ impl TryFrom<Options> for Filter {
             group_by: options.group_by,
             include_empty: options.include_empty,
             timezone,
+            by_thread: false,
         })
     }
 }

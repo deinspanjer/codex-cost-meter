@@ -117,7 +117,7 @@ codex-cost-meter report --all --since 2026-08-01 --through 2026-08-31 --group-by
 
 For `--all`, available Codex thread metadata narrows discovery before rollout files are opened: `--since` skips indexed rollouts last updated before its local date, and `--through` skips indexed rollouts created after its local date. Each bound works independently. Unindexed rollouts, unusable timestamps, and unavailable metadata remain candidates, so the command falls back toward a full scan rather than hiding data. Retained rollouts still use the event- and turn-level filtering below. This metadata pruning does not apply to project reports.
 
-Date filtering attributes tokens and cost to each usage-event timestamp, while turns and their complete duration are attributed to the turn's start date. Data with neither an event nor session timestamp remains in unfiltered lifetime totals but is excluded and visibly marked incomplete in a filtered report. Date and grouping options apply to `--all`, `--project`, and the bare current-project report, not an exact session-ID report. JSON retains the overall `tree` total and adds `date_range`, `by_rollout_type`, and `groups`.
+Date filtering attributes tokens and cost to each usage-event timestamp, while turns and their complete duration are attributed to the turn's start date. Data with neither an event nor session timestamp remains in unfiltered lifetime totals but is excluded and visibly marked incomplete in a filtered report. Date bounds also apply to exact session-ID reports: `Root`/`Selected` and `All agents` are filtered independently. Grouping and `--by-thread` apply to `--all`, `--project`, and the bare current-project report. JSON retains the overall `tree` total and adds `date_range`, `by_rollout_type`, and `groups`.
 
 Cost uses the embedded historical catalog and is an API-list-price approximation, not a billing record. Each request uses the service tier most recently applied in the rollout settings; current Codex token records do not reveal the tier actually served, so a Fast or Ultrafast request that was downgraded cannot be corrected to Standard pricing. Missing tier metadata is priced at Standard rates. Human output reports the total tokens using this assumption once; JSON contributes them to `assumed_standard_tokens` and `by_service_tier.assumed_standard`. Explicit `ultrafast` settings use their own dated rates for GPT-6 Astra (from September 29, 2026) and GPT-6.1 Sol (from October 8, 2026). Unsupported model/tier/date combinations remain unpriced. Cache-write counts use the default 30-minute write price; the parsed rollout counters do not distinguish the new 12-hour writes, which cost more. Estimates can understate cost when those writes are used.
 
@@ -128,6 +128,18 @@ The Auto-review policy was refreshed October 6, 2026; ordinary model rates were 
 Fast first appeared in public opt-in prerelease `0.108.0-alpha.2` on March 2 PST (March 3 UTC) and became generally available in stable `0.111.0` on March 5. Applied-tier snapshots were not persisted until stable `0.144.0` on July 9. The analyzer uses each usage event's timestamp because the canonical `session_meta.cli_version` identifies the rollout creator, not the client that may later resume and append to it.
 
 Requests above a model's published input threshold use its long-context rate cell. Explicit Priority/Fast markers at or after stable `0.144.0` use the model-specific Fast premium captured in the embedded catalog; missing attribution always uses the Standard rate, with post-release assumptions labeled separately. Fast markers before the exact stable `0.144.0` publication time remain unpriced because durable rollout evidence was not yet available. Unsupported applied tiers appear under `unpriced_service_tiers`; unavailable model, date, tier, context, or token-component rates appear under `unpriced_models`. Both make the complete estimate unavailable while preserving known cost. Reasoning is included in output usage; cache reads are included in input usage. See the [attribution evidence](docs/research/fast-mode-attribution-evidence.md) for the official timeline and representative local chronology.
+
+### Per-thread and selected-thread date reports
+
+```text
+codex-cost-meter report --project . --since 2026-10-20 --through 2026-10-27 --by-thread
+codex-cost-meter report --all --since 2026-10-20 --by-thread --json
+codex-cost-meter report <THREAD_ID> --since 2026-10-20 --through 2026-10-27 --json
+```
+
+`--by-thread` adds self-only detail for each selected thread, including descendants, exactly once. JSON `by_thread` rows contain `thread_id`, `parent_thread_id`, `thread_name`, `rollout_type`, an optional recorded `agent_label`, and nested `stats`. Human output labels the table “By thread (self only)”. Thread IDs are authoritative; titles and agent labels can be missing and are not inferred from prompts. Zero-usage selected threads remain visible. Token and known-cost sums reconcile to the aggregate; discovery or parsing gaps still qualify completeness.
+
+For an exact thread, JSON `.rollout.estimated_cost_usd` is self-only and `.tree.estimated_cost_usd` includes descendants. Both use the requested event-date window. `date_range` is added for bounded exact-thread reports. Dates price usage by event time even when a turn started before the window; turn counts/durations continue to follow turn-start attribution. Lifetime reports and title updates retain their existing behavior. No persistent storage or cache-version change is required.
 
 ### Larger worked example
 

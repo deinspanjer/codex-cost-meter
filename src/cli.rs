@@ -211,6 +211,11 @@ pub(crate) struct ReportArgs {
         help = "Include zero-valued time buckets; requires --since and --through."
     )]
     pub(crate) include_empty: bool,
+    #[arg(
+        long,
+        help = "Include self-only per-thread detail for project or corpus reports."
+    )]
+    pub(crate) by_thread: bool,
     #[arg(long, help = "Write the report as JSON.")]
     pub(crate) json: bool,
     #[arg(
@@ -323,10 +328,7 @@ impl ReportArgs {
     ) -> Result<crate::date_filter::Filter, crate::date_filter::Error> {
         if self.thread_id.is_some()
             && self.project.is_none()
-            && (self.since.is_some()
-                || self.through.is_some()
-                || !self.group_by.is_empty()
-                || self.include_empty)
+            && (!self.group_by.is_empty() || self.by_thread || self.include_empty)
         {
             return Err(crate::date_filter::Error::ExactThread);
         }
@@ -335,6 +337,10 @@ impl ReportArgs {
             through: self.through,
             group_by: self.group_by.clone(),
             include_empty: self.include_empty,
+        })
+        .map(|mut filter| {
+            filter.by_thread = self.by_thread;
+            filter
         })
     }
 }

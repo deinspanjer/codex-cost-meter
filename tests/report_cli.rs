@@ -499,10 +499,10 @@ fn corpus_dates_prune_only_metadata_backed_out_of_range_rollouts() {
 }
 
 #[test]
-fn date_options_reject_exact_threads_and_unbounded_empty_rows() {
+fn grouping_rejects_exact_threads_and_unbounded_empty_rows() {
     let home = fixture_home();
     let exact = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
-        .args(["report", "root", "--since", "2026-08-01", "--codex-home"])
+        .args(["report", "root", "--group-by", "day", "--codex-home"])
         .arg(home.path())
         .output()
         .unwrap();
@@ -1388,4 +1388,162 @@ fn unreadable_scan_directory_is_reported_as_partial_input_when_permissions_apply
                 .unwrap()
                 .contains("rollout scan could not read"))
     );
+}
+
+fn detail_command(home: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
+        .arg("report")
+        .args(args)
+        .arg("--codex-home")
+        .arg(home)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn thread_detail_and_exact_dates_reconcile_self_only_usage_and_cached_results() {
+    let home = TempDir::new().unwrap();
+    let project = home.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let mut rows = dated_rollout(
+        "wio",
+        None,
+        &project,
+        "gpt-6.1-sol",
+        "2026-10-19T12:00:00Z",
+        "2026-10-22T12:00:00Z",
+        100,
+    );
+    rows[4]["payload"]["info"]["total_token_usage"] =
+        json!({"input_tokens":100,"total_tokens":100});
+    rows.insert(5, json!({"type":"event_msg","timestamp":"2026-10-21T12:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200,"total_tokens":200},"total_token_usage":{"input_tokens":300,"total_tokens":300}}}}));
+    write_jsonl(&home.path().join("sessions/wio.jsonl"), &rows);
+    write_jsonl(
+        &home.path().join("archived_sessions/reviewer.jsonl"),
+        &dated_rollout(
+            "reviewer",
+            Some("wio"),
+            &project,
+            "gpt-6.1-sol",
+            "2026-10-21T12:00:00Z",
+            "2026-10-21T12:01:00Z",
+            50,
+        ),
+    );
+    write_jsonl(
+        &home.path().join("session_index.jsonl"),
+        &[json!({"id":"wio","thread_name":"WIO","updated_at":"2026-10-22T12:00:00Z"})],
+    );
+    let args = [
+        "--all",
+        "--by-thread",
+        "--since",
+        "2026-10-20",
+        "--through",
+        "2026-10-27",
+        "--json",
+    ];
+    let output = detail_command(home.path(), &args);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let threads = report["by_thread"].as_array().unwrap();
+    assert_eq!(threads.len(), 2);
+    let own = threads
+        .iter()
+        .find(|row| row["thread_id"] == "wio")
+        .unwrap();
+    let child = threads
+        .iter()
+        .find(|row| row["thread_id"] == "reviewer")
+        .unwrap();
+    assert_eq!(own["stats"]["input_tokens"], 200);
+    assert_eq!(own["stats"]["turns"], 0); // Usage is in-window even though turn start is not.
+    assert_eq!(own["thread_name"], "WIO");
+    assert_eq!(child["parent_thread_id"], "wio");
+    assert_eq!(child["stats"]["input_tokens"], 50);
+    assert_eq!(report["tree"]["input_tokens"], 250);
+    let sum: f64 = threads
+        .iter()
+        .map(|row| row["stats"]["estimated_cost_usd"].as_f64().unwrap())
+        .sum();
+    assert!((sum - report["tree"]["estimated_cost_usd"].as_f64().unwrap()).abs() < 1e-12);
+    let cached = detail_command(home.path(), &args);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&cached.stdout).unwrap(),
+        report
+    );
+    let project_report = detail_command(
+        home.path(),
+        &[
+            "--project",
+            project.to_str().unwrap(),
+            "--by-thread",
+            "--since",
+            "2026-10-20",
+            "--json",
+        ],
+    );
+    let project_report: Value = serde_json::from_slice(&project_report.stdout).unwrap();
+    assert_eq!(project_report["by_thread"], report["by_thread"]);
+    let exact = detail_command(
+        home.path(),
+        &[
+            "wio",
+            "--since",
+            "2026-10-20",
+            "--through",
+            "2026-10-27",
+            "--json",
+        ],
+    );
+    assert!(exact.status.success(), "{}", stderr(&exact));
+    let exact: Value = serde_json::from_slice(&exact.stdout).unwrap();
+    assert_eq!(exact["rollout"]["input_tokens"], 200);
+    assert_eq!(exact["tree"]["input_tokens"], 250);
+    assert_eq!(exact["date_range"]["since"], "2026-10-20");
+    let lifetime: Value =
+        serde_json::from_slice(&report_with_home(home.path(), "wio", true).stdout).unwrap();
+    assert_eq!(lifetime["rollout"]["input_tokens"], 300);
+    assert_eq!(lifetime["tree"]["input_tokens"], 350);
+    let human = detail_command(
+        home.path(),
+        &["--all", "--by-thread", "--since", "2026-10-20"],
+    );
+    let human = String::from_utf8(human.stdout).unwrap();
+    assert!(
+        human.contains("By thread (self only)")
+            && human.contains("WIO")
+            && human.contains("reviewer")
+    );
+}
+
+#[test]
+fn dated_thread_detail_preserves_unknown_cost_and_zero_usage() {
+    let home = TempDir::new().unwrap();
+    write_jsonl(
+        &home.path().join("sessions/unknown.jsonl"),
+        &dated_rollout(
+            "unknown",
+            None,
+            Path::new("/project"),
+            "unpublished-model",
+            "2026-10-21T12:00:00Z",
+            "2026-10-21T12:01:00Z",
+            50,
+        ),
+    );
+    let output = detail_command(
+        home.path(),
+        &["--all", "--by-thread", "--since", "2026-10-20", "--json"],
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(report["by_thread"][0]["stats"]["estimated_cost_usd"].is_null());
+    assert_eq!(
+        report["by_thread"][0]["stats"]["unpriced_models"]["unpublished-model"],
+        50
+    );
+    let output = detail_command(home.path(), &["unknown", "--since", "2026-10-23", "--json"]);
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["rollout"]["input_tokens"], 0);
+    assert_eq!(report["rollout"]["estimated_cost_usd"], 0.0);
 }

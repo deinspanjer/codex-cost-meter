@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add self-only per-thread detail to project/corpus reports and event-date bounds to exact-thread reports.
+
 ## [1.5.0]
 
 - Add an offline `rates` table with exact model filters, historical date selection, proxy targets, context/tier detail, and JSON output.

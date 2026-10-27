@@ -187,6 +187,7 @@ fn run_with_writers(
                         &home,
                         &mut progress,
                         Rc::clone(&cache),
+                        &filter,
                     )?;
                     if args.json {
                         Ok(format!("{}\n", output::json(&report)?))
