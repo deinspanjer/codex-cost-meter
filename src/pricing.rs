@@ -426,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn prices_new_sol_and_luna_models_by_release_context_and_tier() {
+    fn prices_new_sol_terra_and_luna_models_by_release_context_and_tier() {
         let catalog = Catalog::embedded().unwrap();
         // Independent totals include 10K cache reads, 10K cache writes, 15K output.
         for (model, release, short, long) in [
@@ -443,6 +443,12 @@ mod tests {
                 0.680,
                 1.285004,
             ),
+            (
+                "gpt-6.1-terra",
+                datetime!(2026-10-26 0:00 UTC),
+                0.340,
+                0.642502,
+            ),
         ] {
             for (input, standard) in [(272_000, short), (272_001, long)] {
                 let usage = Usage {
@@ -451,6 +457,14 @@ mod tests {
                     cache_write_input: 10_000,
                     output: 15_000,
                 };
+                if model == "gpt-6.1-terra" {
+                    assert_eq!(
+                        catalog
+                            .cost(model, None, &ServiceTier::Ultrafast, usage)
+                            .complete,
+                        None
+                    );
+                }
                 for (tier, expected) in [
                     (ServiceTier::Standard, standard),
                     (ServiceTier::Fast, standard * 2.0),
