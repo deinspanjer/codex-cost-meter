@@ -12,6 +12,7 @@ mod schedule;
 mod session_index;
 mod title;
 mod update;
+mod usage_export;
 
 use std::{
     error::Error,
@@ -35,6 +36,8 @@ use crate::{
 
 #[derive(Debug, ThisError)]
 enum AppError {
+    #[error(transparent)]
+    Export(#[from] usage_export::ExportError),
     #[error(transparent)]
     Pricing(#[from] pricing::PricingError),
     #[error(transparent)]
@@ -152,6 +155,59 @@ fn run_with_writers(
             let cache = Rc::new(cache::RolloutCache::open(&home, args.refresh));
             let mut progress =
                 progress::Progress::new(error_writer, args.progress, stderr_is_terminal);
+            if args.jsonl {
+                let result = (|| -> Result<(), AppError> {
+                    if args.all {
+                        let context = report::ReportContext::new_corpus_cached_with_progress(
+                            &home,
+                            &filter,
+                            Rc::clone(&cache),
+                            &mut progress,
+                        )
+                        .map_err(ReportError::from)?;
+                        usage_export::write(
+                            &context,
+                            usage_export::Selection::All,
+                            &filter,
+                            writer,
+                        )?;
+                    } else if args.project.is_some() || args.thread_id.is_none() {
+                        let scope = project::resolve_with_progress(
+                            &home,
+                            args.thread_id.as_deref(),
+                            args.project.as_deref().unwrap_or(""),
+                            &filter,
+                            &mut progress,
+                            Rc::clone(&cache),
+                        )?;
+                        usage_export::write(
+                            &scope.context,
+                            usage_export::Selection::Project(&scope.selection, &scope.thread_ids),
+                            &filter,
+                            writer,
+                        )?;
+                    } else if let Some(id) = args.thread_id.as_deref() {
+                        let context = report::ReportContext::new_for_cached_with_progress(
+                            &home,
+                            &[id.into()],
+                            Rc::clone(&cache),
+                            &mut progress,
+                        )
+                        .map_err(ReportError::from)?;
+                        usage_export::write(
+                            &context,
+                            usage_export::Selection::Thread(id),
+                            &filter,
+                            writer,
+                        )?;
+                    }
+                    Ok(())
+                })();
+                progress.finish();
+                drop(progress);
+                write_cache_notices(error_writer, &cache);
+                return result;
+            }
             let rendered = (|| -> Result<String, AppError> {
                 if args.all {
                     let context = report::ReportContext::new_corpus_cached_with_progress(

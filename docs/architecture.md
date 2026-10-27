@@ -12,6 +12,12 @@ Rollout discovery accepts `.jsonl` and `.jsonl.zst` files; the bundled Zstandard
 
 Bump `DISCOVERY_VERSION` when session-metadata interpretation or cached linkage changes, and bump `ANALYSIS_VERSION` when parsed `RolloutStats` semantics change. Pricing or report-only changes need neither bump because those calculations remain live. Per-thread report rows are transient views over existing usage facts; exact-thread date bounds reuse the same scoped event aggregation as project/corpus reports.
 
+## Usage exports
+
+`usage_export` writes versioned metadata, normalized usage rows, and a terminal summary as JSONL. Project selection resolves to a `ProjectScope` shared by ordinary reporting and export; it does not parse usage until a consumer requests aggregation or export. The located reader preserves segment path and physical decompressed line number across bounded reading, page-header suppression, and overlap deduplication. An optional normalization observer receives transient source/turn/ordinal metadata only after replay suppression, delta normalization, attribution, and usage validation. Export always reparses; it leaves `UsageEvent`, `CachedStats`, and analysis-cache version 7 unchanged. Usage facts stay in memory for the current thread and are discarded afterward; the app does not retain export files. Read/write failures return nonzero without a success summary. Completeness and unknown rates remain separate from successful stream termination.
+
+The reporting CLI tests verify dated self/tree separation, self-only per-thread reconciliation, physical locators across compressed pages and reused ordinals, counter resets, legacy replay, selection parity, unknown/untimestamped data, and fresh/cached export equality. A failed-writer test checks that a partial stream cannot end with a successful summary.
+
 ## Rate table
 
 The cross-platform `rates` command reads only the embedded pricing catalog. Its sorted snapshot and cost estimation share effective-date/proxy lookup; rendering preserves separate context bands, tiers, and unknown rate cells. It does not initialize session discovery, storage, or cache. `tests/rates_cli.rs` covers the CLI's exact components, historical and proxy boundaries, unknown cells, invalid selections, and storage independence.

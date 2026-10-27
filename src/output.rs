@@ -129,6 +129,8 @@ pub(crate) fn project_human(report: &ProjectReport) -> String {
                     safe_text(
                         row.thread_name
                             .as_deref()
+                            .map(strip_canonical_suffix)
+                            .filter(|name| !name.trim().is_empty())
                             .or(row.agent_label.as_deref())
                             .unwrap_or(&row.rollout_type)
                     )

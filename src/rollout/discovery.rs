@@ -645,8 +645,18 @@ pub(crate) fn read_rollout(
     record: &RolloutRecord,
     mut visitor: impl FnMut(&[u8]),
 ) -> Result<LineReadSummary, JsonlReadError> {
+    read_rollout_located(record, |_, _, line| visitor(line))
+}
+
+pub(crate) fn read_rollout_located(
+    record: &RolloutRecord,
+    mut visitor: impl FnMut(&Path, u64, &[u8]),
+) -> Result<LineReadSummary, JsonlReadError> {
     if record.pages.is_empty() {
-        return read_jsonl(&record.path, visitor);
+        return read_jsonl_located_until(&record.path, |line, bytes| {
+            visitor(&record.path, line, bytes);
+            false
+        });
     }
     let mut summary = LineReadSummary::default();
     let mut overlap = HashSet::<Value>::new();
@@ -668,10 +678,10 @@ pub(crate) fn read_rollout(
                     .cloned(),
             );
         }
-        let result = read_jsonl(&page.path, |line| {
+        let result = read_jsonl_located_until(&page.path, |line_number, line| {
             let Ok(row) = serde_json::from_slice::<Value>(line) else {
-                visitor(line);
-                return;
+                visitor(&page.path, line_number, line);
+                return false;
             };
             // Each page repeats the session header; it is not embedded fork history.
             if index > 0
@@ -682,7 +692,7 @@ pub(crate) fn read_rollout(
                     .and_then(Value::as_str)
                     == Some(record.id.as_str())
             {
-                return;
+                return false;
             }
             // Ordinals can be reused at page boundaries. Only identical records
             // are replay; distinct records sharing an ordinal must both survive.
@@ -696,8 +706,9 @@ pub(crate) fn read_rollout(
                 next_overlap.insert(row);
             }
             if !duplicate {
-                visitor(line);
+                visitor(&page.path, line_number, line);
             }
+            false
         })?;
         summary.oversized_lines_skipped += result.oversized_lines_skipped;
         overlap = next_overlap;
@@ -708,6 +719,13 @@ pub(crate) fn read_rollout(
 fn read_jsonl_until(
     path: &Path,
     mut visitor: impl FnMut(&[u8]) -> bool,
+) -> Result<LineReadSummary, JsonlReadError> {
+    read_jsonl_located_until(path, |_, line| visitor(line))
+}
+
+fn read_jsonl_located_until(
+    path: &Path,
+    mut visitor: impl FnMut(u64, &[u8]) -> bool,
 ) -> Result<LineReadSummary, JsonlReadError> {
     let file = File::open(path).map_err(|source| JsonlReadError::Read {
         path: path.to_path_buf(),
@@ -726,6 +744,7 @@ fn read_jsonl_until(
     let mut reader = BufReader::new(source);
     let mut line = Vec::with_capacity(INITIAL_JSONL_RECORD_BYTES);
     let mut oversized = false;
+    let mut line_number = 1;
     let mut summary = LineReadSummary::default();
 
     loop {
@@ -735,7 +754,7 @@ fn read_jsonl_until(
         })?;
         if buffer.is_empty() {
             if !line.is_empty() && !oversized {
-                visitor(&line);
+                visitor(line_number, &line);
             } else if oversized {
                 summary.oversized_lines_skipped += 1;
             }
@@ -756,11 +775,12 @@ fn read_jsonl_until(
         if newline.is_some() {
             if oversized {
                 summary.oversized_lines_skipped += 1;
-            } else if visitor(&line) {
+            } else if visitor(line_number, &line) {
                 return Ok(summary);
             }
             line.clear();
             oversized = false;
+            line_number += 1;
         }
     }
 }

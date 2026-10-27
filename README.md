@@ -28,6 +28,8 @@ codex-cost-meter report --all --since 2026-08-01 --through 2026-08-31 --group-by
 
 The same date and grouping options work with project reports. Bounds and buckets use the operating system's local calendar; `--all` also uses available Codex created/updated timestamps to avoid opening indexed rollouts that cannot overlap the range. See [corpus and date reports](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#corpus-and-date-reports) for the complete contract.
 
+Use `report --project . --since 2026-10-20 --by-thread` for self-only thread detail, or add `--jsonl` instead of `--by-thread` to export normalized usage events with source locators and pricing. Exact-thread reports also accept `--since` and `--through`. See the [reporting and export guide](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#per-thread-and-selected-thread-date-reports).
+
 For Homebrew upgrades, Cargo commands, direct downloads, and platform trust guidance, see [install and run](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#install-and-run).
 
 Inspect embedded API token prices without scanning sessions using `codex-cost-meter rates`. Add `--model gpt-6.1-terra`, `--as-of YYYY-MM-DD`, or `--json` for exact model selection, historical rates, or structured output. See [the rate table](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#show-the-rate-table).

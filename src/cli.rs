@@ -218,6 +218,8 @@ pub(crate) struct ReportArgs {
     pub(crate) by_thread: bool,
     #[arg(long, help = "Write the report as JSON.")]
     pub(crate) json: bool,
+    #[arg(long, conflicts_with_all = ["json", "by_thread", "group_by", "include_empty"], help = "Reparse and export normalized usage events as JSON Lines, with metadata and summary records.")]
+    pub(crate) jsonl: bool,
     #[arg(
         long,
         help = "Show report progress even when stderr is not a terminal."

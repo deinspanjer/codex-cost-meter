@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -8,7 +11,9 @@ use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     pricing::{ServiceTier, Usage},
-    rollout::discovery::{ForkHistoryMode, JsonlReadError, RolloutRecord, read_rollout},
+    rollout::discovery::{
+        ForkHistoryMode, JsonlReadError, RolloutRecord, read_rollout, read_rollout_located,
+    },
 };
 
 const FIRST_PUBLIC_FAST_RELEASE: OffsetDateTime = datetime!(2026-03-03 05:35:04 UTC);
@@ -30,6 +35,16 @@ pub(crate) struct UsageEvent {
     pub usage: Usage,
     pub reasoning_output: u64,
 }
+
+pub(crate) struct EventSource<'a> {
+    pub path: &'a Path,
+    pub line: u64,
+    pub ordinal: Option<u64>,
+    pub turn_id: Option<&'a str>,
+    pub timestamp_source: &'static str,
+}
+
+type UsageObserver<'a> = &'a mut dyn FnMut(&UsageEvent, &EventSource<'_>);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub(crate) struct TurnEvent {
@@ -223,6 +238,14 @@ pub(crate) fn analyze_skipping(
     record: &RolloutRecord,
     replay_prefix_len: usize,
 ) -> Result<RolloutStats, AnalysisError> {
+    analyze_observed(record, replay_prefix_len, None)
+}
+
+pub(crate) fn analyze_observed(
+    record: &RolloutRecord,
+    replay_prefix_len: usize,
+    mut observer: Option<UsageObserver<'_>>,
+) -> Result<RolloutStats, AnalysisError> {
     let mut session_meta_count = 0;
     let mut session_at = None;
     let mut creator_version = None;
@@ -277,7 +300,7 @@ pub(crate) fn analyze_skipping(
     let mut service_tier = ServiceTier::Unpriced("missing".into());
     let mut previous_total = None;
     let mut replay_records_remaining = replay_prefix_len;
-    let summary = read_rollout(record, |line| {
+    let summary = read_rollout_located(record, |source_path, source_line, line| {
         let Ok(item) = serde_json::from_slice::<Value>(line) else {
             stats.malformed_lines += 1;
             stats.incomplete_usage = true;
@@ -428,13 +451,32 @@ pub(crate) fn analyze_skipping(
         }
         let event_at = timestamp_or_incomplete(&item, &mut stats);
         let at = event_at.or(session_at);
-        stats.events.push(UsageEvent {
+        let event = UsageEvent {
             model,
             at,
             service_tier: tier_for_usage(&service_tier, event_at, creator_version.as_deref()),
             usage: normalized.usage,
             reasoning_output: normalized.reasoning_output,
-        });
+        };
+        if let Some(observer) = &mut observer {
+            observer(
+                &event,
+                &EventSource {
+                    path: source_path,
+                    line: source_line,
+                    ordinal: item.get("ordinal").and_then(Value::as_u64),
+                    turn_id: active_turn.as_deref(),
+                    timestamp_source: if event_at.is_some() {
+                        "event"
+                    } else if session_at.is_some() {
+                        "session"
+                    } else {
+                        "unknown"
+                    },
+                },
+            );
+        }
+        stats.events.push(event);
     })?;
 
     stats.oversized_lines = summary.oversized_lines_skipped;
