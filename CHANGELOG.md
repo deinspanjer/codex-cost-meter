@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.6.0]
+
 - Add reparsed JSONL usage-event exports with physical source locators, priced costs, provenance, and completeness summaries without storing export metadata in the analysis cache.
 
 - Add self-only per-thread detail to project/corpus reports and event-date bounds to exact-thread reports.
