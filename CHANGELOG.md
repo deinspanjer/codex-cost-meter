@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Recognize GPT-6.1 Terra with dated Standard/Fast and short/long-context pricing from its October 26 launch; review existing model rates against October 27 official sources.
+
 ## [1.4.1]
 
 - Read Zstandard-compressed rollout histories and descendants without external tools.
