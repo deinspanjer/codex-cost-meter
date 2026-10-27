@@ -185,6 +185,28 @@ Each row identifies the requested model, priced-as target, price effective date,
 
 Cache-write prices assume 30-minute retention; 12-hour writes can cost more. Proxy targets carry the routing and authentication assumptions described above. The rate table describes catalog prices; the report's separate telemetry cutoff still prevents historical Fast cost attribution before persisted tier settings were available.
 
+## Export usage events
+
+```text
+codex-cost-meter report <THREAD_ID> --jsonl > usage.jsonl
+codex-cost-meter report --project . --since 2026-10-20 --through 2026-10-27 --jsonl > weekly-usage.jsonl
+codex-cost-meter report --all --since 2026-10-20 --jsonl > all-usage.jsonl
+```
+
+`--jsonl` reparses the selected rollouts through the same normalization, page-merging, replay, attribution, and pricing rules used by reports. It supports exact threads (including descendants), project selection, the current-project default, corpus selection, and local event-date bounds. It conflicts with `--json`, `--by-thread`, grouping, and empty-bucket options. Filtering happens after counter/context reconstruction, so a bounded export may still read the full history.
+
+The stream contains three record types:
+
+- One `metadata` record: schema version 1, selection, requested date bounds, pricing provenance and proxy histories, and source-line semantics.
+- `usage` records: `thread_id`, `parent_thread_id`, canonical `segment_file`, 1-based `source_line`, optional native `ordinal` and `turn_id`, attributed RFC 3339 `timestamp`, `timestamp_source` (`event`, `session`, or `unknown`), `model`, `service_tier`, `input_tokens`, `input_cache_read_tokens`, `input_cache_write_tokens`, `output_tokens`, `reasoning_tokens`, `estimated_cost_usd`, and `known_model_cost_usd`.
+- One terminal `summary` record: emitted usage-row count, excluded untimestamped-event count, aggregate `stats`, and incomplete-input warnings. Tokens and known costs reconcile with the corresponding ordinary report when both read the same source data.
+
+A row is a normalized `token_count` usage event, not a guaranteed individual API request. Input includes cache reads and writes; output includes reasoning. `source_line` counts physical JSONL lines **after decompression** for `.jsonl.zst`. Page-overlap duplicates and proven fork replay do not produce usage rows. Ordinals can be absent or reused: join with segment file plus line number, retaining ordinal/turn ID as extra context. Missing model attribution, invalid records, and other unexportable data remain explicit in summary completeness rather than receiving invented usage rows. Unknown complete cost is `null`; known cost can still be nonzero. Applied tier settings do not prove the tier served.
+
+For example, extract usage rows with `jq 'select(.type == "usage")' usage.jsonl`. Consumers must check the command's successful exit **and** the terminal summary; a read/write error can leave a partial stream without that summary. A successful export can still describe incomplete source data, so also inspect summary `stats.incomplete_input`, nullable cost, and warnings. Paths, thread IDs, and turn IDs can identify private work; review exports before sharing them.
+
+Export provenance stays in memory while each thread is parsed and is never added to the persistent analysis cache. Existing discovery metadata may be reused or populated, but parsed export usage is not stored. No cache schema/version change, checkpoint, or automatic export retention is introduced. Disk use beyond ordinary discovery caching is limited to files you explicitly save. Regular reports retain their existing analysis-cache behavior.
+
 ## Preview or apply title updates
 
 `update` selects root tasks only. It never changes a title unless `--apply` is present, so begin with a dry run and review every proposed `id: old -> new` line:

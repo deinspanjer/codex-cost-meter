@@ -198,8 +198,8 @@ pub(crate) struct ModelProxyPointReport {
 
 pub(crate) struct ReportContext {
     codex_home: PathBuf,
-    index: RolloutIndex,
-    catalog: Catalog,
+    pub(crate) index: RolloutIndex,
+    pub(crate) catalog: Catalog,
     session_index: Snapshot,
     cache: Rc<RolloutCache>,
 }
@@ -282,6 +282,7 @@ impl ReportContext {
             .unwrap_or_default()
     }
 
+    #[cfg(test)]
     pub(crate) fn build_project(
         &self,
         selection: ProjectSelection,
@@ -490,8 +491,13 @@ impl ReportContext {
                     parent_thread_id: record.parent_id.clone(),
                     thread_name: self
                         .session_index
-                        .entry(&record.id)
-                        .map(|entry| entry.name.clone()),
+                        .is_complete()
+                        .then(|| {
+                            self.session_index
+                                .entry(&record.id)
+                                .map(|entry| entry.name.clone())
+                        })
+                        .flatten(),
                     rollout_type: record.kind.report_type(),
                     agent_label: match &record.kind {
                         crate::rollout::discovery::RolloutKind::OtherSubagent(label) => {
@@ -630,7 +636,7 @@ impl ReportContext {
     }
 }
 
-fn pricing_report(catalog: &Catalog) -> PricingReport {
+pub(crate) fn pricing_report(catalog: &Catalog) -> PricingReport {
     let model_proxy_histories = catalog
         .proxies()
         .iter()
@@ -670,7 +676,7 @@ fn pricing_report(catalog: &Catalog) -> PricingReport {
 }
 
 #[derive(Default)]
-struct Aggregate {
+pub(crate) struct Aggregate {
     rollout_count: usize,
     usage: Usage,
     reasoning_output: u64,
@@ -809,7 +815,7 @@ impl Aggregate {
         }
     }
 
-    fn add_filtered(
+    pub(crate) fn add_filtered(
         &mut self,
         stats: &RolloutStats,
         catalog: &Catalog,
@@ -940,12 +946,12 @@ impl Aggregate {
         }
     }
 
-    fn add_unreadable(&mut self) {
+    pub(crate) fn add_unreadable(&mut self) {
         self.rollout_count = self.rollout_count.saturating_add(1);
         self.incomplete = true;
     }
 
-    fn report(self) -> StatsReport {
+    pub(crate) fn report(self) -> StatsReport {
         let majority = self
             .turn_models
             .iter()
@@ -1020,7 +1026,7 @@ impl Aggregate {
     }
 }
 
-fn service_tier_key(tier: &ServiceTier) -> &str {
+pub(crate) fn service_tier_key(tier: &ServiceTier) -> &str {
     match tier {
         ServiceTier::Standard => "standard",
         ServiceTier::AssumedStandard => "assumed_standard",

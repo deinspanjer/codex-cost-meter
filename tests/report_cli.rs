@@ -1400,6 +1400,30 @@ fn detail_command(home: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
+fn write_local_jsonl(path: &Path, rows: &[Value]) {
+    let rows = rows
+        .iter()
+        .cloned()
+        .map(|mut row| {
+            if let Some(at) = row.get("timestamp").and_then(Value::as_str) {
+                let local = at
+                    .trim_end_matches('Z')
+                    .parse::<jiff::civil::DateTime>()
+                    .unwrap();
+                row["timestamp"] = json!(
+                    local
+                        .to_zoned(jiff::tz::TimeZone::system())
+                        .unwrap()
+                        .timestamp()
+                        .to_string()
+                );
+            }
+            row
+        })
+        .collect::<Vec<_>>();
+    write_jsonl(path, &rows);
+}
+
 #[test]
 fn thread_detail_and_exact_dates_reconcile_self_only_usage_and_cached_results() {
     let home = TempDir::new().unwrap();
@@ -1417,8 +1441,8 @@ fn thread_detail_and_exact_dates_reconcile_self_only_usage_and_cached_results() 
     rows[4]["payload"]["info"]["total_token_usage"] =
         json!({"input_tokens":100,"total_tokens":100});
     rows.insert(5, json!({"type":"event_msg","timestamp":"2026-10-21T12:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200,"total_tokens":200},"total_token_usage":{"input_tokens":300,"total_tokens":300}}}}));
-    write_jsonl(&home.path().join("sessions/wio.jsonl"), &rows);
-    write_jsonl(
+    write_local_jsonl(&home.path().join("sessions/wio.jsonl"), &rows);
+    write_local_jsonl(
         &home.path().join("archived_sessions/reviewer.jsonl"),
         &dated_rollout(
             "reviewer",
@@ -1430,7 +1454,7 @@ fn thread_detail_and_exact_dates_reconcile_self_only_usage_and_cached_results() 
             50,
         ),
     );
-    write_jsonl(
+    write_local_jsonl(
         &home.path().join("session_index.jsonl"),
         &[json!({"id":"wio","thread_name":"WIO","updated_at":"2026-10-22T12:00:00Z"})],
     );
@@ -1520,7 +1544,7 @@ fn thread_detail_and_exact_dates_reconcile_self_only_usage_and_cached_results() 
 #[test]
 fn dated_thread_detail_preserves_unknown_cost_and_zero_usage() {
     let home = TempDir::new().unwrap();
-    write_jsonl(
+    write_local_jsonl(
         &home.path().join("sessions/unknown.jsonl"),
         &dated_rollout(
             "unknown",
@@ -1546,4 +1570,282 @@ fn dated_thread_detail_preserves_unknown_cost_and_zero_usage() {
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["rollout"]["input_tokens"], 0);
     assert_eq!(report["rollout"]["estimated_cost_usd"], 0.0);
+}
+
+fn export_lines(home: &Path, args: &[&str]) -> Vec<Value> {
+    let mut args = args.to_vec();
+    args.push("--jsonl");
+    let output = detail_command(home, &args);
+    assert!(output.status.success(), "{}", stderr(&output));
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[test]
+fn usage_export_keeps_physical_locators_across_compressed_pages_and_reconciles_without_cache_writes()
+ {
+    let home = TempDir::new().unwrap();
+    let project = home.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let token = |ordinal, at, count| json!({"ordinal":ordinal,"type":"event_msg","timestamp":at,"payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"cache_write_input_tokens":10,"output_tokens":5,"reasoning_output_tokens":2,"total_tokens":105},"total_token_usage":{"input_tokens":count*100,"cached_input_tokens":count*20,"cache_write_input_tokens":count*10,"output_tokens":count*5,"reasoning_output_tokens":count*2,"total_tokens":count*105}}}});
+    let overlap = token(8, "2026-10-26T12:00:00Z", 2);
+    let old = home.path().join("archived_sessions/old.jsonl");
+    write_local_jsonl(
+        &old,
+        &[
+            json!({"ordinal":0,"type":"session_meta","timestamp":"2026-10-25T12:00:00Z","payload":{"id":"root","cwd":project}}),
+            json!({"ordinal":1,"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"standard"}}}),
+            json!({"ordinal":2,"type":"turn_context","payload":{"turn_id":"turn","model":"gpt-6.1-sol"}}),
+            json!({"ordinal":3,"type":"event_msg","timestamp":"2026-10-25T12:00:00Z","payload":{"type":"task_started","turn_id":"turn"}}),
+            token(4, "2026-10-25T12:00:00Z", 1),
+            overlap.clone(),
+        ],
+    );
+    let compressed = compress_rollout(&old, true);
+    let current = home.path().join("sessions/current.jsonl");
+    write_local_jsonl(
+        &current,
+        &[
+            json!({"ordinal":8,"type":"session_meta","timestamp":"2026-10-27T12:00:00Z","payload":{"id":"root","cwd":project}}),
+            overlap,
+            token(8, "2026-10-27T12:00:00Z", 3),
+            json!({"ordinal":9,"type":"event_msg","timestamp":"2026-10-27T12:01:00Z","payload":{"type":"task_complete","turn_id":"turn"}}),
+        ],
+    );
+    write_local_jsonl(
+        &home.path().join("sessions/child.jsonl"),
+        &dated_rollout(
+            "child",
+            Some("root"),
+            &project,
+            "gpt-6.1-sol",
+            "2026-10-26T12:00:00Z",
+            "2026-10-26T12:01:00Z",
+            40,
+        ),
+    );
+    let args = ["root", "--since", "2026-10-26", "--through", "2026-10-27"];
+    let stream = export_lines(home.path(), &args);
+    assert_eq!(stream.first().unwrap()["type"], "metadata");
+    assert_eq!(stream.last().unwrap()["type"], "summary");
+    let usage = stream
+        .iter()
+        .filter(|row| row["type"] == "usage")
+        .collect::<Vec<_>>();
+    assert_eq!(usage.len(), 3);
+    let parent = usage
+        .iter()
+        .filter(|row| row["thread_id"] == "root")
+        .collect::<Vec<_>>();
+    assert_eq!(parent.len(), 2);
+    assert_eq!(
+        parent[0]["segment_file"],
+        compressed.canonicalize().unwrap().to_str().unwrap()
+    );
+    assert_eq!(parent[0]["source_line"], 6);
+    assert_eq!(
+        parent[1]["segment_file"],
+        current.canonicalize().unwrap().to_str().unwrap()
+    );
+    assert_eq!(parent[1]["source_line"], 3);
+    for row in parent {
+        assert_eq!(row["ordinal"], 8); // Reused ordinals remain distinct physical events.
+        assert_eq!(row["turn_id"], "turn");
+        assert_eq!(row["input_tokens"], 100);
+        assert_eq!(row["input_cache_read_tokens"], 20);
+        assert_eq!(row["input_cache_write_tokens"], 10);
+        assert_eq!(row["output_tokens"], 5);
+        assert_eq!(row["reasoning_tokens"], 2);
+        assert_eq!(row["service_tier"], "standard");
+        assert!((row["estimated_cost_usd"].as_f64().unwrap() - 0.000217).abs() < 1e-12);
+        let path = Path::new(row["segment_file"].as_str().unwrap());
+        let bytes = if path.extension().unwrap() == "zst" {
+            zstd::decode_all(fs::File::open(path).unwrap()).unwrap()
+        } else {
+            fs::read(path).unwrap()
+        };
+        let text = String::from_utf8(bytes).unwrap();
+        let original: Value = serde_json::from_str(
+            text.lines()
+                .nth(row["source_line"].as_u64().unwrap() as usize - 1)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(original["payload"]["type"], "token_count");
+        assert_eq!(original["timestamp"], row["timestamp"]);
+    }
+    let cache = Connection::open(home.path().join("codex-cost-meter.sqlite")).unwrap();
+    let analyzed: i64 = cache
+        .query_row(
+            "SELECT count(*) FROM rollout_cache WHERE analysis_json IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        analyzed, 0,
+        "export must not save parsed usage or provenance"
+    );
+    let normal = detail_command(
+        home.path(),
+        &[
+            "root",
+            "--since",
+            "2026-10-26",
+            "--through",
+            "2026-10-27",
+            "--json",
+        ],
+    );
+    let normal: Value = serde_json::from_slice(&normal.stdout).unwrap();
+    assert_eq!(stream.last().unwrap()["stats"], normal["tree"]);
+    let summed: f64 = usage
+        .iter()
+        .map(|row| row["known_model_cost_usd"].as_f64().unwrap())
+        .sum();
+    assert!((summed - normal["tree"]["known_model_cost_usd"].as_f64().unwrap()).abs() < 1e-12);
+    let before: Vec<(String, Option<String>)> = cache
+        .prepare("SELECT rollout_path,analysis_json FROM rollout_cache ORDER BY rollout_path")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(export_lines(home.path(), &args), stream);
+    let after: Vec<(String, Option<String>)> = cache
+        .prepare("SELECT rollout_path,analysis_json FROM rollout_cache ORDER BY rollout_path")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(after, before);
+    let project_stream = export_lines(
+        home.path(),
+        &[
+            "--project",
+            project.to_str().unwrap(),
+            "--since",
+            "2026-10-26",
+            "--through",
+            "2026-10-27",
+        ],
+    );
+    assert_eq!(&project_stream[1..], &stream[1..]);
+    let corpus_stream = export_lines(
+        home.path(),
+        &["--all", "--since", "2026-10-26", "--through", "2026-10-27"],
+    );
+    assert_eq!(&corpus_stream[1..], &stream[1..]);
+}
+
+#[test]
+fn usage_export_applies_counter_resets_and_skips_proven_legacy_replay() {
+    let home = TempDir::new().unwrap();
+    let mut parent = dated_rollout(
+        "parent",
+        None,
+        Path::new("/project"),
+        "gpt-6.1-terra",
+        "2026-10-26T12:00:00Z",
+        "2026-10-26T12:01:00Z",
+        100,
+    );
+    parent[4]["payload"]["info"]["total_token_usage"] =
+        json!({"input_tokens":100,"total_tokens":100});
+    write_local_jsonl(&home.path().join("sessions/parent.jsonl"), &parent);
+    let mut child = vec![
+        json!({"type":"session_meta","timestamp":"2026-10-26T12:02:00Z","payload":{"id":"child","forked_from_id":"parent","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}},"cwd":"/project"}}),
+    ];
+    child.extend(parent);
+    child.extend(
+        dated_rollout(
+            "discard",
+            None,
+            Path::new("/project"),
+            "gpt-6.1-terra",
+            "2026-10-26T12:02:00Z",
+            "2026-10-26T12:03:00Z",
+            25,
+        )
+        .into_iter()
+        .skip(1),
+    );
+    write_local_jsonl(&home.path().join("archived_sessions/child.jsonl"), &child);
+    let stream = export_lines(home.path(), &["child"]);
+    let usage = stream
+        .iter()
+        .filter(|row| row["type"] == "usage")
+        .collect::<Vec<_>>();
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0]["thread_id"], "child");
+    assert_eq!(usage[0]["input_tokens"], 25);
+    assert_eq!(usage[0]["turn_id"], "turn-1");
+    assert_eq!(stream.last().unwrap()["stats"]["input_tokens"], 25);
+    // A counter reset must use last_token_usage, not subtract an earlier total.
+    let mut reset = dated_rollout(
+        "reset",
+        None,
+        Path::new("/project"),
+        "gpt-6.1-terra",
+        "2026-10-26T12:00:00Z",
+        "2026-10-26T12:01:00Z",
+        100,
+    );
+    reset[4]["payload"]["info"]["total_token_usage"] =
+        json!({"input_tokens":100,"total_tokens":100});
+    reset.insert(5,json!({"type":"event_msg","timestamp":"2026-10-26T12:00:30Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":7,"total_tokens":7},"total_token_usage":{"input_tokens":7,"total_tokens":7}}}}));
+    write_local_jsonl(&home.path().join("sessions/reset.jsonl"), &reset);
+    let stream = export_lines(home.path(), &["reset"]);
+    assert_eq!(stream.last().unwrap()["stats"]["input_tokens"], 107);
+}
+
+#[test]
+fn usage_export_preserves_unknowns_and_requires_a_terminal_summary() {
+    let home = TempDir::new().unwrap();
+    write_local_jsonl(
+        &home.path().join("sessions/unknown.jsonl"),
+        &[
+            json!({"type":"session_meta","payload":{"id":"unknown","source":"cli","cwd":"/project"}}),
+            json!({"type":"turn_context","payload":{"model":"future-model"}}),
+            json!({"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"total_tokens":10}}}}),
+        ],
+    );
+    let stream = export_lines(home.path(), &["unknown"]);
+    assert_eq!(stream[1]["type"], "usage");
+    assert!(stream[1]["timestamp"].is_null());
+    assert!(stream[1]["turn_id"].is_null());
+    assert!(stream[1]["estimated_cost_usd"].is_null());
+    assert_eq!(stream[1]["known_model_cost_usd"], 0.0);
+    assert_eq!(
+        stream.last().unwrap()["stats"]["unpriced_models"]["future-model"],
+        10
+    );
+    let filtered = export_lines(home.path(), &["unknown", "--since", "2026-10-20"]);
+    assert_eq!(filtered.len(), 2);
+    assert_eq!(filtered[1]["excluded_untimestamped_usage_events"], 1);
+    assert_eq!(filtered[1]["stats"]["incomplete_input"], true);
+    assert!(filtered[1]["stats"]["estimated_cost_usd"].is_null());
+    for option in ["--json", "--by-thread", "--include-empty"] {
+        let output = detail_command(home.path(), &["--all", "--jsonl", option]);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+    let missing = detail_command(home.path(), &["missing", "--jsonl"]);
+    assert!(!missing.status.success());
+    assert!(missing.stdout.is_empty());
+    let path = home.path().join("sessions/broken.jsonl.zst");
+    fs::write(&path, b"not a zstandard stream").unwrap();
+    // Discovery cannot safely select this file: report/export both qualify the gap.
+    let broken = export_lines(home.path(), &["--all"]);
+    assert_eq!(broken.last().unwrap()["stats"]["incomplete_input"], true);
+    assert!(
+        !broken.last().unwrap()["incomplete_input_warnings"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }

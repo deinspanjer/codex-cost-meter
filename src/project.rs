@@ -84,6 +84,31 @@ struct ScopeRequest<'a> {
     required_thread: Option<&'a str>,
 }
 
+pub(crate) struct ProjectScope {
+    pub context: ReportContext,
+    pub selection: ProjectSelection,
+    pub thread_ids: Vec<String>,
+}
+
+impl ProjectScope {
+    fn report(
+        self,
+        filter: &Filter,
+        progress: &mut Progress,
+    ) -> Result<ProjectReport, ProjectError> {
+        let mut report = self.context.build_project_with_progress(
+            self.selection,
+            &self.thread_ids,
+            filter,
+            progress,
+        )?;
+        if report.selection.missing_source_roots > 0 {
+            report.incomplete_input_warnings.push(format!("{} configured Desktop Project source root(s) unavailable; direct assignments and recorded workspace roots remain included", report.selection.missing_source_roots));
+        }
+        Ok(report)
+    }
+}
+
 pub(crate) fn build_with_progress(
     codex_home: &Path,
     thread_id: Option<&str>,
@@ -92,6 +117,18 @@ pub(crate) fn build_with_progress(
     progress: &mut Progress,
     cache: Rc<RolloutCache>,
 ) -> Result<ProjectReport, ProjectError> {
+    resolve_with_progress(codex_home, thread_id, project_ref, filter, progress, cache)?
+        .report(filter, progress)
+}
+
+pub(crate) fn resolve_with_progress(
+    codex_home: &Path,
+    thread_id: Option<&str>,
+    project_ref: &str,
+    filter: &Filter,
+    progress: &mut Progress,
+    cache: Rc<RolloutCache>,
+) -> Result<ProjectScope, ProjectError> {
     build_inner(
         codex_home,
         thread_id,
@@ -109,7 +146,7 @@ fn build_inner(
     filter: &Filter,
     mut progress: Option<&mut Progress>,
     cache: Rc<RolloutCache>,
-) -> Result<ProjectReport, ProjectError> {
+) -> Result<ProjectScope, ProjectError> {
     let roots = match state_roots(codex_home, &cache) {
         Some(roots) => roots,
         None => match progress.as_deref_mut() {
@@ -304,7 +341,7 @@ fn fuzzy_project(
     project_ref: &str,
     filter: &Filter,
     progress: Option<&mut Progress>,
-) -> Result<ProjectReport, ProjectError> {
+) -> Result<ProjectScope, ProjectError> {
     let mut matches = state
         .projects
         .values()
@@ -351,7 +388,7 @@ fn fuzzy_historical_cwd(
     project_ref: &str,
     filter: &Filter,
     progress: Option<&mut Progress>,
-) -> Result<ProjectReport, ProjectError> {
+) -> Result<ProjectScope, ProjectError> {
     let mut matches = roots
         .iter()
         .filter_map(|root| root.cwd.as_deref())
@@ -441,9 +478,9 @@ fn build_scope(
     roots: &[RolloutRecord],
     state: &DesktopState,
     request: ScopeRequest<'_>,
-    filter: &Filter,
-    mut progress: Option<&mut Progress>,
-) -> Result<ProjectReport, ProjectError> {
+    _filter: &Filter,
+    progress: Option<&mut Progress>,
+) -> Result<ProjectScope, ProjectError> {
     let fallback_paths = request
         .fallback_paths
         .iter()
@@ -498,27 +535,18 @@ fn build_scope(
             target: selection.target.clone(),
         });
     }
-    let context = match progress.as_deref_mut() {
+    let context = match progress {
         Some(progress) => {
             ReportContext::new_for_cached_with_progress(codex_home, &thread_ids, cache, progress)
         }
         None => ReportContext::new_for_cached(codex_home, &thread_ids, cache),
     }
     .map_err(ReportError::from)?;
-    let mut report = match progress {
-        Some(progress) => {
-            context.build_project_with_progress(selection, &thread_ids, filter, progress)
-        }
-        None => context.build_project(selection, &thread_ids, filter),
-    }
-    .map_err(ProjectError::from)?;
-    if report.selection.missing_source_roots > 0 {
-        report.incomplete_input_warnings.push(format!(
-            "{} configured Desktop Project source root(s) unavailable; direct assignments and recorded workspace roots remain included",
-            report.selection.missing_source_roots
-        ));
-    }
-    Ok(report)
+    Ok(ProjectScope {
+        context,
+        selection,
+        thread_ids,
+    })
 }
 
 fn build_cwd_scope(
@@ -527,9 +555,9 @@ fn build_cwd_scope(
     roots: &[RolloutRecord],
     state: &DesktopState,
     cwd: &str,
-    filter: &Filter,
-    mut progress: Option<&mut Progress>,
-) -> Result<ProjectReport, ProjectError> {
+    _filter: &Filter,
+    progress: Option<&mut Progress>,
+) -> Result<ProjectScope, ProjectError> {
     let mut thread_ids = Vec::new();
     let mut selection = ProjectSelection {
         target: cwd.into(),
@@ -555,20 +583,18 @@ fn build_cwd_scope(
         }
     }
     thread_ids.sort();
-    let context = match progress.as_deref_mut() {
+    let context = match progress {
         Some(progress) => {
             ReportContext::new_for_cached_with_progress(codex_home, &thread_ids, cache, progress)
         }
         None => ReportContext::new_for_cached(codex_home, &thread_ids, cache),
     }
     .map_err(ReportError::from)?;
-    match progress {
-        Some(progress) => {
-            context.build_project_with_progress(selection, &thread_ids, filter, progress)
-        }
-        None => context.build_project(selection, &thread_ids, filter),
-    }
-    .map_err(Into::into)
+    Ok(ProjectScope {
+        context,
+        selection,
+        thread_ids,
+    })
 }
 
 fn load_state(codex_home: &Path) -> (DesktopState, bool) {
