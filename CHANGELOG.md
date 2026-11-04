@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.6.1]
+
+- Skip title updates for empty names, `Untitled` placeholders, and names beginning with `<`, including when they already have meter suffixes; preserve both title stores and the batch limit for usable names.
+
 ## [1.6.0]
 
 - Add reparsed JSONL usage-event exports with physical source locators, priced costs, provenance, and completeness summaries without storing export metadata in the analysis cache.
