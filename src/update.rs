@@ -17,7 +17,7 @@ use crate::{
     report::{ReportContext, ReportError},
     rollout::discovery::source_is_root,
     session_index::{AppendError, Snapshot, append},
-    title::{TitleError, TitleFormat},
+    title::{TitleError, TitleFormat, strip_canonical_suffix},
 };
 
 const REQUIRED_COLUMNS: [&str; 6] = [
@@ -195,6 +195,10 @@ fn finish_updates(
             break;
         }
         let old_title = base_name(row, snapshot);
+        let base = strip_canonical_suffix(&old_title).trim();
+        if base.is_empty() || base.eq_ignore_ascii_case("Untitled") || base.starts_with('<') {
+            continue;
+        }
         let report = match context.build(&row.id) {
             Ok(report) => report,
             Err(
@@ -1074,6 +1078,94 @@ mod tests {
             )
             .unwrap();
         assert_eq!(after_row, before_row);
+    }
+
+    #[test]
+    fn skips_placeholder_and_envelope_titles_without_writing_either_store() {
+        let home = TempDir::new().unwrap();
+        let database = database(&home, false, &REQUIRED);
+        let cases = [
+            ("missing", None, None, None),
+            ("placeholder", Some("Untitled"), None, None),
+            (
+                "decorated",
+                Some("Stored"),
+                Some(" untitled · $7.20 · ⇥6M · ↦17.5K "),
+                None,
+            ),
+            (
+                "envelope",
+                Some("Stored"),
+                None,
+                Some(" <send_user_message_question_reply>\n[]"),
+            ),
+            (
+                "decorated-envelope",
+                Some("Stored"),
+                Some("<codex_delegation>… · $2.96 · ⇄3.4M"),
+                None,
+            ),
+        ];
+        for (id, title, name, prompt) in cases {
+            insert(&database, id, title, name, "paginated", 0, prompt);
+            rollout(&home, id, None);
+        }
+        insert(
+            &database,
+            "valid",
+            Some("Untitled document editor"),
+            None,
+            "paginated",
+            0,
+            None,
+        );
+        rollout(&home, "valid", None);
+        index(
+            &home,
+            &[("missing", "Existing index name", OffsetDateTime::UNIX_EPOCH)],
+        );
+        let before_index = fs::read(home.path().join("session_index.jsonl")).unwrap();
+        let mut options = options();
+        options.thread_ids = cases.iter().map(|(id, ..)| (*id).into()).collect();
+
+        assert!(run(home.path(), &options).unwrap().proposals.is_empty());
+        options.apply = true;
+        assert!(run(home.path(), &options).unwrap().proposals.is_empty());
+        assert_eq!(
+            fs::read(home.path().join("session_index.jsonl")).unwrap(),
+            before_index
+        );
+
+        // Skipped rows must not consume an idle batch's update limit.
+        options.thread_ids.clear();
+        options.idle_minutes = Some(15);
+        options.limit = 1;
+        let result = run(home.path(), &options).unwrap();
+        assert_eq!(proposal_ids(&result), ["valid"]);
+        let connection = Connection::open(&database).unwrap();
+        for (id, title, name, _) in cases {
+            let stored: (Option<String>, Option<String>) = connection
+                .query_row(
+                    "SELECT title, name FROM threads WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                stored,
+                (title.map(str::to_owned), name.map(str::to_owned)),
+                "{id}"
+            );
+        }
+        let after_index = fs::read(home.path().join("session_index.jsonl")).unwrap();
+        assert!(after_index.starts_with(&before_index));
+        let appended = std::str::from_utf8(&after_index[before_index.len()..]).unwrap();
+        let entries: Vec<serde_json::Value> = appended
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["id"], "valid");
     }
 
     #[test]
