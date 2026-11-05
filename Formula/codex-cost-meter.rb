@@ -1,8 +1,8 @@
 class CodexCostMeter < Formula
   desc "Measure Codex task token usage and estimated API-list-price cost"
   homepage "https://github.com/deinspanjer/codex-cost-meter"
-  url "https://github.com/deinspanjer/codex-cost-meter/archive/refs/tags/v1.6.0.tar.gz"
-  sha256 "61122ab96d07e3e13e9d892a4ab499a8a98df3b6d56578ec7f9f5e7a3117ae1d"
+  url "https://github.com/deinspanjer/codex-cost-meter/archive/refs/tags/v1.6.1.tar.gz"
+  sha256 "bad1d702d01d355a3cb32f44543b333df62213b4a35501e58afb1d03d13d8e4f"
   license "MIT"
 
   depends_on "rust" => :build
