@@ -223,6 +223,8 @@ Export provenance stays in memory while each thread is parsed and is never added
 
 Titles default to `--title-metrics cost,total-tokens` and `--max-width 65`. Choose an ordered comma-separated subset of `cost`, `total-tokens`, `input-tokens`, and `output-tokens`, or use `all`; duplicate metrics and a width too small for a visible base and suffix are rejected. The tool removes only its trailing canonical metric suffix before recomposing a title, preserves Unicode-scalar width, and marks incomplete known cost with `+`.
 
+Title updates skip a selected base name that is empty, equals `Untitled` (case-insensitive), or starts with `<`, including internal message envelopes. This check ignores surrounding whitespace and existing canonical metric suffixes. Skipped tasks leave both SQLite naming fields and the session index unchanged and do not consume the idle update limit. They can be updated after a usable name is saved in Codex.
+
 For dry runs, the tool opens Codex's state database read-only. With `--apply`, it locks one updater process, updates both `title` and `name` in a single SQLite transaction, then appends durable JSONL entries to `session_index.jsonl`. It supports `state_5.sqlite` directly under the selected Codex home or under `sqlite/`, and requires the `threads` columns `id`, `title`, `name`, `history_mode`, `updated_at`, and `first_user_message`; extra schema is accepted. SQLite and JSONL are deliberately not cross-store atomic: if index writing fails after a committed transaction, the command fails and a later identical `--apply` remains eligible to repair both stores. A busy updater, database/schema problem, or unreadable index is a safe actionable failure.
 
 ## Schedule idle title updates
