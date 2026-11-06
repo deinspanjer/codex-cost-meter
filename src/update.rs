@@ -13,7 +13,7 @@ use time::OffsetDateTime;
 
 use crate::{
     cache::RolloutCache,
-    pricing::PricingError,
+    pricing::{Catalog, PricingError},
     report::{ReportContext, ReportError},
     rollout::discovery::source_is_root,
     session_index::{AppendError, Snapshot, append},
@@ -143,13 +143,19 @@ struct ThreadRow {
 
 #[cfg(test)]
 pub(crate) fn run(home: &Path, options: &UpdateOptions) -> Result<UpdateResult, UpdateError> {
-    run_cached(home, options, Rc::new(RolloutCache::open(home, false)))
+    run_cached(
+        home,
+        options,
+        Rc::new(RolloutCache::open(home, false)),
+        &Catalog::embedded()?,
+    )
 }
 
 pub(crate) fn run_cached(
     home: &Path,
     options: &UpdateOptions,
     cache: Rc<RolloutCache>,
+    catalog: &Catalog,
 ) -> Result<UpdateResult, UpdateError> {
     let _lock = acquire_lock(home)?;
     let mut connection = open_database(home, options.apply)?;
@@ -160,7 +166,8 @@ pub(crate) fn run_cached(
         return Err(UpdateError::SessionIndexUnreadable { kind: source });
     }
     if !source_available {
-        let context = ReportContext::new_cached(home, cache)?;
+        let mut context = ReportContext::new_cached(home, cache)?;
+        context.catalog = catalog.clone();
         let roots = rows.iter().filter(|row| context.is_root(&row.id)).collect();
         let selected = select_rows(roots, &snapshot, options)?;
         return finish_updates(home, &mut connection, selected, &context, options);
@@ -171,7 +178,8 @@ pub(crate) fn run_cached(
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    let context = ReportContext::new_for_cached(home, &selected_ids, cache)?;
+    let mut context = ReportContext::new_for_cached(home, &selected_ids, cache)?;
+    context.catalog = catalog.clone();
     finish_updates(home, &mut connection, selected, &context, options)
 }
 

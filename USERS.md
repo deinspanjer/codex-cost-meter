@@ -119,7 +119,7 @@ For `--all`, available Codex thread metadata narrows discovery before rollout fi
 
 Date filtering attributes tokens and cost to each usage-event timestamp, while turns and their complete duration are attributed to the turn's start date. Data with neither an event nor session timestamp remains in unfiltered lifetime totals but is excluded and visibly marked incomplete in a filtered report. Date bounds also apply to exact session-ID reports: `Root`/`Selected` and `All agents` are filtered independently. Grouping and `--by-thread` apply to `--all`, `--project`, and the bare current-project report. JSON retains the overall `tree` total and adds `date_range`, `by_rollout_type`, and `groups`.
 
-Cost uses the embedded historical catalog and is an API-list-price approximation, not a billing record. Each request uses the service tier most recently applied in the rollout settings; current Codex token records do not reveal the tier actually served, so a Fast or Ultrafast request that was downgraded cannot be corrected to Standard pricing. Missing tier metadata is priced at Standard rates. Human output reports the total tokens using this assumption once; JSON contributes them to `assumed_standard_tokens` and `by_service_tier.assumed_standard`. Explicit `ultrafast` settings use their own dated rates for GPT-6 Astra (from September 29, 2026) and GPT-6.1 Sol (from October 8, 2026). Unsupported model/tier/date combinations remain unpriced. Cache-write counts use the default 30-minute write price; the parsed rollout counters do not distinguish the new 12-hour writes, which cost more. Estimates can understate cost when those writes are used.
+Cost uses the effective historical catalog (built-in data plus any local overrides) and is an API-list-price approximation, not a billing record. Each request uses the service tier most recently applied in the rollout settings; current Codex token records do not reveal the tier actually served, so a Fast or Ultrafast request that was downgraded cannot be corrected to Standard pricing. Missing tier metadata is priced at Standard rates. Human output reports the total tokens using this assumption once; JSON contributes them to `assumed_standard_tokens` and `by_service_tier.assumed_standard`. Explicit `ultrafast` settings use their own dated rates for GPT-6 Astra (from September 29, 2026) and GPT-6.1 Sol (from October 8, 2026). Unsupported model/tier/date combinations remain unpriced. Cache-write counts use the default 30-minute write price; the parsed rollout counters do not distinguish the new 12-hour writes, which cost more. Estimates can understate cost when those writes are used.
 
 `codex-auto-review` is an internal routing identity, not a public foundation-model ID recorded in local telemetry. OpenAI documented GPT-5.4 Thinking with low reasoning at launch and announced a migration to GPT-5.6 Luna on July 30, 2026. The catalog therefore prices Auto-review through GPT-5.4 before July 30 and GPT-5.6 Luna from July 30 through October 5. From October 6, 2026, it uses the zero-rate `chatgpt-auto-review-free` policy target: the [OpenAI rate card](https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu-credit-based-pricing) says safety checks are free for ChatGPT sign-in. This assumes ChatGPT authentication, which the parser does not retain; the source does not establish free API-key usage. October 6 is the documentation observation date, not a claimed policy start date. Undated events use the newest policy. The policy target identifies a pricing exemption, not a backing model. Reviewer tokens are still counted; code review and other model rates are unchanged. This is an announcement-date estimator boundary, not proof of the routed or billed model for an individual request or an exact account-level cutover. JSON preserves the latest target in `model_proxies` and the full typed history in `model_proxy_histories`; `report --help` explains the method. See the [Auto-review pricing evidence](docs/research/codex-auto-review-pricing-evidence.md).
 
@@ -270,3 +270,56 @@ Reports read local Codex JSONL files. Reports, update previews, warnings, and ru
 - **Linux timer no longer starts** — run `schedule status`, then reinstall from the binary's current location after resolving the user-session issue. `schedule remove` affects only this tool's two fixed unit files and bounded status.
 - **macOS blocks execution** — for releases produced after production signing was enabled, recheck the archive checksum and network access, then follow your organization’s Gatekeeper policy. Users do not install publisher certificates manually.
 - **Windows blocks execution** — recheck the ZIP checksum, then follow your organization’s application-control or SmartScreen policy. The unsigned executable does not establish publisher identity.
+
+
+## Local pricing files
+
+Normal reports, exports, title valuation, and `rates` use one offline pricing snapshot per invocation. The optional file is `~/.codex-cost-meter/model-prices.json` (`%USERPROFILE%\.codex-cost-meter\model-prices.json` on Windows), independent of `CODEX_HOME` and `--codex-home`. Without it, the bundled catalog is used. Reports expose the catalog mode, display version, optional user label, and pricing bases; labels are sanitized in terminal output.
+
+The default file is a sparse overlay. Each point replaces all rate components for its exact model/tier/context/date key; omitted or null components stay unknown. Unoverridden built-in prices follow maintenance releases automatically. For example, this deliberately custom price charges one cent per million input, cached input, cache-write input, and output tokens from November 1:
+
+```json
+{
+  "schema_version": 1,
+  "version": "my-prices-1",
+  "label": "My penny experiment",
+  "points": [{
+    "model": "gpt-6.1-sol", "tier": "standard", "context": "short",
+    "effective_from": "2026-11-01",
+    "rates": {"input": 0.01, "cached_input": 0.01, "cache_write_input": 0.01, "output": 0.01},
+    "basis": "custom"
+  }]
+}
+```
+
+Add `"base": "none"` to make the file a standalone catalog. No built-in points, thresholds, or proxies then contribute; unlisted models remain unknown even after maintenance releases. This is useful for custom catalogs, but does not invent prices for future models. Inspect the result with `rates --model gpt-6.1-sol --as-of 2026-11-01 --json`.
+
+Basis defaults to `custom`; manual prices need no official evidence. Generated values use `official`, `observed`, or `researched` with a source URL. Mark hand-edited generated points `custom` to retain them during refresh. `version` is a display string and `label` is optional user identification, separate from `schema_version` compatibility. Neither promises an archived copy.
+
+`removals` contains point keys to hide built-in points. `thresholds` and `proxies` supply explicit overrides; see [the schema and pricing procedure](docs/model-pricing.md#external-catalog-schema). Deleting an override can reveal built-in prices. Invalid or incompatible files stop valuation and title updates with delete/regenerate guidance; no automatic migration is attempted. Deleting the file returns to the bundled catalog. Keep your own backups if desired. Pricing edits revalue cached usage without reparsing; rewriting existing titles still requires an explicit title update/repricing operation.
+
+## Refresh or research pricing
+
+`pricing refresh` collects current official pricing Markdown, prepares a before/after summary, and asks whether to apply. Bare refresh/reset require an interactive terminal; unattended use must choose `--dry-run` or `--apply`. Both modes print their outcome. They are mutually exclusive. Add `--json` for structured changes, evidence, unresolved coverage, and activation; interactive prompts go to stderr.
+
+```sh
+codex-cost-meter pricing refresh --dry-run
+codex-cost-meter pricing refresh --apply --json
+codex-cost-meter pricing prompt > pricing-research.txt
+# Give this prompt to your preferred research tool; request a fresh proposal.json.
+# Only after that tool successfully produces the proposal:
+codex-cost-meter pricing refresh --from proposal.json --dry-run
+codex-cost-meter pricing refresh --from proposal.json --apply --json
+codex-cost-meter pricing reset --dry-run
+codex-cost-meter pricing reset --apply
+```
+
+Deterministic refresh covers only explicitly labeled current Markdown cells. Unsupported or unavailable sources remain unresolved, and missing rows never delete historical prices. When a changed price has no supported effective date, the proposal uses the UTC observation date provisionally. Earlier usage keeps the prior price (or remains unknown for a new model), leaving a potentially mispriced gap. Same-day conflicting values are unresolved. The current extractor reports partial coverage for unsupported tables, missing threshold evidence, and retained thresholds/proxies that it does not reverify; a partial result is useful work, not a full pricing audit.
+
+`pricing prompt` is offline and includes the effective catalog, local override markings, schemas, operation examples, and research rules. It includes no session data and invokes no AI tool. You choose the tool, permissions, authentication, and output file. The prompt directs it to write a proposal only. Import independently retrieves its official citations and checks excerpts and affected facts. Failed evidence or stale operations stay unapplied; independent valid groups may still apply. Import can handle researched source-format changes without changing the current-data extractor. Refresh and import preserve custom prices and standalone catalogs; edit those manually. Imported point removals must accompany a supported replacement in the same model/tier/context history and atomic group, or use a move. A current price row alone cannot authorize historical deletion.
+
+Exit codes are 0 for complete results or cancellation, 1 for operational/malformed-input errors, 2 for CLI usage errors, and 3 for partial results, including partially applied changes. Check JSON `activation` independently from `coverage_complete`. For scheduling, use your own scheduler to run deterministic refresh, or generate a new prompt and run your chosen research tool to a fresh proposal path, then import **only after successful proposal production**. Treat exits 1/2/3 distinctly. The app does not manage that tool or its files.
+
+Refresh/import may prune generated points only if removing them preserves effective history for every date; custom and standalone points are retained. Generated points can mask later built-in changes until researched/manual removal. A differing `official` or `observed` point is reported as a conflict only when the embedded review date covers that point's date. Researched corrections remain resolved on subsequent runs, while remaining eligible for history-preserving pruning. An older embedded review date does not disclose this conflict.
+
+Reset discards the external catalog, even if invalid, and returns to current built-in data. No backups or catalog revision history are retained. Updates use same-directory temporary files and a final byte comparison before replacement; reset similarly checks before deletion. These checks detect intervening edits but permit a race between checking and acting, so simultaneous writers can lose an update. Avoid overlapping update jobs. Crashed temporary files with the application's fixed prefix are removed after one hour on a later startup; user prompts, proposals, and results are yours to retain or delete. Neither refresh nor reset rewrites existing titles.

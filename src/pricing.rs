@@ -1,4 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+pub(crate) mod catalog;
+pub(crate) mod proposal;
+mod proposal_support;
+use catalog::{Band, PointKey, Tier};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -30,7 +35,10 @@ pub(crate) struct CostResult {
     pub complete: Option<f64>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Catalog {
+    points: BTreeMap<PointKey, Rates>,
+    overlay: Option<catalog::Overlay>,
     as_of: String,
     source: String,
     histories: HashMap<String, Vec<PricePoint>>,
@@ -68,19 +76,43 @@ struct PricePoint {
     long_context: Option<TierRates>,
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
-struct Rates {
-    input: Option<f64>,
-    cached_input: Option<f64>,
-    cache_write_input: Option<f64>,
-    output: Option<f64>,
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Rates {
+    pub(crate) input: Option<f64>,
+    pub(crate) cached_input: Option<f64>,
+    pub(crate) cache_write_input: Option<f64>,
+    pub(crate) output: Option<f64>,
+}
+
+impl Rates {
+    fn values(self) -> impl Iterator<Item = f64> {
+        [
+            self.input,
+            self.cached_input,
+            self.cache_write_input,
+            self.output,
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct CatalogMetadata {
+    pub mode: &'static str,
+    pub version: String,
+    pub embedded_version: Option<String>,
+    pub label: Option<String>,
+    pub bases: Vec<catalog::Basis>,
 }
 
 #[derive(Serialize)]
 pub(crate) struct RateTable {
-    pub(crate) catalog_as_of: String,
+    pub(crate) metadata: CatalogMetadata,
+    pub(crate) catalog_as_of: Option<String>,
     pub(crate) effective_on: Option<String>,
-    source: String,
+    source: Option<String>,
     units: &'static str,
     cache_write_lifetime: &'static str,
     pub(crate) rows: Vec<RateRow>,
@@ -200,6 +232,10 @@ struct RawCatalog {
 
 #[derive(Debug, Error)]
 pub(crate) enum PricingError {
+    #[error("external pricing: {0}; delete or regenerate the external file")]
+    External(String),
+    #[error("invalid external pricing: {0}; delete or regenerate the external file")]
+    Overlay(String),
     #[error("no catalog rates for {model} at the selected date")]
     NoRates { model: String },
     #[error("invalid pricing JSON: {0}")]
@@ -247,14 +283,21 @@ impl Catalog {
                 (ServiceTier::Fast, "fast"),
                 (ServiceTier::Ultrafast, "ultrafast"),
             ] {
-                if point.rates(false, &tier).is_none() && point.rates(true, &tier).is_none() {
+                if self.select_rates(target, &tier, false, at).is_none()
+                    && self.select_rates(target, &tier, true, at).is_none()
+                {
                     continue;
                 }
                 for long in [false, true] {
                     if long && threshold.is_none() {
                         continue;
                     }
-                    let rates = point.rates(long, &tier).unwrap_or(Rates {
+                    let selected = self.select_rates(target, &tier, long, at);
+                    let effective_from = selected
+                        .as_ref()
+                        .map(|(date, _)| date.clone())
+                        .unwrap_or_else(|| point.effective_from.to_string());
+                    let rates = selected.map(|(_, rates)| rates).unwrap_or(Rates {
                         input: None,
                         cached_input: None,
                         cache_write_input: None,
@@ -263,7 +306,7 @@ impl Catalog {
                     rows.push(RateRow {
                         model: model.into(),
                         priced_as: target.into(),
-                        effective_from: point.effective_from.to_string(),
+                        effective_from,
                         proxy_effective_from: proxy_date.map(|date| date.to_string()),
                         tier: name,
                         min_input_tokens: if long { threshold.unwrap() + 1 } else { 0 },
@@ -281,9 +324,10 @@ impl Catalog {
             });
         }
         Ok(RateTable {
-            catalog_as_of: self.as_of.clone(),
+            metadata: self.metadata(),
+            catalog_as_of: (self.metadata().mode != "standalone").then(|| self.as_of.clone()),
             effective_on: at.map(|date| date.to_string()),
-            source: self.source.clone(),
+            source: (self.metadata().mode != "standalone").then(|| self.source.clone()),
             units: "USD per 1M tokens",
             cache_write_lifetime: "30m",
             rows,
@@ -308,15 +352,31 @@ impl Catalog {
                 (point.target(), point.effective_from)
             }
         };
-        let history = self.histories.get(target)?;
-        let point = match at {
-            None => history.last(),
-            Some(at) => history
-                .iter()
-                .rev()
-                .find(|point| point.effective_from <= at),
-        }?;
-        Some((target, proxy_date, *point))
+        let date = at.map(|d| d.to_string());
+        let key = self
+            .points
+            .keys()
+            .filter(|k| k.model == target && date.as_ref().is_none_or(|d| &k.effective_from <= d))
+            .max_by_key(|k| &k.effective_from)?;
+        let effective_from = Date::parse(
+            &key.effective_from,
+            time::macros::format_description!("[year]-[month]-[day]"),
+        )
+        .ok()?;
+        Some((
+            target,
+            proxy_date,
+            PricePoint {
+                effective_from,
+                input: None,
+                cached_input: None,
+                cache_write_input: None,
+                output: None,
+                fast: None,
+                ultrafast: None,
+                long_context: None,
+            },
+        ))
     }
 
     pub(crate) fn embedded() -> Result<Self, PricingError> {
@@ -389,7 +449,33 @@ impl Catalog {
             }
         }
 
+        let mut points = BTreeMap::new();
+        for (model, history) in &raw.histories {
+            for point in history {
+                for (tier, service) in [
+                    (Tier::Standard, ServiceTier::Standard),
+                    (Tier::Fast, ServiceTier::Fast),
+                    (Tier::Ultrafast, ServiceTier::Ultrafast),
+                ] {
+                    for (context, long) in [(Band::Short, false), (Band::Long, true)] {
+                        if let Some(rates) = point.rates(long, &service) {
+                            points.insert(
+                                PointKey {
+                                    model: model.clone(),
+                                    tier,
+                                    context,
+                                    effective_from: point.effective_from.to_string(),
+                                },
+                                rates,
+                            );
+                        }
+                    }
+                }
+            }
+        }
         Ok(Self {
+            points,
+            overlay: None,
             as_of: raw.as_of,
             source: raw.source,
             histories: raw.histories,
@@ -413,7 +499,7 @@ impl Catalog {
                 complete: None,
             };
         }
-        let Some((target, _, price_point)) = self.price_point(model, at.map(|at| at.date())) else {
+        let Some((target, _, _)) = self.price_point(model, at.map(|at| at.date())) else {
             return CostResult {
                 known: 0.0,
                 complete: None,
@@ -423,7 +509,9 @@ impl Catalog {
             .long_context_thresholds
             .get(target)
             .is_some_and(|threshold| usage.input > *threshold);
-        let Some(rates) = price_point.rates(long_context, tier) else {
+        let Some((_, rates)) =
+            self.select_rates(target, tier, long_context, at.map(|at| at.date()))
+        else {
             return CostResult {
                 known: 0.0,
                 complete: None,
@@ -450,6 +538,46 @@ impl Catalog {
         CostResult {
             known,
             complete: complete.then_some(known),
+        }
+    }
+
+    pub(crate) fn metadata(&self) -> CatalogMetadata {
+        let Some(o) = &self.overlay else {
+            return CatalogMetadata {
+                mode: "embedded",
+                version: self.as_of.clone(),
+                embedded_version: Some(self.as_of.clone()),
+                label: None,
+                bases: vec![catalog::Basis::Official],
+            };
+        };
+        let mut bases = Vec::new();
+        for basis in o
+            .points
+            .iter()
+            .map(|p| p.basis)
+            .chain(o.removals.iter().map(|p| p.basis))
+            .chain(o.thresholds.iter().map(|p| p.basis))
+            .chain(o.proxies.iter().map(|p| p.basis))
+        {
+            if !bases.contains(&basis) {
+                bases.push(basis);
+            }
+        }
+        let standalone = o.base.as_deref() == Some("none");
+        if !standalone && !bases.contains(&catalog::Basis::Official) {
+            bases.push(catalog::Basis::Official);
+        }
+        CatalogMetadata {
+            mode: if standalone {
+                "standalone"
+            } else {
+                "embedded + overlay"
+            },
+            version: o.version.clone(),
+            embedded_version: (!standalone).then(|| self.as_of.clone()),
+            label: o.label.clone(),
+            bases,
         }
     }
 

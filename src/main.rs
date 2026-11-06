@@ -3,6 +3,10 @@ mod cli;
 mod date_filter;
 mod output;
 mod pricing;
+mod pricing_command;
+#[path = "pricing/evidence.rs"]
+mod pricing_evidence;
+mod pricing_store;
 mod progress;
 mod project;
 mod report;
@@ -36,6 +40,10 @@ use crate::{
 
 #[derive(Debug, ThisError)]
 enum AppError {
+    #[error("pricing refresh has unresolved items")]
+    PricingPartial,
+    #[error("{0}")]
+    PricingCommand(String),
     #[error(transparent)]
     Export(#[from] usage_export::ExportError),
     #[error(transparent)]
@@ -106,6 +114,7 @@ fn main() -> ExitCode {
 
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(AppError::PricingPartial) => ExitCode::from(3),
         Err(error) => {
             eprintln!("{}", error_chain(&error));
             ExitCode::FAILURE
@@ -126,9 +135,24 @@ fn run_with_writers(
     stderr_is_terminal: bool,
 ) -> Result<(), AppError> {
     match cli.command {
+        Command::Pricing(args) => {
+            let partial = pricing_command::run(
+                args.command,
+                writer,
+                error_writer,
+                stderr_is_terminal && io::stdin().is_terminal(),
+            )
+            .map_err(AppError::PricingCommand)?;
+            if partial {
+                Err(AppError::PricingPartial)
+            } else {
+                Ok(())
+            }
+        }
         Command::Rates(args) => {
-            let table =
-                pricing::Catalog::embedded()?.rate_table(args.model.as_deref(), args.as_of)?;
+            let table = pricing_store::Snapshot::load(pricing_store::path()?)?
+                .effective
+                .rate_table(args.model.as_deref(), args.as_of)?;
             let rendered = if args.json {
                 format!("{}\n", output::json(&table)?)
             } else {
@@ -150,6 +174,7 @@ fn run_with_writers(
                 .map_err(|source| AppError::WriteCompletions { source })
         }
         Command::Report(args) => {
+            let catalog = pricing_store::Snapshot::load(pricing_store::path()?)?.effective;
             let filter = args.date_filter()?;
             let home = args.codex_home()?;
             let cache = Rc::new(cache::RolloutCache::open(&home, args.refresh));
@@ -158,13 +183,14 @@ fn run_with_writers(
             if args.jsonl {
                 let result = (|| -> Result<(), AppError> {
                     if args.all {
-                        let context = report::ReportContext::new_corpus_cached_with_progress(
+                        let mut context = report::ReportContext::new_corpus_cached_with_progress(
                             &home,
                             &filter,
                             Rc::clone(&cache),
                             &mut progress,
                         )
                         .map_err(ReportError::from)?;
+                        context.catalog = catalog.clone();
                         usage_export::write(
                             &context,
                             usage_export::Selection::All,
@@ -172,7 +198,7 @@ fn run_with_writers(
                             writer,
                         )?;
                     } else if args.project.is_some() || args.thread_id.is_none() {
-                        let scope = project::resolve_with_progress(
+                        let mut scope = project::resolve_with_progress(
                             &home,
                             args.thread_id.as_deref(),
                             args.project.as_deref().unwrap_or(""),
@@ -180,6 +206,7 @@ fn run_with_writers(
                             &mut progress,
                             Rc::clone(&cache),
                         )?;
+                        scope.context.catalog = catalog.clone();
                         usage_export::write(
                             &scope.context,
                             usage_export::Selection::Project(&scope.selection, &scope.thread_ids),
@@ -187,13 +214,14 @@ fn run_with_writers(
                             writer,
                         )?;
                     } else if let Some(id) = args.thread_id.as_deref() {
-                        let context = report::ReportContext::new_for_cached_with_progress(
+                        let mut context = report::ReportContext::new_for_cached_with_progress(
                             &home,
                             &[id.into()],
                             Rc::clone(&cache),
                             &mut progress,
                         )
                         .map_err(ReportError::from)?;
+                        context.catalog = catalog.clone();
                         usage_export::write(
                             &context,
                             usage_export::Selection::Thread(id),
@@ -210,13 +238,14 @@ fn run_with_writers(
             }
             let rendered = (|| -> Result<String, AppError> {
                 if args.all {
-                    let context = report::ReportContext::new_corpus_cached_with_progress(
+                    let mut context = report::ReportContext::new_corpus_cached_with_progress(
                         &home,
                         &filter,
                         Rc::clone(&cache),
                         &mut progress,
                     )
                     .map_err(ReportError::from)?;
+                    context.catalog = catalog.clone();
                     let report = context.build_corpus_with_progress(&filter, &mut progress)?;
                     if args.json {
                         Ok(format!("{}\n", output::json(&report)?))
@@ -231,6 +260,7 @@ fn run_with_writers(
                         &filter,
                         &mut progress,
                         Rc::clone(&cache),
+                        &catalog,
                     )?;
                     if args.json {
                         Ok(format!("{}\n", output::json(&report)?))
@@ -244,6 +274,7 @@ fn run_with_writers(
                         &mut progress,
                         Rc::clone(&cache),
                         &filter,
+                        &catalog,
                     )?;
                     if args.json {
                         Ok(format!("{}\n", output::json(&report)?))
@@ -258,6 +289,7 @@ fn run_with_writers(
                         &filter,
                         &mut progress,
                         Rc::clone(&cache),
+                        &catalog,
                     )?;
                     if args.json {
                         Ok(format!("{}\n", output::json(&report)?))
@@ -276,10 +308,11 @@ fn run_with_writers(
             Ok(())
         }
         Command::Update(args) => {
+            let catalog = pricing_store::Snapshot::load(pricing_store::path()?)?.effective;
             let home = args.codex_home()?;
             let cache = Rc::new(cache::RolloutCache::open(&home, args.refresh));
             let options = args.options();
-            let result = update::run_cached(&home, &options, Rc::clone(&cache))?;
+            let result = update::run_cached(&home, &options, Rc::clone(&cache), &catalog)?;
             write_cache_notices(error_writer, &cache);
             write_update_output(writer, &result, options.apply)?;
             Ok(())
@@ -384,6 +417,7 @@ fn run_schedule(
                 .map_err(|source| AppError::WriteScheduleOutput { source })
         }
         ScheduleCommand::Run(args) => {
+            let catalog = pricing_store::Snapshot::load(pricing_store::path()?)?.effective;
             let paths = schedule_paths()?;
             let schedule_options = args.options();
             let home = schedule_options.codex_home()?;
@@ -394,6 +428,7 @@ fn run_schedule(
                 &schedule_options.update_options(),
                 writer,
                 Rc::clone(&cache),
+                &catalog,
             );
             result?;
             write_cache_notices(error_writer, &cache);
