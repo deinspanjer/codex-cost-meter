@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-06
-- Amended: 2026-08-21
+- Amended: 2026-11-07
 
 ## Context
 
@@ -12,14 +12,14 @@ The local stores serve different purposes:
 
 - `state_5.sqlite` contains the task rows used for update selection and persisted-name mutation, including ID, title, name, history mode, first user message, and `updated_at`.
 - Active and archived rollout JSONL contain session metadata, parent relationships, token events, model changes, and event timestamps needed to calculate cost.
-- `session_index.jsonl` contains the optional latest display name needed by an exact-ID read-only report.
+- `session_index.jsonl` contains optional display names used as a reporting fallback.
 - UI or terminal visibility is not reliable evidence of persisted usage or identity.
 
 ## Decision
 
 For title updates, read task selection and persisted naming metadata from `state_5.sqlite`. Read usage, model, timing, root/descendant identity, and active/archive coverage from rollout JSONL.
 
-An exact-ID read-only report does not require SQLite selection, history-mode naming, or update state. SQLite may narrow rollout discovery, but identity and usage still come from rollout JSONL and the latest display name may come from `session_index.jsonl`. If SQLite is unavailable, reporting remains usable through rollout fallback. This narrower path is an exception for reporting, not a second source of truth for title mutation.
+Reports use the updater's history-mode naming rules without synthesizing names from prompts: prefer SQLite `name` for paginated history and a SQLite `title` distinct from `first_user_message` for legacy history, then fall back to a usable session-index name. Title placeholders and internal envelopes remain unnamed. Database naming reads are optional and read-only; missing or incompatible metadata never blocks an exact-ID usage report. Identity and usage still come from rollout JSONL. An explicit `report --match-title` selects exactly one root by a case-insensitive display-title substring and rejects missing or ambiguous matches; positional selectors remain exact IDs. Project and corpus per-thread detail use the same name resolver.
 
 For an exact-ID report or bounded title update, use SQLite rollout paths and `thread_spawn_edges` to select the requested roots and ordinary spawned descendants before opening rollout files. Probe the smaller set of SQLite subagent/internal rows without spawn edges because guardian, review, compaction, memory, and compatibility relationships may exist only in rollout metadata. Walk active and archived directories without opening indexed files, then inspect only paths absent from SQLite to recover state-database lag. Fall back to the full rollout scan when SQLite is absent or incompatible, a requested ID is absent, or a selected path cannot be read.
 
@@ -34,7 +34,7 @@ Convert cumulative token counters into deltas and attribute each delta to the mo
 - Read SQLite alone: rejected because it does not contain the event-level token and descendant data needed for pricing.
 - Trust SQLite as a complete rollout index: rejected because Codex persists JSONL first, metadata synchronization is best-effort, and `thread_spawn_edges` represents only ordinary thread spawns.
 - Read rollouts alone for title updates: rejected because persisted task naming, history mode, and update state come from SQLite.
-- Require SQLite for an exact-ID report: rejected because it adds a failure dependency without supplying data required by that report.
+- Require SQLite for an exact-ID report: rejected because optional naming enrichment must not become a failure dependency for usage reporting.
 - Add tables to Codex's `state_5.sqlite`: rejected because Codex owns and versions that database, its recovery moves the whole database aside, and it exposes no third-party extension contract.
 - Trust Codex's projected update timestamp as the cache watermark: rejected because JSONL is flushed first, projection updates are best-effort and can be coalesced, and ordinary projection failures have no guaranteed immediate repair.
 - Infer state from visible UI or terminal output: rejected because missing tool output was previously mistaken for zero usage.

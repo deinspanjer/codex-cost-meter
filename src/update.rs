@@ -452,24 +452,21 @@ fn matches_title(row: &ThreadRow, snapshot: &Snapshot, query: &str) -> bool {
 }
 
 fn base_name(row: &ThreadRow, snapshot: &Snapshot) -> String {
-    let title = nonblank(row.title.as_deref());
-    let prompt = nonblank(row.first_user_message.as_deref());
-    if row.history_mode.as_deref() == Some("paginated") {
-        if let Some(name) = nonblank(row.name.as_deref()) {
-            return name.into();
-        }
-        return normalize_whitespace(prompt.or(title).unwrap_or("Untitled"));
-    }
-    if let Some(title) = title.filter(|title| Some(*title) != prompt) {
-        return title.into();
-    }
-    if let Some(name) = snapshot
-        .entry(&row.id)
-        .and_then(|entry| nonblank(Some(&entry.name)))
-    {
-        return name.into();
-    }
-    normalize_whitespace(prompt.or(title).unwrap_or("Untitled"))
+    crate::thread_name::existing_name(
+        row.title.as_deref(),
+        row.name.as_deref(),
+        row.history_mode.as_deref(),
+        row.first_user_message.as_deref(),
+        snapshot.entry(&row.id).map(|entry| entry.name.as_str()),
+    )
+    .map(str::to_owned)
+    .unwrap_or_else(|| {
+        normalize_whitespace(
+            nonblank(row.first_user_message.as_deref())
+                .or_else(|| nonblank(row.title.as_deref()))
+                .unwrap_or("Untitled"),
+        )
+    })
 }
 
 fn nonblank(value: Option<&str>) -> Option<&str> {
