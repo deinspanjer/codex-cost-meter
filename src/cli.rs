@@ -185,6 +185,8 @@ pub(crate) struct ReportArgs {
         help = "Codex session ID or codex://threads/<ID> link, also called a thread or rollout ID."
     )]
     pub(crate) thread_id: Option<String>,
+    #[arg(long, conflicts_with_all = ["thread_id", "project", "all"], value_name = "TEXT", help = "Report the root session with a unique case-insensitive display-title substring.")]
+    pub(crate) match_title: Option<String>,
     #[arg(
         long,
         num_args = 0..=1,
@@ -328,7 +330,7 @@ impl ReportArgs {
     pub(crate) fn date_filter(
         &self,
     ) -> Result<crate::date_filter::Filter, crate::date_filter::Error> {
-        if self.thread_id.is_some()
+        if (self.thread_id.is_some() || self.match_title.is_some())
             && self.project.is_none()
             && (!self.group_by.is_empty() || self.by_thread || self.include_empty)
         {

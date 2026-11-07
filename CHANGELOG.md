@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Resolve report titles from read-only Codex SQLite metadata using history-mode naming rules, with session-index fallback; add explicit unique-title selection with `report --match-title`.
+
 ## [1.6.1]
 
 - Skip title updates for empty names, `Untitled` placeholders, and names beginning with `<`, including when they already have meter suffixes; preserve both title stores and the batch limit for usable names.

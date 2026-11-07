@@ -10,6 +10,7 @@ mod rollout;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod schedule;
 mod session_index;
+mod thread_name;
 mod title;
 mod update;
 mod usage_export;
@@ -149,12 +150,20 @@ fn run_with_writers(
                 .write_all(&script)
                 .map_err(|source| AppError::WriteCompletions { source })
         }
-        Command::Report(args) => {
+        Command::Report(mut args) => {
             let filter = args.date_filter()?;
             let home = args.codex_home()?;
             let cache = Rc::new(cache::RolloutCache::open(&home, args.refresh));
             let mut progress =
                 progress::Progress::new(error_writer, args.progress, stderr_is_terminal);
+            if let Some(query) = &args.match_title {
+                args.thread_id = Some(report::resolve_title(
+                    &home,
+                    query,
+                    Rc::clone(&cache),
+                    &mut progress,
+                )?);
+            }
             if args.jsonl {
                 let result = (|| -> Result<(), AppError> {
                     if args.all {

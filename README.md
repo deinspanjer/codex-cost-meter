@@ -26,6 +26,8 @@ For a date-scoped aggregate across every discovered rollout, run:
 codex-cost-meter report --all --since 2026-08-01 --through 2026-08-31 --group-by day
 ```
 
+Use `report --match-title "unique title text"` to select a root session by its current display title. Reports read names from optional Codex SQLite metadata with a session-index fallback. Missing or ambiguous title matches require a unique substring or session ID.
+
 The same date and grouping options work with project reports. Bounds and buckets use the operating system's local calendar; `--all` also uses available Codex created/updated timestamps to avoid opening indexed rollouts that cannot overlap the range. See [corpus and date reports](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#corpus-and-date-reports) for the complete contract.
 
 Use `report --project . --since 2026-10-20 --by-thread` for self-only thread detail, or add `--jsonl` instead of `--by-thread` to export normalized usage events with source locators and pricing. Exact-thread reports also accept `--since` and `--through`. See the [reporting and export guide](https://github.com/deinspanjer/codex-cost-meter/blob/main/USERS.md#per-thread-and-selected-thread-date-reports).

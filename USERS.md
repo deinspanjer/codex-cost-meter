@@ -68,7 +68,7 @@ The current release workflow produces a macOS archive containing a Developer ID-
 
 ## Find your session ID
 
-The report and explicit `update --thread-id` commands need a Codex session ID. If the root thread ID is not already in the Codex CLI status line, run `/status` to show it. To keep it visible between commands, run `/statusline` and add **Current thread identifier**. The app also offers two convenient ways to copy it:
+The positional report selector and explicit `update --thread-id` commands accept a Codex session ID. If the root thread ID is not already in the Codex CLI status line, run `/status` to show it. To keep it visible between commands, run `/statusline` and add **Current thread identifier**. The app also offers two convenient ways to copy it:
 
 1. Right-click the task in the sidebar and select **Copy session ID**.
 
@@ -86,6 +86,16 @@ You can also pass a thread deep link wherever a thread ID is accepted:
 codex-cost-meter report codex://threads/01a12843-3193-7a92-aba8-1f98c21c4284
 codex-cost-meter update --thread-id codex://threads/01a12843-3193-7a92-aba8-1f98c21c4284
 ```
+
+You can also select a root session by a unique, case-insensitive substring of its current display title:
+
+```text
+codex-cost-meter report --match-title "Investigate missing titles"
+```
+
+An absent or ambiguous match fails and asks for a unique substring or session ID. Title selection cannot be combined with an ID, `--project`, or `--all`; date filters and `--json`/`--jsonl` remain available. Positional selectors always mean IDs, so a mistyped ID cannot silently select another chat.
+
+Reports resolve titles using Codex's history-mode rules: `threads.name` for paginated history, or a SQLite `title` distinct from the first user message for legacy history. The session index supplies a fallback when no usable database name is available. Reads use `state_5.sqlite` directly under the Codex home or under `sqlite/` and never modify Codex naming metadata. Missing, unreadable, or incompatible database metadata does not block usage reporting. Without a usable persisted name, JSON reports `thread_name: null` and human output shows **Unnamed task** for a root. Raw prompts, placeholders, and internal message envelopes are not promoted to report titles. The same resolution applies to project and corpus per-thread detail.
 
 ## Ask Codex to run it
 

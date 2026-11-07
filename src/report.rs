@@ -17,6 +17,7 @@ use crate::{
         discovery::RolloutIndex,
     },
     session_index::Snapshot,
+    thread_name::Names,
 };
 
 #[derive(Debug, Error)]
@@ -29,6 +30,10 @@ pub(crate) enum ReportError {
         #[source]
         source: AnalysisError,
     },
+    #[error(
+        "title substring {query:?} resolved to {matches}; use a unique title substring or a session ID"
+    )]
+    TitleMatch { query: String, matches: String },
     #[error(transparent)]
     Pricing(#[from] PricingError),
     #[error(transparent)]
@@ -200,7 +205,7 @@ pub(crate) struct ReportContext {
     codex_home: PathBuf,
     pub(crate) index: RolloutIndex,
     pub(crate) catalog: Catalog,
-    session_index: Snapshot,
+    names: Names,
     cache: Rc<RolloutCache>,
 }
 
@@ -218,7 +223,7 @@ impl ReportContext {
             codex_home: codex_home.into(),
             index: RolloutIndex::build_cached(codex_home, &cache),
             catalog: Catalog::embedded()?,
-            session_index: Snapshot::load(codex_home),
+            names: Names::load(codex_home),
             cache,
         })
     }
@@ -245,7 +250,7 @@ impl ReportContext {
             codex_home: codex_home.into(),
             index: RolloutIndex::build_for_cached(codex_home, thread_ids, Some(&cache), || {}),
             catalog: Catalog::embedded()?,
-            session_index: Snapshot::load(codex_home),
+            names: Names::load(codex_home),
             cache,
         })
     }
@@ -260,7 +265,7 @@ impl ReportContext {
             &self.codex_home,
             &self.index,
             &self.catalog,
-            self.session_index(),
+            &self.names,
             &self.cache,
             progress,
             None,
@@ -407,10 +412,7 @@ impl ReportContext {
                     rows.push(ThreadReport {
                         thread_id: id.clone(),
                         parent_thread_id: None,
-                        thread_name: self
-                            .session_index
-                            .entry(&id)
-                            .map(|entry| entry.name.clone()),
+                        thread_name: self.names.get(&id),
                         rollout_type: "unknown".into(),
                         agent_label: None,
                         stats: missing.report(),
@@ -489,15 +491,7 @@ impl ReportContext {
                 rows.push(ThreadReport {
                     thread_id: id,
                     parent_thread_id: record.parent_id.clone(),
-                    thread_name: self
-                        .session_index
-                        .is_complete()
-                        .then(|| {
-                            self.session_index
-                                .entry(&record.id)
-                                .map(|entry| entry.name.clone())
-                        })
-                        .flatten(),
+                    thread_name: self.names.get(&record.id),
                     rollout_type: record.kind.report_type(),
                     agent_label: match &record.kind {
                         crate::rollout::discovery::RolloutKind::OtherSubagent(label) => {
@@ -574,7 +568,7 @@ impl ReportContext {
     }
 
     pub(crate) fn session_index(&self) -> &Snapshot {
-        &self.session_index
+        &self.names.index
     }
 }
 
@@ -591,7 +585,7 @@ impl ReportContext {
                 progress.indexed_file()
             }),
             catalog: Catalog::embedded()?,
-            session_index: Snapshot::load(codex_home),
+            names: Names::load(codex_home),
             cache,
         })
     }
@@ -612,7 +606,7 @@ impl ReportContext {
                 || progress.indexed_file(),
             ),
             catalog: Catalog::embedded()?,
-            session_index: Snapshot::load(codex_home),
+            names: Names::load(codex_home),
             cache,
         })
     }
@@ -630,7 +624,7 @@ impl ReportContext {
                 progress.indexed_file()
             }),
             catalog: Catalog::embedded()?,
-            session_index: Snapshot::load(codex_home),
+            names: Names::load(codex_home),
             cache,
         })
     }
@@ -1060,7 +1054,7 @@ pub(crate) fn build_with_progress(
         codex_home,
         &context.index,
         &context.catalog,
-        &context.session_index,
+        &context.names,
         &context.cache,
         Some(progress),
         Some(filter),
@@ -1079,7 +1073,7 @@ fn build_with_index(
         codex_home,
         index,
         catalog,
-        &Snapshot::load(codex_home),
+        &Names::load(codex_home),
         &RolloutCache::open(codex_home, false),
         None,
         None,
@@ -1092,7 +1086,7 @@ fn build_with_state(
     codex_home: &Path,
     index: &RolloutIndex,
     catalog: &Catalog,
-    session_index: &Snapshot,
+    names: &Names,
     cache: &RolloutCache,
     mut progress: Option<&mut Progress>,
     filter: Option<&Filter>,
@@ -1198,14 +1192,7 @@ fn build_with_state(
             rollout_id: thread_id.into(),
             rollout_type: root.kind.report_type(),
             project: root.cwd.clone(),
-            thread_name: session_index
-                .is_complete()
-                .then(|| {
-                    session_index
-                        .entry(thread_id)
-                        .map(|entry| entry.name.clone())
-                })
-                .flatten(),
+            thread_name: names.get(thread_id),
             total_subagent_spawns: descendants.len(),
             total_subagent_turn_duration_seconds: children_stats.total_turn_duration_seconds,
             stats: root_stats,
@@ -1219,6 +1206,7 @@ fn build_with_state(
         pricing: pricing_report(catalog),
         has_unusable_rollout,
         incomplete_input_warnings: {
+            let session_index = &names.index;
             if session_index.read_error().is_some() {
                 warnings.push("session index could not be read".into());
             } else {
@@ -1237,6 +1225,40 @@ fn build_with_state(
 fn round(value: f64, decimal_places: i32) -> f64 {
     let scale = 10_f64.powi(decimal_places);
     (value * scale).round() / scale
+}
+
+/// Title selection is explicit so a missing ID can never select an unrelated chat.
+pub(crate) fn resolve_title(
+    home: &Path,
+    query: &str,
+    cache: Rc<RolloutCache>,
+    progress: &mut Progress,
+) -> Result<String, ReportError> {
+    let context = ReportContext::new_cached_with_progress(home, cache, progress)?;
+    let query_lower = query.trim().to_lowercase();
+    let mut matches = context
+        .roots()
+        .filter(|record| {
+            !query_lower.is_empty()
+                && context
+                    .names
+                    .get(&record.id)
+                    .is_some_and(|name| name.to_lowercase().contains(&query_lower))
+        })
+        .map(|record| record.id.clone())
+        .collect::<Vec<_>>();
+    matches.sort();
+    if matches.len() == 1 {
+        return Ok(matches.remove(0));
+    }
+    Err(ReportError::TitleMatch {
+        query: query.into(),
+        matches: if matches.is_empty() {
+            "none".into()
+        } else {
+            matches.join(", ")
+        },
+    })
 }
 
 #[cfg(test)]

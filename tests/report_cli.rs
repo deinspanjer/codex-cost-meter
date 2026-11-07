@@ -1849,3 +1849,239 @@ fn usage_export_preserves_unknowns_and_requires_a_terminal_summary() {
             .is_empty()
     );
 }
+
+fn naming_database(home: &Path, nested: bool) -> Connection {
+    let directory = if nested {
+        home.join("sqlite")
+    } else {
+        home.to_owned()
+    };
+    fs::create_dir_all(&directory).unwrap();
+    let database = Connection::open(directory.join("state_5.sqlite")).unwrap();
+    database.execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT, history_mode TEXT, first_user_message TEXT);").unwrap();
+    database
+}
+
+#[test]
+fn report_titles_follow_history_mode_without_requiring_an_index_entry() {
+    for (mode, title, name, index, expected) in [
+        (
+            "paginated",
+            "Raw prompt",
+            Some("Visible title"),
+            None,
+            Some("Visible title"),
+        ),
+        (
+            "paginated",
+            "Raw prompt",
+            Some("Visible title"),
+            Some("Stale index title"),
+            Some("Visible title"),
+        ),
+        (
+            "legacy",
+            "Visible title",
+            Some("Wrong field"),
+            None,
+            Some("Visible title"),
+        ),
+        (
+            "legacy",
+            "Raw prompt",
+            None,
+            Some("Index title"),
+            Some("Index title"),
+        ),
+        ("legacy", "Raw prompt", None, None, None),
+        (
+            "paginated",
+            "Raw prompt",
+            Some("Untitled · $1.00"),
+            None,
+            None,
+        ),
+        (
+            "paginated",
+            "Raw prompt",
+            Some("<internal envelope>"),
+            None,
+            None,
+        ),
+    ] {
+        // Exercise both supported database locations and both output formats.
+        for nested in [false, true] {
+            let home = fixture_home();
+            let database = naming_database(home.path(), nested);
+            database
+                .execute(
+                    "INSERT INTO threads VALUES ('root', ?1, ?2, ?3, 'Raw prompt')",
+                    params![title, name, mode],
+                )
+                .unwrap();
+            if let Some(index) = index {
+                write_jsonl(
+                    &home.path().join("session_index.jsonl"),
+                    &[
+                        json!({"id":"root", "thread_name":index, "updated_at":"2026-08-13T12:00:00Z"}),
+                    ],
+                );
+            }
+            let output = report_with_home(home.path(), "root", true);
+            assert!(output.status.success(), "{}", stderr(&output));
+            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                report["rollout"]["thread_name"],
+                json!(expected),
+                "{mode}, nested={nested}"
+            );
+            assert_eq!(report["tree"]["input_tokens"], 100);
+            let human = report_with_home(home.path(), "root", false);
+            assert!(human.status.success(), "{}", stderr(&human));
+            assert!(
+                String::from_utf8_lossy(&human.stdout).contains(expected.unwrap_or("Unnamed task"))
+            );
+            assert_eq!(
+                database
+                    .query_row(
+                        "SELECT title, name FROM threads WHERE id = 'root'",
+                        [],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    )
+                    .unwrap(),
+                (title.into(), name.map(str::to_owned))
+            );
+            assert_eq!(
+                home.path().join("session_index.jsonl").exists(),
+                index.is_some()
+            );
+        }
+    }
+}
+
+#[test]
+fn report_title_selection_and_thread_detail_use_current_database_names() {
+    let home = fixture_home();
+    let project = home.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    write_jsonl(
+        &home.path().join("sessions/root.jsonl"),
+        &dated_rollout(
+            "root",
+            None,
+            &project,
+            "gpt-5.6-terra",
+            "2026-08-13T12:00:00Z",
+            "2026-08-13T12:01:00Z",
+            100,
+        ),
+    );
+    let database = naming_database(home.path(), false);
+    database.execute("INSERT INTO threads VALUES ('root', 'Prompt', 'Current session title', 'paginated', 'Prompt')", []).unwrap();
+    let selected = detail_command(home.path(), &["--match-title", "CURRENT session", "--json"]);
+    assert!(selected.status.success(), "{}", stderr(&selected));
+    let report: Value = serde_json::from_slice(&selected.stdout).unwrap();
+    assert_eq!(report["rollout"]["rollout_id"], "root");
+    assert_eq!(report["rollout"]["thread_name"], "Current session title");
+    for scope in [vec!["--all"], vec!["--project", project.to_str().unwrap()]] {
+        let mut args = scope;
+        args.extend(["--by-thread", "--json"]);
+        let output = detail_command(home.path(), &args);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report["by_thread"][0]["thread_name"],
+            "Current session title"
+        );
+    }
+    database
+        .execute(
+            "UPDATE threads SET name = 'Renamed session' WHERE id = 'root'",
+            [],
+        )
+        .unwrap();
+    let output = report_with_home(home.path(), "root", true);
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["rollout"]["thread_name"], "Renamed session");
+    let renamed = detail_command(home.path(), &["--match-title", "Renamed", "--jsonl"]);
+    assert!(renamed.status.success(), "{}", stderr(&renamed));
+    assert!(String::from_utf8_lossy(&renamed.stdout).contains("\"thread_id\":\"root\""));
+}
+
+#[test]
+fn title_selection_rejects_missing_ambiguous_and_conflicting_selectors() {
+    let home = fixture_home();
+    write_jsonl(
+        &home.path().join("sessions/second.jsonl"),
+        &[json!({"type":"session_meta", "payload":{"id":"second", "source":"cli"}})],
+    );
+    write_jsonl(
+        &home.path().join("sessions/child.jsonl"),
+        &[
+            json!({"type":"session_meta", "payload":{"id":"child", "parent_thread_id":"root", "source":{"subagent":{"other":"worker"}}}}),
+        ],
+    );
+    write_jsonl(
+        &home.path().join("session_index.jsonl"),
+        &[
+            json!({"id":"root", "thread_name":"Shared title one", "updated_at":"2026-08-13T12:00:00Z"}),
+            json!({"id":"second", "thread_name":"Shared title two", "updated_at":"2026-08-13T12:00:00Z"}),
+            json!({"id":"child", "thread_name":"Shared title one", "updated_at":"2026-08-13T12:00:00Z"}),
+        ],
+    );
+    for (query, error) in [
+        ("missing", "resolved to none"),
+        ("shared title", "resolved to root, second"),
+        (" ", "resolved to none"),
+    ] {
+        let output = detail_command(home.path(), &["--match-title", query]);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains(error), "{}", stderr(&output));
+        assert!(output.stdout.is_empty());
+    }
+    // A single index-backed match remains available without SQLite.
+    assert!(
+        detail_command(home.path(), &["--match-title", "title one", "--json"])
+            .status
+            .success()
+    );
+    for args in [
+        vec!["root"],
+        vec!["--all"],
+        vec!["--project", "."],
+        vec!["--by-thread"],
+    ] {
+        let mut conflicting = vec!["--match-title", "title one"];
+        conflicting.extend(args);
+        let output = detail_command(home.path(), &conflicting);
+        assert!(!output.status.success());
+    }
+}
+
+#[test]
+fn unavailable_naming_database_keeps_reports_usable_with_index_fallback() {
+    for database_contents in [None, Some("not sqlite"), Some("incompatible schema")] {
+        let home = fixture_home();
+        let path = home.path().join("state_5.sqlite");
+        match database_contents {
+            Some("incompatible schema") => Connection::open(&path)
+                .unwrap()
+                .execute_batch("CREATE TABLE threads (id TEXT PRIMARY KEY);")
+                .unwrap(),
+            Some(contents) => fs::write(&path, contents).unwrap(),
+            None => (),
+        }
+        write_jsonl(
+            &home.path().join("session_index.jsonl"),
+            &[
+                json!({"id":"root", "thread_name":"Index fallback", "updated_at":"2026-08-13T12:00:00Z"}),
+            ],
+        );
+        let output = report_with_home(home.path(), "root", true);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["rollout"]["thread_name"], "Index fallback");
+        assert_eq!(report["tree"]["input_tokens"], 100);
+        assert_eq!(path.exists(), database_contents.is_some());
+    }
+}
