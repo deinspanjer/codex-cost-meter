@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.7.0]
+
 - Resolve report titles from read-only Codex SQLite metadata using history-mode naming rules, with session-index fallback; add explicit unique-title selection with `report --match-title`.
 
 ## [1.6.1]
