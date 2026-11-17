@@ -21,6 +21,12 @@ Preserve the existing Python Codex task-cost tools for reference while developin
 - Keep public APIs small and use exhaustive matches where practical.
 - Do not add compatibility shims, configuration, or packaging machinery without a current requirement.
 
+## OpenSpec
+
+- Use OpenSpec 2.1.0 machine-global skills; do not regenerate project-local OpenSpec skills or commands.
+- Keep project context, rules, and operation guidance in `openspec/config.yaml`; retain specs and active changes under `openspec/`.
+- For a new machine, follow the OpenSpec setup in `DEVELOPERS.md`.
+
 ## Verification
 
 - Test the narrowest behavioral invariant that could regress; do not test static prose or constants.
