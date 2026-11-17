@@ -379,13 +379,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("model-prices.json");
         std::fs::write(&path,r#"{"schema_version":1,"version":"test-custom","label":"pennies","base":"none","points":[{"model":"my-model","tier":"standard","context":"short","effective_from":"2026-11-01","rates":{"input":0.01}}]}"#).unwrap();
-        let text = prompt(&Snapshot::load(path.clone()).unwrap()).unwrap();
-        assert!(
-            text.contains("test-custom")
-                && text.contains("pennies")
-                && text.contains("my-model")
-                && text.contains(&path.display().to_string())
-        );
-        assert!(text.contains("\"external\": true"));
+        let mut snapshot = Snapshot::load(path.clone()).unwrap();
+        for path in [
+            path,
+            std::path::PathBuf::from(r"C:\pricing\model-prices.json"),
+        ] {
+            snapshot.path = path.clone();
+            let text = prompt(&snapshot).unwrap();
+            let (_, json) = text.rsplit_once("```json\n").unwrap();
+            let json = json.strip_suffix("\n```\n").unwrap();
+            let context: serde_json::Value = serde_json::from_str(json).unwrap();
+            assert_eq!(context["path"], serde_json::json!(path));
+            assert_eq!(context["external_file"]["version"], "test-custom");
+            assert_eq!(context["external_file"]["label"], "pennies");
+            assert_eq!(context["effective_points"][0]["key"]["model"], "my-model");
+            assert_eq!(context["effective_points"][0]["external"], true);
+        }
     }
 }
