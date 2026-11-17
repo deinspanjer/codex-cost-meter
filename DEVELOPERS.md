@@ -15,6 +15,19 @@ just check
 
 Use `just test-filter <FILTER>` for the behavior you are changing or `cargo test --test <NAME>` for one CLI integration suite. `just check` runs formatting, Rust tests, version-tool tests, and warnings-denied Clippy. See the [test map](docs/architecture.md#tests) for coverage and the [packaging guide](docs/releases.md#packaging-and-platform-checks) for native builds and `just package`.
 
+## OpenSpec setup
+
+OpenSpec 2.1.0 skills are installed per machine, not committed to this repository. With the CLI installed, run from this checkout:
+
+```sh
+openspec init --scope global --tools codex,opencode
+openspec update --dry-run
+```
+
+The shared skills live in `~/.agents/skills/` and are discovered by Codex and OpenCode. Use `openspec-propose`, `openspec-explore`, `openspec-apply-change`, `openspec-update-change`, `openspec-sync-specs`, and `openspec-archive-change` through your agent's skill interface; project-local slash-command files are no longer maintained.
+
+Keep project-specific guidance in `openspec/config.yaml` and specs, active changes, and archives in `openspec/`. Do not restore local generated skills or commands: they can shadow the machine-global versions.
+
 ## Architecture
 
 One Rust 2024 crate produces one `codex-cost-meter` binary. Rollout JSONL is authoritative for usage; SQLite supports discovery, caching, optional report naming, and title updates. Platform-specific scheduler modules handle the native lifecycle. The `python-prototype/` directory is historical reference.
