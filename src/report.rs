@@ -187,9 +187,10 @@ pub(crate) struct ModelTierReport {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct PricingReport {
+    pub metadata: crate::pricing::CatalogMetadata,
     pub basis: &'static str,
-    pub as_of: String,
-    pub source: String,
+    pub as_of: Option<String>,
+    pub source: Option<String>,
     pub model_proxies: BTreeMap<String, String>,
     pub model_proxy_histories: BTreeMap<String, Vec<ModelProxyPointReport>>,
 }
@@ -648,9 +649,19 @@ pub(crate) fn pricing_report(catalog: &Catalog) -> PricingReport {
         })
         .collect();
     PricingReport {
-        basis: "API list pricing; applied rollout tier (served tier unavailable); per request model/context; output includes reasoning; auto-review assumes ChatGPT sign-in, free from 2026-10-06 observation boundary",
-        as_of: catalog.as_of().into(),
-        source: catalog.source().into(),
+        metadata: catalog.metadata(),
+        basis: if catalog.metadata().mode == "standalone"
+            || catalog
+                .metadata()
+                .bases
+                .contains(&crate::pricing::catalog::Basis::Custom)
+        {
+            "User-controlled pricing; applied rollout tier (served tier unavailable); per request model/context; output includes reasoning"
+        } else {
+            "API list pricing; applied rollout tier (served tier unavailable); per request model/context; output includes reasoning"
+        },
+        as_of: (catalog.metadata().mode != "standalone").then(|| catalog.as_of().into()),
+        source: (catalog.metadata().mode != "standalone").then(|| catalog.source().into()),
         model_proxies: catalog
             .proxies()
             .iter()
@@ -1041,13 +1052,15 @@ pub(crate) fn build_with_progress(
     progress: &mut Progress,
     cache: Rc<RolloutCache>,
     filter: &Filter,
+    catalog: &Catalog,
 ) -> Result<Report, ReportError> {
-    let context = ReportContext::new_for_cached_with_progress(
+    let mut context = ReportContext::new_for_cached_with_progress(
         codex_home,
         &[thread_id.into()],
         cache,
         progress,
     )?;
+    context.catalog = catalog.clone();
     progress.start_analysis(context.rollout_count(thread_id));
     build_with_state(
         thread_id,
@@ -1561,6 +1574,58 @@ mod tests {
                 Some(0.0012)
             );
         }
+    }
+
+    #[test]
+    fn cached_usage_is_repriced_with_new_catalog_snapshot() {
+        use crate::cache::RolloutCache;
+        use crate::pricing::Rates;
+        use crate::pricing::catalog::{Band, Basis, Overlay, Point, PointKey, Tier};
+        use std::rc::Rc;
+        let home = TempDir::new().unwrap();
+        write_jsonl(
+            &home,
+            "sessions/root.jsonl",
+            &[
+                json!({"type":"session_meta","timestamp":"2026-10-08T12:00:00Z","payload":{"id":"root","source":"cli"}}),
+                json!({"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}),
+                json!({"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"ultrafast"}}}),
+                json!({"type":"event_msg","timestamp":"2026-10-08T12:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"total_tokens":100}}}}),
+            ],
+        );
+        let cache = Rc::new(RolloutCache::open(home.path(), false));
+        let mut context =
+            ReportContext::new_for_cached(home.path(), &["root".into()], Rc::clone(&cache))
+                .unwrap();
+        assert_eq!(
+            context.build("root").unwrap().tree.estimated_cost_usd,
+            Some(0.0012)
+        );
+        let overlay = Overlay {
+            points: vec![Point {
+                key: PointKey {
+                    model: "gpt-6.1-sol".into(),
+                    tier: Tier::Ultrafast,
+                    context: Band::Short,
+                    effective_from: "2026-10-08".into(),
+                },
+                rates: Rates {
+                    input: Some(1.0),
+                    ..Rates::default()
+                },
+                basis: Basis::Custom,
+                source: None,
+            }],
+            ..Overlay::default()
+        };
+        context.catalog = Catalog::embedded()
+            .unwrap()
+            .merge_overlay(&overlay)
+            .unwrap();
+        assert_eq!(
+            context.build("root").unwrap().tree.estimated_cost_usd,
+            Some(0.0001)
+        );
     }
 
     #[test]

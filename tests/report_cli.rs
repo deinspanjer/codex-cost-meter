@@ -88,6 +88,8 @@ fn report_with_home(home: &Path, thread_id: &str, json: bool) -> Output {
     command
         .args(["report", thread_id, "--codex-home"])
         .arg(home)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
         .env_remove("CODEX_HOME");
     if json {
         command.arg("--json");
@@ -210,6 +212,8 @@ fn paginated_compressed_history_preserves_usage_turns_descendants_and_cache_fres
             "--codex-home",
         ])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
     assert!(
@@ -298,6 +302,8 @@ fn corpus_and_project_reports_share_date_grouping_and_empty_bucket_rules() {
             "--codex-home",
         ])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .env("TZ", "UTC")
         .output()
         .unwrap();
@@ -353,6 +359,8 @@ fn corpus_and_project_reports_share_date_grouping_and_empty_bucket_rules() {
             "--codex-home",
         ])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .env("TZ", "UTC")
         .output()
         .unwrap();
@@ -374,6 +382,8 @@ fn corpus_and_project_reports_share_date_grouping_and_empty_bucket_rules() {
             "--codex-home",
         ])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .env("TZ", "UTC")
         .output()
         .unwrap();
@@ -472,6 +482,8 @@ fn corpus_dates_prune_only_metadata_backed_out_of_range_rollouts() {
         let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
             .args(["report", "--all", "--json", "--codex-home"])
             .arg(home.path())
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
             .args(bounds)
             .env("TZ", "UTC")
             .output()
@@ -504,6 +516,8 @@ fn grouping_rejects_exact_threads_and_unbounded_empty_rows() {
     let exact = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(["report", "root", "--group-by", "day", "--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
     assert!(!exact.status.success());
@@ -521,6 +535,8 @@ fn grouping_rejects_exact_threads_and_unbounded_empty_rows() {
             "--codex-home",
         ])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
     assert!(!empty.status.success());
@@ -529,6 +545,8 @@ fn grouping_rejects_exact_threads_and_unbounded_empty_rows() {
     let mixed = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(["report", "--all", "--project", "--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
     assert!(!mixed.status.success());
@@ -551,6 +569,8 @@ fn filtered_reports_exclude_untimestamped_data_without_changing_lifetime_totals(
     let lifetime = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(["report", "--all", "--json", "--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
     assert!(lifetime.status.success(), "{}", stderr(&lifetime));
@@ -569,6 +589,8 @@ fn filtered_reports_exclude_untimestamped_data_without_changing_lifetime_totals(
             "--codex-home",
         ])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
     assert!(filtered.status.success(), "{}", stderr(&filtered));
@@ -590,6 +612,8 @@ fn forced_progress_keeps_json_stdout_machine_readable() {
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(["report", "root", "--json", "--progress", "--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
 
@@ -657,6 +681,8 @@ fn project_path_report_keeps_assigned_and_cli_roots_separate_from_exclusions() {
         .arg(&workspace)
         .args(["--json", "--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
 
@@ -705,6 +731,8 @@ fn project_flag_without_a_ref_derives_an_assigned_threads_desktop_project() {
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(["report", "assigned", "--project", "--json", "--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
 
@@ -754,6 +782,8 @@ fn project_flag_without_a_ref_rolls_up_a_projectless_threads_exact_cwd() {
             "--codex-home",
         ])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
 
@@ -805,6 +835,8 @@ fn project_name_selects_all_of_its_source_roots() {
             "--codex-home",
         ])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
 
@@ -845,6 +877,8 @@ fn named_project_keeps_direct_assignments_when_a_source_root_is_missing() {
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(["report", "--project", "Project", "--json", "--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
 
@@ -885,6 +919,8 @@ fn ambiguous_source_root_lists_the_matching_projects() {
         .arg(&workspace)
         .args(["--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
 
@@ -925,6 +961,8 @@ fn explicit_project_rejects_a_thread_owned_by_another_project() {
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(["report", "other", "--project", "First", "--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
 
@@ -949,6 +987,8 @@ fn bare_report_defaults_to_the_current_working_directory() {
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(["report", "--json", "--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .current_dir(&workspace)
         .output()
         .unwrap();
@@ -988,6 +1028,8 @@ fn unique_fuzzy_project_name_resolves_before_historical_cwds() {
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(["report", "--project", "Projec", "--json", "--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
 
@@ -1017,6 +1059,8 @@ fn unique_historical_cwd_match_is_used_when_no_project_name_or_path_matches() {
             "--codex-home",
         ])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
 
@@ -1118,6 +1162,8 @@ fn report_json_uses_explicit_codex_home() {
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(["report", "root", "--json", "--codex-home"])
         .arg(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .env_remove("CODEX_HOME")
         .output()
         .unwrap();
@@ -1136,6 +1182,8 @@ fn report_uses_codex_home_environment_when_no_flag_is_present() {
     let output = Command::new(env!("CARGO_BIN_EXE_codex-cost-meter"))
         .args(["report", "root", "--json"])
         .env("CODEX_HOME", home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .output()
         .unwrap();
 
@@ -1396,6 +1444,8 @@ fn detail_command(home: &Path, args: &[&str]) -> Output {
         .args(args)
         .arg("--codex-home")
         .arg(home)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
         .output()
         .unwrap()
 }

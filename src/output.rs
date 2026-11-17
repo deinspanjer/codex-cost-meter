@@ -482,10 +482,58 @@ fn append_footer(
     stats: &StatsReport,
     warnings: &[String],
 ) {
+    let custom = pricing.metadata.mode == "standalone"
+        || pricing
+            .metadata
+            .bases
+            .contains(&crate::pricing::catalog::Basis::Custom);
+    if pricing.metadata.mode == "standalone" {
+        let _ = writeln!(
+            rendered,
+            "Estimated {} cost.",
+            if custom {
+                "user-controlled pricing"
+            } else {
+                "pricing"
+            }
+        );
+    } else {
+        let _ = writeln!(
+            rendered,
+            "Estimated {} cost using pricing dated {}.",
+            if custom {
+                "user-controlled pricing"
+            } else {
+                "API list"
+            },
+            safe_text(pricing.as_of.as_deref().unwrap_or("unknown"))
+        );
+    }
+    let metadata = &pricing.metadata;
     let _ = writeln!(
         rendered,
-        "Estimated API list cost using pricing dated {}.",
-        safe_text(&pricing.as_of)
+        "Pricing catalog: {}; version {}{}{}.",
+        metadata.mode,
+        safe_text(&metadata.version),
+        metadata
+            .label
+            .as_ref()
+            .map(|l| format!("; label {}", safe_text(l)))
+            .unwrap_or_default(),
+        if metadata.mode == "standalone"
+            || metadata
+                .bases
+                .contains(&crate::pricing::catalog::Basis::Custom)
+        {
+            "; user-controlled prices"
+        } else if metadata.bases.iter().any(|b| matches!(
+            b,
+            crate::pricing::catalog::Basis::Observed | crate::pricing::catalog::Basis::Researched
+        )) {
+            "; inferred prices"
+        } else {
+            ""
+        }
     );
     if stats.assumed_standard_tokens > 0 {
         let _ = writeln!(
@@ -593,10 +641,37 @@ pub(crate) fn rates_human(table: &crate::pricing::RateTable) -> String {
         rows.push(cells);
     }
     format!(
-        "API list rates: USD per 1M tokens; catalog reviewed {}.\nSelection: {}. Cache writes assume 30-minute retention.\n\n{}\nUnknown prices are unavailable, not zero. Proxy targets assume documented routing/authentication; dates are estimator boundaries.\n",
-        table.catalog_as_of,
+        "{} rates: USD per 1M tokens{}.\nSelection: {}. Cache writes assume 30-minute retention.\n\n{}\nUnknown prices are unavailable, not zero. Proxy targets assume documented routing/authentication; dates are estimator boundaries.\n",
+        if table.metadata.mode == "standalone"
+            || table
+                .metadata
+                .bases
+                .contains(&crate::pricing::catalog::Basis::Custom)
+        {
+            "User-controlled"
+        } else {
+            "API list"
+        },
+        if table.metadata.mode == "standalone" {
+            String::new()
+        } else {
+            format!(
+                "; embedded catalog reviewed {}",
+                safe_text(table.catalog_as_of.as_deref().unwrap_or("unknown"))
+            )
+        },
         table.effective_on.as_deref().unwrap_or("latest known"),
         text_table(&rows)
+    ) + &format!(
+        "Pricing catalog: {}; version {}{}\n",
+        table.metadata.mode,
+        safe_text(&table.metadata.version),
+        table
+            .metadata
+            .label
+            .as_ref()
+            .map(|l| format!("; label {}", safe_text(l)))
+            .unwrap_or_default()
     )
 }
 
@@ -793,9 +868,16 @@ mod tests {
             by_model,
             by_rollout_type: BTreeMap::new(),
             pricing: PricingReport {
+                metadata: crate::pricing::CatalogMetadata {
+                    mode: "embedded",
+                    version: "2026-08-13".into(),
+                    embedded_version: Some("2026-08-13".into()),
+                    label: None,
+                    bases: vec![crate::pricing::catalog::Basis::Official],
+                },
                 basis: "API list pricing; applied rollout tier (served tier unavailable); per request model/context; output includes reasoning",
-                as_of: "2026-08-13".into(),
-                source: "https://example.invalid/prices".into(),
+                as_of: Some("2026-08-13".into()),
+                source: Some("https://example.invalid/prices".into()),
                 model_proxies: proxies,
                 model_proxy_histories,
             },
@@ -868,9 +950,10 @@ mod tests {
     #[test]
     fn human_mixed_modes_align_and_bound_pricing_provenance() {
         let mut report = report();
-        report.pricing.source =
+        report.pricing.source = Some(
             "https://developers.openai.com/api/docs/pricing, https://openai.com/api-fast-mode/"
-                .into();
+                .into(),
+        );
         let rendered = human(&report);
         let model = rendered
             .lines()

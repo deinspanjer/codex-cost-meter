@@ -9,6 +9,8 @@ fn rates(args: &[&str]) -> Output {
         .arg("rates")
         .args(args)
         .env("CODEX_HOME", &home)
+        .env("HOME", temp.path())
+        .env("USERPROFILE", temp.path())
         .output()
         .unwrap();
     assert!(

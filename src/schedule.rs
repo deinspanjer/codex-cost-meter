@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 
 use crate::{
     cache::RolloutCache,
+    pricing::Catalog,
     update::{self, UpdateError, UpdateOptions},
 };
 
@@ -238,6 +239,7 @@ pub(crate) fn run_scheduled(
         options,
         writer,
         Rc::new(RolloutCache::open(codex_home, false)),
+        &Catalog::embedded().expect("embedded catalog"),
     )
 }
 
@@ -247,12 +249,13 @@ pub(crate) fn run_scheduled_cached(
     options: &UpdateOptions,
     writer: &mut impl Write,
     cache: Rc<RolloutCache>,
+    catalog: &Catalog,
 ) -> Result<(), ScheduledRunError> {
     let previous = read_status(paths.status()).map_err(|_| ScheduledRunError::StatusUnavailable)?;
     if previous.as_ref().is_some_and(|status| status.paused) {
         return Ok(());
     }
-    match update::run_cached(codex_home, options, cache) {
+    match update::run_cached(codex_home, options, cache, catalog) {
         Ok(result) => {
             if result.skipped_rollouts > 0 {
                 let _ = writeln!(

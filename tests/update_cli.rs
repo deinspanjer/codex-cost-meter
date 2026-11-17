@@ -70,6 +70,8 @@ impl Fixture {
             .arg("--codex-home")
             .arg(self.home.path())
             .env_remove("CODEX_HOME")
+            .env("HOME", self.home.path())
+            .env("USERPROFILE", self.home.path())
             .output()
             .unwrap()
     }

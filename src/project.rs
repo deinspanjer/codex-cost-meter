@@ -11,6 +11,7 @@ use thiserror::Error;
 use crate::{
     cache::RolloutCache,
     date_filter::Filter,
+    pricing::Catalog,
     progress::Progress,
     report::{ProjectReport, ProjectSelection, ReportContext, ReportError},
     rollout::discovery::{RolloutRecord, state_roots},
@@ -116,9 +117,12 @@ pub(crate) fn build_with_progress(
     filter: &Filter,
     progress: &mut Progress,
     cache: Rc<RolloutCache>,
+    catalog: &Catalog,
 ) -> Result<ProjectReport, ProjectError> {
-    resolve_with_progress(codex_home, thread_id, project_ref, filter, progress, cache)?
-        .report(filter, progress)
+    let mut scope =
+        resolve_with_progress(codex_home, thread_id, project_ref, filter, progress, cache)?;
+    scope.context.catalog = catalog.clone();
+    scope.report(filter, progress)
 }
 
 pub(crate) fn resolve_with_progress(

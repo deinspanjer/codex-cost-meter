@@ -29,8 +29,10 @@ pub(crate) enum Command {
         long_about = "Report usage and estimated API-list-price cost by task, project, or corpus.\n\nHuman output nests cached input under input and reasoning under output. Turn time sums recorded turn lifecycle intervals; all-agent and aggregate values can include overlapping work. A trailing + marks a known priced minimum when the complete estimate is unavailable.\n\nPricing uses the service tier recorded in rollout settings; the tier actually served is unavailable. Missing tier data is priced as assumed Standard and identified in human output. Internal model identities can use effective-dated public-model proxies whose boundaries are estimates, not observed routing or billing cutovers. Auto-review assumes ChatGPT sign-in and is free from the October 6, 2026 documentation observation date; API-key pricing and the actual policy start date are unverified.\n\nUse --json for exact token counts, full paths and identifiers, selection diagnostics, service-tier detail, pricing sources, and effective-dated model-proxy history."
     )]
     Report(ReportArgs),
-    #[command(about = "Show embedded API token rates without reading session storage.")]
+    #[command(about = "Show effective token rates without reading session storage.")]
     Rates(RatesArgs),
+    #[command(about = "Refresh, research, or reset local pricing data.")]
+    Pricing(PricingArgs),
     #[command(about = "Preview or apply bounded Codex task-title updates.")]
     Update(UpdateArgs),
     #[command(
@@ -57,6 +59,48 @@ Regenerate saved scripts after upgrading."#
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[command(about = "Remove the schedule and this executable.")]
     Uninstall,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PricingArgs {
+    #[command(subcommand)]
+    pub(crate) command: PricingCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum PricingCommand {
+    #[command(about = "Collect current official prices, or import a researched proposal.")]
+    Refresh {
+        #[arg(
+            long,
+            value_name = "PROPOSAL",
+            help = "Import a proposal and independently verify its citations."
+        )]
+        from: Option<PathBuf>,
+        #[command(flatten)]
+        mode: PricingMode,
+    },
+    #[command(about = "Write an offline full-check research prompt; invokes no AI tool.")]
+    Prompt,
+    #[command(about = "Remove local pricing, including invalid files; retain no backup.")]
+    Reset(PricingMode),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PricingMode {
+    #[arg(
+        long,
+        conflicts_with = "apply",
+        help = "Show changes without prompting or writing."
+    )]
+    pub(crate) dry_run: bool,
+    #[arg(long, help = "Apply eligible changes without prompting.")]
+    pub(crate) apply: bool,
+    #[arg(
+        long,
+        help = "Write one JSON result; interactive review goes to stderr."
+    )]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -449,7 +493,7 @@ fn non_windows_home(home: Option<std::ffi::OsString>) -> Result<PathBuf, CliErro
 }
 
 #[cfg(target_os = "windows")]
-fn user_home() -> Result<PathBuf, CliError> {
+pub(crate) fn user_home() -> Result<PathBuf, CliError> {
     windows_home(
         env::var_os("USERPROFILE"),
         env::var_os("HOMEDRIVE"),
