@@ -17,14 +17,14 @@ Use `just test-filter <FILTER>` for the behavior you are changing or `cargo test
 
 ## Architecture
 
-One Rust 2024 crate produces one `codex-cost-meter` binary. Rollout JSONL is authoritative for usage; SQLite supports discovery, caching, and title updates. Platform-specific scheduler modules handle the native lifecycle. The `python-prototype/` directory is historical reference.
+One Rust 2024 crate produces one `codex-cost-meter` binary. Rollout JSONL is authoritative for usage; SQLite supports discovery, caching, optional report naming, and title updates. Platform-specific scheduler modules handle the native lifecycle. The `python-prototype/` directory is historical reference.
 
 | Area | Modules |
 | --- | --- |
 | Commands and presentation | `cli`, `output`, `progress` |
 | Rollout discovery and accounting | `rollout`, `report`, `project`, `date_filter` |
 | Cached usage and model prices | `cache`, `pricing` |
-| Title updates and recovery | `title`, `update`, `session_index` |
+| Thread naming, title updates, and recovery | `thread_name`, `title`, `update`, `session_index` |
 | Native scheduling | `schedule`, `schedule::{linux,macos,windows}` |
 
 See [architecture and tests](docs/architecture.md) for storage invariants, cache-version rules, scheduling behavior, and completion generation.

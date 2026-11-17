@@ -5,6 +5,10 @@
 - Add explicit local pricing refresh, dry-run/apply review, reset, and offline research prompts with independently verified proposal imports; retain historical data and report partial coverage.
 - Support offline user pricing overlays and standalone catalogs, with custom labels, provenance, and effective-rate inspection across reports, exports, and title valuation.
 
+## [1.7.0]
+
+- Resolve report titles from read-only Codex SQLite metadata using history-mode naming rules, with session-index fallback; add explicit unique-title selection with `report --match-title`.
+
 ## [1.6.1]
 
 - Skip title updates for empty names, `Untitled` placeholders, and names beginning with `<`, including when they already have meter suffixes; preserve both title stores and the batch limit for usable names.
