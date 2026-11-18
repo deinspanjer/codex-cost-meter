@@ -30,7 +30,7 @@ pub(crate) struct ObservedRate {
     pub evidence_id: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Collection {
     pub observations: Vec<ObservedRate>,
     pub evidence: Vec<Evidence>,
@@ -397,16 +397,92 @@ pub(crate) fn collect_current() -> Collection {
 
 // The flagship section has an explicit unit, speed headings and context-labeled
 // columns. Do not interpret other sections, flattened tables or pricing modifiers.
-fn extract_pricing(content: &str, retrieved_at: &str, out: &mut Collection) {
-    let Some(flagship) = content
-        .split_once("Flagship models")
-        .map(|(_, s)| s.split("Cyber models").next().unwrap_or(s))
-    else {
+pub(super) const LEGEND: &str = "flagship-context-legend";
+
+/// Facts derived from whole retrieved documents, never from proposal-supplied scope.
+pub(crate) fn scoped_documents(cache: &FetchCache) -> BTreeMap<String, Collection> {
+    cache
+        .bytes
+        .iter()
+        .filter_map(|(url, text)| {
+            if !(url == PRICING_URL
+                || (archive_target(url) == Some(PRICING_URL)
+                    && url
+                        .split_once("id_/")
+                        .is_some_and(|(_, original)| original == PRICING_URL)))
+                || text.trim_start().starts_with('<')
+            {
+                return None;
+            }
+            let mut facts = Collection::default();
+            extract_pricing(text, "", &mut facts);
+            Some((url.clone(), facts))
+        })
+        .collect()
+}
+
+pub(super) fn cutoff(legend: &str) -> Option<u64> {
+    fn tokens(s: &str) -> Option<u64> {
+        let (digits, scale) = s.strip_suffix('K').map_or((s, 1), |d| (d, 1000));
+        if !digits.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        digits.parse::<u64>().ok()?.checked_mul(scale)
+    }
+    let (short, long) = legend
+        .strip_prefix("Short context: ≤")?
+        .strip_suffix(" input tokens.")?
+        .split_once(" input tokens. Long context: >")?;
+    let n = tokens(short)?;
+    (n > 0 && n < u64::MAX && tokens(long)? == n).then_some(n)
+}
+
+fn flagship_region(content: &str) -> Option<&str> {
+    let mut start = None;
+    let mut offset = 0;
+    for line in content.split_inclusive('\n') {
+        let label = line.trim();
+        if let Some(start) = start {
+            if label.ends_with(" models") && !label.contains('|') {
+                let after = &content[offset + line.len()..];
+                return (label != "Flagship models"
+                    && (label == "Cyber models"
+                        || after
+                            .lines()
+                            .map(str::trim)
+                            .find(|s| !s.is_empty())
+                            .is_some_and(|s| s.starts_with("Prices per 1M tokens"))))
+                .then_some(&content[start..offset]);
+            }
+        } else if label == "Flagship models" {
+            start = Some(offset + line.len());
+        }
+        offset += line.len();
+    }
+    None
+}
+
+pub(super) fn extract_pricing(content: &str, retrieved_at: &str, out: &mut Collection) {
+    let Some(flagship) = flagship_region(content) else {
         out.unresolved
             .push("flagship pricing section unavailable".into());
         return;
     };
-    if !flagship.contains("Prices per 1M tokens.") {
+    // A second unit declaration can indicate an intervening product block.
+    // Do not bind its legend or rows to the first block.
+    let mut units = flagship
+        .lines()
+        .map(str::trim)
+        .filter(|s| s.starts_with("Prices per "));
+    if units.next() != Some("Prices per 1M tokens.")
+        || units.next().is_some()
+        || !flagship
+            .split("### ")
+            .next()
+            .unwrap_or("")
+            .lines()
+            .any(|s| s.trim() == "Prices per 1M tokens.")
+    {
         out.unresolved
             .push("flagship pricing units unavailable".into());
         return;
@@ -417,13 +493,34 @@ fn extract_pricing(content: &str, retrieved_at: &str, out: &mut Collection) {
         retrieved_at: retrieved_at.into(),
         excerpt: "Prices per 1M tokens.".into(),
     });
+    let mut legends = flagship.lines().map(str::trim).filter(|s| {
+        !s.starts_with('|') && (s.contains("Short context:") || s.contains("Long context:"))
+    });
+    if let Some(line) = legends.next()
+        && legends.next().is_none()
+        && cutoff(line).is_some()
+        && !flagship.contains("<!--")
+        && !flagship.contains("```")
+    {
+        out.evidence.push(Evidence {
+            id: LEGEND.into(),
+            url: PRICING_URL.into(),
+            retrieved_at: retrieved_at.into(),
+            excerpt: line.into(),
+        });
+    }
     let mut tier = None;
+    let mut promo = false;
     let mut header = false;
     let mut rows = BTreeSet::new();
     let mut duplicates = BTreeSet::new();
     for line in flagship.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("### ") {
+            promo = matches!(
+                trimmed,
+                "### Ultrafast promotion pricing data" | "### Ultrafast list pricing data"
+            );
             tier = match trimmed {
                 "### Standard pricing data" => Some("standard"),
                 "### Fast pricing data" => Some("fast"),
@@ -459,7 +556,9 @@ fn extract_pricing(content: &str, retrieved_at: &str, out: &mut Collection) {
             }
             continue;
         }
-        let Some(tier) = tier else { continue };
+        if tier.is_none() && !promo {
+            continue;
+        }
         if !header || !trimmed.starts_with('|') {
             continue;
         }
@@ -481,6 +580,15 @@ fn extract_pricing(content: &str, retrieved_at: &str, out: &mut Collection) {
                 .push(format!("unrecognized model label: {model}"));
             continue;
         }
+        if promo {
+            let gap =
+                format!("{model} / ultrafast: promotional/list pricing is not verified by refresh");
+            if !out.unresolved.contains(&gap) {
+                out.unresolved.push(gap);
+            }
+            continue;
+        }
+        let Some(tier) = tier else { continue };
         let row_key = (model.to_string(), tier.to_string());
         if !rows.insert(row_key.clone()) {
             if duplicates.insert(row_key.clone()) {
@@ -623,6 +731,95 @@ mod tests {
             "https://web.archive.org/web/20260101000000id_/https://evil.example/openai.com"
         ));
         assert!(!allowed("https://developers.openai.com.evil.example/a"));
+    }
+    #[test]
+    fn imported_cutoffs_require_scoped_rows_and_fail_atomically() {
+        use crate::pricing::{Catalog, catalog::Overlay, proposal};
+        let page = include_str!("../../tests/fixtures/pricing/flagship.md");
+        let mut collection = Collection::default();
+        extract_pricing(page, "2026-11-18T12:00:00Z", &mut collection);
+        let catalog = Catalog::embedded().unwrap();
+        let overlay = Overlay::default();
+        let p = proposal::from_collection(&catalog, &overlay, &collection).unwrap();
+        let check = |page: &str, p: &proposal::Proposal| {
+            let mut cache = FetchCache::default();
+            cache.bytes.insert(PRICING_URL.into(), page.into());
+            let verified = verify_citations(&p.evidence, &mut cache);
+            proposal::prepare_scoped(
+                &catalog,
+                &overlay,
+                p,
+                &verified,
+                false,
+                &scoped_documents(&cache),
+            )
+            .unwrap()
+        };
+        let imported = check(page, &p);
+        for model in ["gpt-6.2-astra", "gpt-6.2-sol"] {
+            assert!(
+                imported
+                    .candidate
+                    .thresholds
+                    .iter()
+                    .any(|t| t.model == model && t.threshold == Some(272000)),
+                "{:?}",
+                imported.unresolved
+            );
+            assert_eq!(
+                imported
+                    .candidate
+                    .points
+                    .iter()
+                    .filter(|p| p.key.model == model)
+                    .count(),
+                4
+            );
+        }
+        let mut stale = p.clone();
+        stale
+            .operations
+            .iter_mut()
+            .find(|op| {
+                op.group == "onboard-gpt-6.2-sol"
+                    && matches!(op.target, proposal::Target::Point { .. })
+            })
+            .unwrap()
+            .expected = proposal::Value::Rates(crate::pricing::Rates::default());
+        let partial = check(page, &stale);
+        assert_eq!(partial.candidate.thresholds.len(), 1);
+        assert!(
+            partial
+                .candidate
+                .points
+                .iter()
+                .all(|p| p.key.model != "gpt-6.2-sol")
+        );
+        let legend = collection.evidence.iter().find(|e| e.id == LEGEND).unwrap();
+        let moved = format!("{}\n{}", page.replace(&legend.excerpt, ""), legend.excerpt);
+        assert!(check(&moved, &p).candidate.thresholds.is_empty());
+    }
+    #[test]
+    fn shared_cutoff_stays_inside_flagship_family() {
+        let page = include_str!("../../tests/fixtures/pricing/flagship.md");
+        let line = "Short context: ≤272K input tokens. Long context: >272K input tokens.";
+        let legend = |page: &str| {
+            let mut c = Collection::default();
+            extract_pricing(page, "", &mut c);
+            c.evidence
+                .iter()
+                .find(|e| e.id == LEGEND)
+                .and_then(|e| cutoff(&e.excerpt))
+        };
+        assert_eq!(legend(page), Some(272_000));
+        for bad in [
+            page.replace(line, &format!("For Astra: {line}")),
+            page.replace(line, &format!("{line}\n{}", line.replace("272K", "128K"))),
+            page.replace("Multimodal models", "missing"),
+            format!("{}\n{line}", page.replace(line, "")),
+        ] {
+            assert_eq!(legend(&bad), None);
+        }
     }
     #[test]
     fn extraction_requires_labeled_context_and_ignores_discount_tiers() {

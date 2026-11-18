@@ -295,7 +295,11 @@ fn apply_op(o: &mut Overlay, embedded: &Catalog, op: &Operation, source: &str) {
                     Some(Replacement::Threshold { threshold }) => Some(*threshold),
                     _ => None,
                 },
-                basis: Basis::Researched,
+                basis: if op.date_basis == "observation" {
+                    Basis::Observed
+                } else {
+                    Basis::Researched
+                },
                 source: Some(source.into()),
             });
         }
@@ -364,12 +368,80 @@ fn paired_point_replacement(op: &Operation, group: &[&Operation], proposal: &Pro
     })
 }
 
-pub(crate) fn prepare(
+#[cfg(test)]
+fn prepare(
     embedded: &Catalog,
     overlay: &Overlay,
     proposal: &Proposal,
     verified: &BTreeMap<String, Result<(), String>>,
     deterministic: bool,
+) -> Result<Prepared, String> {
+    prepare_scoped(
+        embedded,
+        overlay,
+        proposal,
+        verified,
+        deterministic,
+        &BTreeMap::new(),
+    )
+}
+
+fn new_model(catalog: &Catalog, overlay: &Overlay, model: &str) -> bool {
+    overlay.base.as_deref() != Some("none")
+        && !catalog.points.keys().any(|k| k.model == model)
+        && !catalog.proxies.contains_key(model)
+        && !catalog.long_context_thresholds.contains_key(model)
+        && !overlay.removals.iter().any(|r| r.key.model == model)
+        && !overlay.thresholds.iter().any(|t| t.model == model)
+        && !overlay.proxies.iter().any(|p| p.proxy == model)
+}
+
+fn scoped_threshold(op: &Operation, p: &Proposal, docs: &BTreeMap<String, Collection>) -> bool {
+    let (Target::Threshold { model }, Some(Replacement::Threshold { threshold }), Kind::Add) =
+        (&op.target, &op.replacement, op.kind)
+    else {
+        return false;
+    };
+    let cited: Vec<_> = op
+        .evidence_ids
+        .iter()
+        .filter_map(|id| p.evidence.iter().find(|e| e.id == *id))
+        .collect();
+    let Some(primary) = cited.first() else {
+        return false;
+    };
+    let Some(facts) = docs.get(&primary.url) else {
+        return false;
+    };
+    let matches_quote = |id: &str| {
+        facts
+            .evidence
+            .iter()
+            .find(|e| e.id == id)
+            .is_some_and(|actual| {
+                cited
+                    .iter()
+                    .any(|e| e.url == primary.url && e.excerpt == actual.excerpt)
+            })
+    };
+    matches_quote(crate::pricing_evidence::LEGEND)
+        && facts.evidence.iter().any(|e| {
+            e.id == crate::pricing_evidence::LEGEND
+                && crate::pricing_evidence::cutoff(&e.excerpt) == Some(*threshold)
+        })
+        && facts
+            .observations
+            .iter()
+            .any(|row| row.model == *model && matches_quote(&row.evidence_id))
+}
+
+pub(crate) fn prepare_scoped(
+    embedded: &Catalog,
+    overlay: &Overlay,
+    proposal: &Proposal,
+    verified: &BTreeMap<String, Result<(), String>>,
+    deterministic: bool,
+    docs: &BTreeMap<String, Collection>,
 ) -> Result<Prepared, String> {
     validate_structure(proposal)?;
     let baseline = embedded.merge_overlay(overlay).map_err(|e| e.to_string())?;
@@ -447,7 +519,13 @@ pub(crate) fn prepare(
                 error = Some(format!("{} destination is occupied or overlapping", op.id));
                 break;
             }
-            if !deterministic && !super::proposal_support::supports_operation(op, proposal) {
+            if !deterministic
+                && !super::proposal_support::supports_operation(op, proposal)
+                && !(scoped_threshold(op, proposal, docs)
+                    && matches!(&op.target,
+                    Target::Threshold { model } if new_model(&baseline, overlay, model) && ops.iter().any(|member| matches!((&member.kind, &member.replacement),
+                        (Kind::Add, Some(Replacement::Point { key, .. })) if key.model == *model))))
+            {
                 error = Some(format!(
                     "{} cited excerpts do not identify all affected facts",
                     op.id
@@ -550,6 +628,12 @@ pub(crate) fn from_collection(
     let current = embedded.merge_overlay(overlay).map_err(|e| e.to_string())?;
     let mut operations = vec![];
     let mut coverage = collection.unresolved.clone();
+    let legend = collection
+        .evidence
+        .iter()
+        .find(|e| e.id == crate::pricing_evidence::LEGEND)
+        .and_then(|e| crate::pricing_evidence::cutoff(&e.excerpt));
+    let mut onboarding = BTreeSet::new();
     for observed in &collection.observations {
         let Some(evidence) = collection
             .evidence
@@ -587,14 +671,21 @@ pub(crate) fn from_collection(
             .points
             .keys()
             .any(|k| k.model == observed.model && k.context == Band::Short);
-        if !current
-            .long_context_thresholds
-            .contains_key(&observed.model)
+        let onboard = legend.is_some() && new_model(&current, overlay, &observed.model);
+        if !onboard
+            && !current
+                .long_context_thresholds
+                .contains_key(&observed.model)
             && (context == Band::Long || !existing_short)
         {
             coverage.push(format!(
-                "{} context threshold unavailable for this band or new model",
-                observed.model
+                "{} context threshold unavailable for this band or new model: {}",
+                observed.model,
+                if legend.is_none() {
+                    "no unambiguous scoped legend"
+                } else {
+                    "existing history or user-controlled catalog"
+                }
             ));
             continue;
         }
@@ -651,9 +742,33 @@ pub(crate) fn from_collection(
             continue;
         }
         let id = format!("observed-{}", observed.evidence_id);
+        let group = if onboard {
+            format!("onboard-{}", observed.model)
+        } else {
+            id.clone()
+        };
+        if onboard && onboarding.insert(observed.model.clone()) {
+            operations.push(Operation {
+                id: format!("threshold-{}", observed.model),
+                group: group.clone(),
+                kind: Kind::Add,
+                target: Target::Threshold {
+                    model: observed.model.clone(),
+                },
+                expected: Value::Absent,
+                replacement: Some(Replacement::Threshold {
+                    threshold: legend.expect("checked above"),
+                }),
+                evidence_ids: vec![
+                    crate::pricing_evidence::LEGEND.into(),
+                    observed.evidence_id.clone(),
+                ],
+                date_basis: "observation".into(),
+            });
+        }
         operations.push(Operation {
             id: id.clone(),
-            group: id,
+            group,
             kind: Kind::Add,
             target: Target::Point { key: key.clone() },
             expected: current
@@ -858,9 +973,23 @@ mod tests {
     fn existing_short_only_model_refreshes_without_context_threshold() {
         let embedded = Catalog::embedded().unwrap();
         let mut collection = observed_collection("gpt-5.1");
+        let mut legend = citation();
+        legend.id = crate::pricing_evidence::LEGEND.into();
+        legend.excerpt =
+            "Short context: ≤272K input tokens. Long context: >272K input tokens.".into();
+        collection.evidence.push(legend);
+        let mut long = collection.observations[0].clone();
+        long.context = "long".into();
+        collection.observations.push(long);
         collection.observations[0].rates[0] = Some(999.0);
         let proposal = from_collection(&embedded, &Overlay::default(), &collection).unwrap();
         assert_eq!(proposal.operations.len(), 1);
+        assert!(
+            proposal
+                .coverage
+                .iter()
+                .any(|s| s.contains("gpt-5.1 context threshold unavailable"))
+        );
         let result = prepare(
             &embedded,
             &Overlay::default(),

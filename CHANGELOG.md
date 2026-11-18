@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Onboard new models from scoped flagship pricing evidence and review each model's cutoff, supported rates and remaining coverage gaps together.
+
 - Add explicit local pricing refresh, dry-run/apply review, reset, and offline research prompts with independently verified proposal imports; retain historical data and report partial coverage.
 - Support offline user pricing overlays and standalone catalogs, with custom labels, provenance, and effective-rate inspection across reports, exports, and title valuation.
 

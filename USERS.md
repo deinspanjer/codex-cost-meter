@@ -312,6 +312,8 @@ Basis defaults to `custom`; manual prices need no official evidence. Generated v
 
 ## Refresh or research pricing
 
+For a new flagship model, refresh can use a shared, explicitly labeled input-token cutoff with the model's Standard and Fast price rows. For example, a preview can offer GPT-6.2 Astra at both speeds with short pricing through 272,000 input tokens and long pricing from 272,001. The prices start on the UTC observation date unless an earlier date is evidenced; prior usage stays unknown. Eligible rates can be applied even when the result also identifies unsupported Ultrafast pricing. Use `--json` to inspect the full cited excerpts.
+
 `pricing refresh` collects current official pricing Markdown, prepares a before/after summary, and asks whether to apply. Bare refresh/reset require an interactive terminal; unattended use must choose `--dry-run` or `--apply`. Both modes print their outcome. They are mutually exclusive. Add `--json` for structured changes, evidence, unresolved coverage, and activation; interactive prompts go to stderr.
 
 ```sh
