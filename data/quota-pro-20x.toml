@@ -1,0 +1,54 @@
+# Opt-in example from one owner's Pro 20x account; NOT an official rate card.
+# Weights are frozen reference units, not current API dollars or public credits.
+# This file is user-owned: upgrades and uninstall do not replace/remove it.
+# No secrets, includes, interpolation, scripts, or private logs are needed.
+schema_version = 1
+
+# Copy a complete period and close its predecessor when your plan/rules change.
+# Periods are half-open: effective_from inclusive, effective_until exclusive.
+# Plan/variant are provenance labels: "20x" never scales a coefficient by itself.
+[[periods]]
+id = "owner-pro-20x-2026-10"
+subscription_plan = "pro"
+subscription_variant = "20x"
+effective_from = "2026-10-16T00:00:00Z"
+# effective_until = "2026-11-01T00:00:00Z"
+# The start is an estimation coverage boundary, not a subscription change.
+calibration_id = "local-rollouts-2026-10-30-cloud-corrected"
+calibrated_from = "2026-10-16T00:00:00Z"
+calibrated_through = "2026-10-30T15:52:46.863Z"
+notes = "Single-account empirical fit; Oct28 train / Oct29-30 validation. Flat context effects unmeasured. No independent per-session validation."
+
+[periods.windows.weekly]
+points_per_reference_unit = 0.08236824622767631
+# No five-hour entry: no recent five-hour calibration was observed.
+
+[periods.defaults]
+# Pooled-context ASSUMPTION, not proof of no long-context surcharge.
+# Adjacent inclusive bands could instead be:
+# context_bands = [{ min_input_tokens = 0, max_input_tokens = 272000, multiplier = 1.0 }, { min_input_tokens = 272001, multiplier = 2.0 }]
+context_bands = [{ min_input_tokens = 0, multiplier = 1.0 }]
+
+[periods.defaults.speed_multipliers]
+standard = 1.0
+# Fast/Ultrafast omitted: unsupported until you supply your own evidence.
+
+[periods.workload_multipliers]
+ordinary = 1.0
+# Recorded guardian_review / exact codex-auto-review, never title prose.
+guardian_review = 0.0
+
+[periods.models]
+# Per MILLION tokens. Reasoning is already output. Writes default to input.
+# Exact IDs only; no inferred aliases or changing API-model proxies.
+# A model's speed_multipliers replaces the default for that tier.
+# A model's context_bands replaces the entire default context-band list.
+# Distinct speed/context/workload dimensions multiply once.
+"gpt-6-astra" = { input = 10.0, cached_input = 1.0, output = 50.0 }
+"gpt-6.1-sol" = { input = 2.0, cached_input = 0.1, output = 10.0 }
+"gpt-6.1-terra" = { input = 1.0, cached_input = 0.05, output = 5.0 }
+"gpt-6-sol" = { input = 2.0, cached_input = 0.2, output = 10.0 }
+"gpt-6-luna" = { input = 0.1, cached_input = 0.01, output = 0.5 }
+"gpt-5.6-sol" = { input = 4.0, cached_input = 0.4, output = 20.0 }
+"gpt-5.6-terra" = { input = 2.0, cached_input = 0.2, output = 12.0 }
+"gpt-5.6-luna" = { input = 0.2, cached_input = 0.02, output = 1.2 }

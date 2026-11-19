@@ -69,6 +69,7 @@ impl Paths {
 }
 
 pub(crate) struct Inspection {
+    pub(crate) settings: Option<super::Settings>,
     pub(crate) registered: bool,
     pub(crate) status: Option<Status>,
 }
@@ -290,8 +291,31 @@ fn inspect_with_runner(
     paths: &Paths,
     runner: &mut impl CommandRunner,
 ) -> Result<Inspection, LifecycleError> {
+    let output = run(
+        runner,
+        SCHTASKS,
+        [
+            "/Query".into(),
+            "/TN".into(),
+            TASK_NAME.into(),
+            "/HRESULT".into(),
+            "/XML".into(),
+        ],
+    )?;
+    let registered = if output.success {
+        true
+    } else if output.exit_code == Some(MISSING_TASK_HRESULT) {
+        false
+    } else {
+        return Err(LifecycleError::InspectTask);
+    };
     Ok(Inspection {
-        registered: query_registered(runner)?,
+        settings: if registered {
+            installed_settings(&output.stdout)
+        } else {
+            None
+        },
+        registered,
         status: read_status(paths.status()).map_err(|source| LifecycleError::Status { source })?,
     })
 }
@@ -540,6 +564,7 @@ fn scheduled_arguments(options: &InstallOptions) -> String {
         "--title-metrics".into(),
         options.title_metrics.clone(),
     ];
+    arguments.extend(options.valuation_arguments.clone());
     if let Some(reprice_before) = options.reprice_before {
         arguments.extend([
             "--reprice-before".into(),
@@ -554,6 +579,58 @@ fn scheduled_arguments(options: &InstallOptions) -> String {
         .map(|argument| quote_argument(argument))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn installed_settings(bytes: &[u8]) -> Option<super::Settings> {
+    if bytes.len() > 65536 {
+        return None;
+    }
+    let text = if bytes.starts_with(&[0xff, 0xfe]) {
+        let (pairs, remainder) = bytes[2..].as_chunks::<2>();
+        if !remainder.is_empty() {
+            return None;
+        }
+        let words = pairs
+            .iter()
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        String::from_utf16(&words).ok()?
+    } else {
+        String::from_utf8(bytes.to_vec()).ok()?
+    };
+    let (_, rest) = text.split_once("<Arguments>")?;
+    let value = super::xml_text(rest.split_once("</Arguments>")?.0)?;
+    // Inverse of the Windows C-runtime quoting used by scheduled_arguments.
+    let mut args = Vec::new();
+    let mut value = value.as_str().trim();
+    while !value.is_empty() {
+        let chars = value.strip_prefix('"')?.char_indices();
+        let mut argument = String::new();
+        let mut slashes = 0;
+        let mut end = None;
+        for (index, ch) in chars {
+            if ch == '\\' {
+                slashes += 1;
+                continue;
+            }
+            if ch == '"' {
+                argument.push_str(&"\\".repeat(slashes / 2));
+                if slashes % 2 == 0 {
+                    end = Some(index + 2);
+                    break;
+                }
+                argument.push('"');
+            } else {
+                argument.push_str(&"\\".repeat(slashes));
+                argument.push(ch);
+            }
+            slashes = 0;
+        }
+        let end = end?;
+        args.push(argument);
+        value = value[end..].trim_start();
+    }
+    super::Settings::from_arguments(args)
 }
 
 fn runtime_argument(runtime: std::time::Duration) -> String {
@@ -679,6 +756,7 @@ mod tests {
         let executable = directory.path().join("codex-cost-meter.exe");
         fs::write(&executable, "binary").unwrap();
         InstallOptions {
+            valuation_arguments: Vec::new(),
             executable,
             codex_home: PathBuf::from(r"C:\Codex Home\&quotable"),
             idle_minutes: 15,
@@ -688,6 +766,32 @@ mod tests {
             title_metrics: "tokens,cost".into(),
             reprice_before: Some(OffsetDateTime::UNIX_EPOCH),
         }
+    }
+
+    #[test]
+    fn inspection_decodes_metric_settings_from_native_task_arguments() {
+        let directory = TempDir::new().unwrap();
+        let mut options = options(&directory);
+        options.title_metrics = "credits,quota-pp".into();
+        let config = directory.path().join("quota & \"policy\" with spaces.toml");
+        options.valuation_arguments = vec![
+            "--cost-metric".into(),
+            "credits,quota-pp".into(),
+            "--quota-window".into(),
+            "five-hour".into(),
+            "--quota-config".into(),
+            config.to_string_lossy().into_owned(),
+        ];
+        let xml = super::task_xml(&options, &options.executable, "S-1-5-21-1");
+        let mut runner = FakeRunner::with_outputs([output(true, 0, xml.as_bytes())]);
+        let settings = inspect_with_runner(&paths(&directory), &mut runner)
+            .unwrap()
+            .settings
+            .unwrap();
+        assert_eq!(settings.recipe, "credits,quota-pp");
+        assert_eq!(settings.config, Some(config));
+        assert_eq!(settings.window, crate::quota::Window::FiveHour);
+        assert_eq!(settings.selection, "credits,quota-pp");
     }
 
     #[test]
@@ -731,7 +835,8 @@ mod tests {
                         "/Query".into(),
                         "/TN".into(),
                         "Codex Cost Meter".into(),
-                        "/HRESULT".into()
+                        "/HRESULT".into(),
+                        "/XML".into()
                     ]
                 )]
             );

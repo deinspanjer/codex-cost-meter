@@ -47,6 +47,7 @@ See [architecture and tests](docs/architecture.md) for storage invariants, cache
 | Task | Guide |
 | --- | --- |
 | Refresh model rates or historical pricing | [Updating model pricing](docs/model-pricing.md) |
+| Maintain independent credits or quota calibration | [Credit evidence](docs/research/credit-rate-evidence.md), [quota research](docs/research/quota-calibration.md), [policy schema](USERS.md#install-and-edit-a-quota-policy) |
 | Package, validate Homebrew, or publish a release | [Packaging and releases](docs/releases.md) |
 | Understand earlier design decisions | [Architecture decisions](docs/adr/README.md) |
 

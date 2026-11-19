@@ -49,6 +49,7 @@ impl Paths {
 }
 
 pub(crate) struct Inspection {
+    pub(crate) settings: Option<super::Settings>,
     pub(crate) installed: bool,
     pub(crate) loaded: bool,
     pub(crate) status: Option<Status>,
@@ -231,6 +232,7 @@ fn inspect_with_runner(
         return Err(LifecycleError::Inspect);
     }
     Ok(Inspection {
+        settings: installed_settings(paths),
         installed: paths.plist.is_file(),
         loaded: output.success,
         status: read_status(&paths.status).map_err(|source| LifecycleError::Status { source })?,
@@ -281,6 +283,7 @@ fn property_list(options: &InstallOptions, executable: &Path) -> String {
         "--title-metrics".into(),
         options.title_metrics.clone(),
     ];
+    arguments.extend(options.valuation_arguments.clone());
     if let Some(reprice_before) = options.reprice_before {
         arguments.extend([
             "--reprice-before".into(),
@@ -298,6 +301,29 @@ fn property_list(options: &InstallOptions, executable: &Path) -> String {
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{LABEL}</string>\n  <key>ProgramArguments</key>\n  <array>\n{arguments}\n  </array>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>StartInterval</key>\n  <integer>300</integer>\n  <key>ProcessType</key>\n  <string>Background</string>\n</dict>\n</plist>\n"
     )
+}
+
+fn installed_settings(paths: &Paths) -> Option<super::Settings> {
+    let text = super::read_definition(paths.plist())?;
+    let (_, text) = text.split_once("<key>ProgramArguments</key>")?;
+    let text = text
+        .trim_start()
+        .strip_prefix("<array>")?
+        .split_once("</array>")?
+        .0;
+    let mut arguments = Vec::new();
+    let mut rest = text.trim();
+    while !rest.is_empty() {
+        let text = rest.strip_prefix("<string>")?;
+        let (value, tail) = text.split_once("</string>")?;
+        arguments.push(super::xml_text(value)?);
+        rest = tail.trim();
+    }
+    if arguments.is_empty() {
+        return None;
+    }
+    arguments.remove(0);
+    super::Settings::from_arguments(arguments)
 }
 
 fn xml_text(value: &str) -> String {
@@ -504,6 +530,7 @@ mod tests {
 
     fn options(directory: &TempDir) -> InstallOptions {
         InstallOptions {
+            valuation_arguments: Vec::new(),
             executable: directory.path().join("codex-cost-meter"),
             codex_home: directory.path().join(".codex"),
             idle_minutes: 15,
@@ -513,6 +540,37 @@ mod tests {
             title_metrics: "cost,total-tokens".into(),
             reprice_before: None,
         }
+    }
+
+    #[test]
+    fn installed_metric_settings_round_trip_without_using_the_working_directory() {
+        let directory = TempDir::new().unwrap();
+        let paths = Paths::new(directory.path());
+        let mut options = options(&directory);
+        options.title_metrics = "api-usd,credits,quota-pp".into();
+        let config = directory.path().join("quota & \"policy\".toml");
+        options.valuation_arguments = vec![
+            "--cost-metric".into(),
+            "all".into(),
+            "--quota-window".into(),
+            "five-hour".into(),
+            "--quota-config".into(),
+            config.to_string_lossy().into_owned(),
+        ];
+        super::write_plist(
+            paths.plist(),
+            &super::property_list(&options, &options.executable),
+        )
+        .unwrap();
+        let mut runner = FakeRunner::with_outputs([output(true, "501\n"), output(false, "")]);
+        let settings = inspect_with_runner(&paths, &mut runner)
+            .unwrap()
+            .settings
+            .unwrap();
+        assert_eq!(settings.recipe, "api-usd,credits,quota-pp");
+        assert_eq!(settings.config, Some(config));
+        assert_eq!(settings.window, crate::quota::Window::FiveHour);
+        assert_eq!(settings.selection, "api-usd,credits,quota-pp");
     }
 
     fn successful_runner() -> FakeRunner {

@@ -4,6 +4,14 @@
 
 `codex-cost-meter` is a small cross-platform utility for exact-thread, project, and all-rollout usage with estimated API-list-price cost. Its capabilities include local-calendar date ranges and grouping, descendant accounting, bounded root-title updates, and current-user schedules for eligible idle updates on macOS, Windows, and Linux. It is diagnostic, not a ChatGPT billing record.
 
+Select `--cost-metric api-usd,credits` for independent API-equivalent dollars
+and public token-credit estimates. Opt-in `quota-pp` adds approximate allowance
+percentage points from a user-owned, dated TOML policy; `quota-config init`
+installs a single-owner Pro 20x weekly example, not a universal subscription
+conversion. Use `--cost-metric all` after configuring that policy. See
+[cost metrics and quota policy](USERS.md#cost-metrics-and-quota-policy) for
+coverage, editable factors, explicit title placeholders and schedule settings.
+
 v0.8 supports macOS 14+ on Apple Silicon and Intel, Windows x64, and Linux x86_64 and aarch64. Linux schedules through a current-user systemd service and timer; macOS and Windows use their native current-user schedulers. All three platforms can install, inspect, resume, remove, and uninstall their schedule; Windows arm64 remains deferred. See the user guide for platform requirements and lifecycle details.
 
 ![Codex sidebar showing cost and token metrics in task titles](https://raw.githubusercontent.com/deinspanjer/codex-cost-meter/main/docs/assets/sidebar-title-metrics.png)

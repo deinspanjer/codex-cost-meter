@@ -39,6 +39,8 @@ pub(crate) enum ExportError {
 
 #[derive(Serialize)]
 struct UsageRow<'a> {
+    #[serde(flatten)]
+    costs: crate::costs::Bundle,
     r#type: &'static str,
     thread_id: &'a str,
     parent_thread_id: Option<&'a str>,
@@ -107,7 +109,7 @@ pub(crate) fn write(
     };
     line(
         writer,
-        &json!({"type":"metadata","schema_version":1,"selection":selected,"date_range":{"since":filter.since.map(|date|date.to_string()),"through":filter.through.map(|date|date.to_string())},"pricing":pricing_report(&context.catalog),"record_basis":"normalized token_count usage events; not guaranteed one-to-one API requests","source_line_basis":"1-based physical line after decompression"}),
+        &json!({"type":"metadata","schema_version":1,"selection":selected,"cost_metrics":context.catalog.cost_context.selection.0,"costs":crate::costs::Ledger::default().finish(&context.catalog,Some(0.0),0.0,false).costs,"date_range":{"since":filter.since.map(|date|date.to_string()),"through":filter.through.map(|date|date.to_string())},"pricing":pricing_report(&context.catalog),"record_basis":"normalized token_count usage events; not guaranteed one-to-one API requests","source_line_basis":"1-based physical line after decompression"}),
     )?;
     let mut total = Aggregate::default();
     let mut warnings = context
@@ -129,6 +131,9 @@ pub(crate) fn write(
         warnings.push("rollout scan skipped oversized JSONL records".into());
     }
     let discovery_incomplete = !warnings.is_empty();
+    if discovery_incomplete {
+        total.mark_incomplete();
+    }
     if selected
         .get("missing_source_roots")
         .and_then(serde_json::Value::as_u64)
@@ -172,6 +177,8 @@ pub(crate) fn write(
                         &event.service_tier,
                         event.usage,
                     );
+                    let mut ledger = crate::costs::Ledger::default();
+                    ledger.add(event, &context.catalog);
                     let path = paths.entry(source.path.to_owned()).or_insert_with(|| {
                         source
                             .path
@@ -181,6 +188,12 @@ pub(crate) fn write(
                     line(
                         writer,
                         &UsageRow {
+                            costs: ledger.finish(
+                                &context.catalog,
+                                cost.complete,
+                                cost.known,
+                                false,
+                            ),
                             r#type: "usage",
                             thread_id: &id,
                             parent_thread_id: record.parent_id.as_deref(),
@@ -235,7 +248,7 @@ pub(crate) fn write(
     if excluded_untimestamped > 0 {
         warnings.push("date-filtered export excluded usage without a usable timestamp".into());
     }
-    let mut stats = total.report();
+    let mut stats = total.report(&context.catalog);
     if discovery_incomplete {
         stats.incomplete_input = true;
         stats.estimated_cost_usd = None;

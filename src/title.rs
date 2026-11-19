@@ -5,6 +5,9 @@ use thiserror::Error;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Metric {
     Cost,
+    ApiUsd,
+    Credits,
+    Quota,
     TotalTokens,
     InputTokens,
     OutputTokens,
@@ -31,6 +34,8 @@ pub(crate) enum TitleError {
     UnknownMetric(String),
     #[error("title width cannot fit a visible base and metric suffix")]
     TooNarrow,
+    #[error("title format must be {{title}} followed by one or more ` · {{placeholder}}` segments")]
+    InvalidTemplate,
 }
 
 impl FromStr for MetricList {
@@ -56,6 +61,9 @@ impl FromStr for MetricList {
             }
             let metric = match name {
                 "cost" => Metric::Cost,
+                "api-usd" => Metric::ApiUsd,
+                "credits" => Metric::Credits,
+                "quota-pp" => Metric::Quota,
                 "total-tokens" => Metric::TotalTokens,
                 "input-tokens" => Metric::InputTokens,
                 "output-tokens" => Metric::OutputTokens,
@@ -73,11 +81,86 @@ impl FromStr for MetricList {
 pub(crate) struct TitleFormat {
     width: usize,
     metrics: MetricList,
+    pub(crate) window: crate::quota::Window,
 }
 
 impl TitleFormat {
+    #[cfg(test)]
     pub(crate) fn new(width: usize, metrics: MetricList) -> Self {
-        Self { width, metrics }
+        Self::resolve(
+            width,
+            metrics,
+            &crate::costs::Selection::default(),
+            crate::quota::Window::Weekly,
+        )
+        .expect("legacy title recipe")
+    }
+
+    pub(crate) fn resolve(
+        width: usize,
+        metrics: MetricList,
+        selection: &crate::costs::Selection,
+        window: crate::quota::Window,
+    ) -> Result<Self, TitleError> {
+        let mut expanded = Vec::new();
+        for metric in metrics.0 {
+            let slots = if metric == Metric::Cost {
+                selection
+                    .0
+                    .iter()
+                    .map(|metric| match metric {
+                        crate::costs::Metric::ApiUsd => Metric::ApiUsd,
+                        crate::costs::Metric::Credits => Metric::Credits,
+                        crate::costs::Metric::Quota => Metric::Quota,
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                vec![metric]
+            };
+            for slot in slots {
+                if expanded.contains(&slot) {
+                    return Err(TitleError::DuplicateMetric);
+                }
+                expanded.push(slot);
+            }
+        }
+        Ok(Self {
+            width,
+            metrics: MetricList(expanded),
+            window,
+        })
+    }
+
+    pub(crate) fn requested(&self) -> crate::costs::Selection {
+        crate::costs::Selection(
+            self.metrics
+                .0
+                .iter()
+                .filter_map(|metric| match metric {
+                    Metric::ApiUsd | Metric::Cost => Some(crate::costs::Metric::ApiUsd),
+                    Metric::Credits => Some(crate::costs::Metric::Credits),
+                    Metric::Quota => Some(crate::costs::Metric::Quota),
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
+
+    pub(crate) fn recipe(&self) -> String {
+        self.metrics
+            .0
+            .iter()
+            .map(|metric| match metric {
+                Metric::Cost => "cost",
+                Metric::ApiUsd => "api-usd",
+                Metric::Credits => "credits",
+                Metric::Quota => "quota-pp",
+                Metric::TotalTokens => "total-tokens",
+                Metric::InputTokens => "input-tokens",
+                Metric::OutputTokens => "output-tokens",
+            })
+            .collect::<Vec<_>>()
+            .join(",")
     }
 
     pub(crate) fn compose(
@@ -90,10 +173,18 @@ impl TitleFormat {
             .0
             .iter()
             .map(|metric| match metric {
-                Metric::Cost => format_cost(
+                Metric::Cost | Metric::ApiUsd => format_cost(
                     stats.known_model_cost_usd,
                     stats.estimated_cost_usd.is_none(),
                 ),
+                Metric::Credits | Metric::Quota => {
+                    let metric = if *metric == Metric::Credits {
+                        crate::costs::Metric::Credits
+                    } else {
+                        crate::costs::Metric::Quota
+                    };
+                    crate::costs::display(metric, &stats.costs.costs[&metric], self.window)
+                }
                 Metric::TotalTokens => {
                     format_tokens(stats.input_tokens.saturating_add(stats.output_tokens), '⇄')
                 }
@@ -134,6 +225,13 @@ impl TitleFormat {
             let Some(metric) = canonical_metric(segment) else {
                 break;
             };
+            if metric == Metric::Quota
+                && !segment
+                    .trim_end_matches('+')
+                    .ends_with(&format!("pp/{}", self.window.suffix()))
+            {
+                return false;
+            }
             metrics.push(metric);
             title = base;
         }
@@ -158,7 +256,22 @@ pub(crate) fn strip_canonical_suffix(mut title: &str) -> &str {
 
 fn canonical_metric(segment: &str) -> Option<Metric> {
     if is_cost(segment) {
-        return Some(Metric::Cost);
+        return Some(Metric::ApiUsd);
+    }
+    let credit = segment.strip_prefix('<').unwrap_or(segment);
+    if credit.strip_prefix('¤').is_some_and(is_decimal) {
+        return Some(Metric::Credits);
+    }
+    if let Some(quota) = segment.strip_prefix('~') {
+        let quota = quota.strip_suffix('+').unwrap_or(quota);
+        if let Some(value) = quota
+            .strip_suffix("pp/wk")
+            .or_else(|| quota.strip_suffix("pp/5h"))
+            && ((value == "?" && !segment.ends_with('+'))
+                || is_numeric_decimal(value.strip_prefix('<').unwrap_or(value)))
+        {
+            return Some(Metric::Quota);
+        }
     }
     for (prefix, metric) in [
         ('⇄', Metric::TotalTokens),
@@ -176,11 +289,37 @@ fn is_cost(segment: &str) -> bool {
     let Some(value) = segment.strip_prefix('$') else {
         return false;
     };
+    is_decimal(value)
+}
+
+fn is_decimal(value: &str) -> bool {
     let value = value.strip_suffix('+').unwrap_or(value);
+    is_numeric_decimal(value)
+}
+
+fn is_numeric_decimal(value: &str) -> bool {
     let Some((whole, cents)) = value.rsplit_once('.') else {
         return false;
     };
     cents.len() == 2 && cents.bytes().all(|byte| byte.is_ascii_digit()) && is_grouped_integer(whole)
+}
+
+impl MetricList {
+    pub(crate) fn template(value: &str) -> Result<Self, TitleError> {
+        let rest = value
+            .strip_prefix("{title} · ")
+            .ok_or(TitleError::InvalidTemplate)?;
+        let fields = rest
+            .split(" · ")
+            .map(|part| {
+                part.strip_prefix('{')
+                    .and_then(|part| part.strip_suffix('}'))
+                    .filter(|part| !part.contains(['{', '}', ',']) && *part != "all")
+                    .ok_or(TitleError::InvalidTemplate)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        fields.join(",").parse()
+    }
 }
 
 fn is_grouped_integer(value: &str) -> bool {
@@ -281,8 +420,119 @@ mod tests {
     use super::{Metric, MetricList, TitleFormat};
     use crate::report::StatsReport;
 
+    #[test]
+    fn canonical_metric_switches_preserve_only_strict_suffixes() {
+        for suffix in [
+            "¤12.34",
+            "¤12.34+",
+            "¤0.50",
+            "¤1,234.56",
+            "<¤0.01",
+            "<¤0.01+",
+            "~1.23pp/wk",
+            "~<0.01pp/wk",
+            "~1.23pp/wk+",
+            "~?pp/wk",
+            "~0.00pp/wk",
+            "~1,234.56pp/5h+",
+        ] {
+            let title = format!("Task · {suffix}");
+            assert_eq!(super::strip_canonical_suffix(&title), "Task", "{suffix}");
+            let usd = TitleFormat::new(65, "cost".parse().unwrap());
+            assert_eq!(
+                usd.compose(&title, &stats(0, 0, 1.0, false)).unwrap(),
+                "Task · $1.00"
+            );
+            assert!(!usd.matches_suffix(&title));
+        }
+        for suffix in [
+            "¤1234.56",
+            "¤01.23",
+            "¤1,23.45",
+            "¤1.2",
+            "¤1.234",
+            "12 credits",
+            "¢1.23",
+            "c1.23",
+            "~1.2pp/wk",
+            "~12,34.56pp/5h",
+            "12%",
+            "1.2pp",
+        ] {
+            let title = format!("Task · {suffix}");
+            assert_eq!(super::strip_canonical_suffix(&title), title, "{suffix}");
+        }
+        let selection = "credits,quota-pp".parse().unwrap();
+        let weekly = TitleFormat::resolve(
+            65,
+            "cost".parse().unwrap(),
+            &selection,
+            crate::quota::Window::Weekly,
+        )
+        .unwrap();
+        assert!(weekly.matches_suffix("Task · ¤1.00 · ~2.00pp/wk"));
+        assert!(!weekly.matches_suffix("Task · ~2.00pp/wk · ¤1.00"));
+        assert!(!weekly.matches_suffix("Task · ¤1.00 · ~2.00pp/5h"));
+        assert!(
+            TitleFormat::resolve(
+                65,
+                "cost,credits".parse().unwrap(),
+                &selection,
+                crate::quota::Window::Weekly
+            )
+            .is_err()
+        );
+        for invalid in [
+            "{credits}",
+            "{title}",
+            "{title} extra · {credits}",
+            "{title} · {title}",
+            "{title} · {credits}!",
+            "{title} · {credits,quota-pp}",
+            "{title} · {all}",
+        ] {
+            assert!(MetricList::template(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn composing_successive_cost_bases_replaces_instead_of_stacking() {
+        let mut catalog = crate::pricing::Catalog::embedded().unwrap();
+        catalog.cost_context.selection = "all".parse().unwrap();
+        catalog.cost_context.quota = Some(std::rc::Rc::new(crate::quota::Snapshot {
+            path: "/synthetic/quota.toml".into(),
+            fingerprint: "test".into(),
+            config: crate::quota::Config::parse(crate::quota::PRESET).unwrap(),
+        }));
+        let mut usage = stats(0, 0, 1.23, false);
+        usage.costs = crate::costs::Ledger::default().finish(&catalog, Some(1.23), 1.23, false);
+        let recipe = |selection: &str, window| {
+            TitleFormat::resolve(
+                65,
+                "cost".parse().unwrap(),
+                &selection.parse().unwrap(),
+                window,
+            )
+            .unwrap()
+        };
+        let credits = recipe("credits", crate::quota::Window::Weekly)
+            .compose("Task · $1.23", &usage)
+            .unwrap();
+        assert_eq!(credits, "Task · ¤0.00");
+        let weekly = recipe("quota-pp", crate::quota::Window::Weekly)
+            .compose(&credits, &usage)
+            .unwrap();
+        assert_eq!(weekly, "Task · ~0.00pp/wk");
+        catalog.cost_context.window = crate::quota::Window::FiveHour;
+        usage.costs = crate::costs::Ledger::default().finish(&catalog, Some(1.23), 1.23, false);
+        let five = recipe("quota-pp", crate::quota::Window::FiveHour);
+        assert!(!five.matches_suffix(&weekly));
+        assert_eq!(five.compose(&weekly, &usage).unwrap(), "Task · ~?pp/5h");
+    }
+
     fn stats(input_tokens: u64, output_tokens: u64, cost: f64, incomplete: bool) -> StatsReport {
         StatsReport {
+            costs: crate::costs::Bundle::default(),
             rollout_count: 1,
             majority_turn_model: None,
             majority_reasoning_level: None,

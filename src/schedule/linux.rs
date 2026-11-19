@@ -69,6 +69,7 @@ impl Paths {
 }
 
 pub(crate) struct Inspection {
+    pub(crate) settings: Option<super::Settings>,
     pub(crate) installed: bool,
     pub(crate) active: bool,
     pub(crate) status: Option<Status>,
@@ -263,6 +264,7 @@ fn inspect_with_runner(
         return Err(LifecycleError::Inspect);
     }
     Ok(Inspection {
+        settings: installed_settings(paths),
         installed: paths.service().is_file() && paths.timer().is_file(),
         active: active.success,
         status: read_status(paths.status()).map_err(|source| LifecycleError::Status { source })?,
@@ -360,6 +362,12 @@ fn service_unit(options: &InstallOptions, executable: &Path) -> Result<String, L
         "--title-metrics".into(),
         systemd_quote(&options.title_metrics),
     ];
+    arguments.extend(
+        options
+            .valuation_arguments
+            .iter()
+            .map(|argument| systemd_quote(argument)),
+    );
     if let Some(reprice_before) = options.reprice_before {
         arguments.extend([
             "--reprice-before".into(),
@@ -375,6 +383,56 @@ fn service_unit(options: &InstallOptions, executable: &Path) -> Result<String, L
         "[Unit]\nDescription=Codex Cost Meter scheduled update\n\n[Service]\nType=oneshot\nExecStart={}\nStandardOutput=null\nStandardError=null\n",
         arguments.join(" ")
     ))
+}
+
+fn installed_settings(paths: &Paths) -> Option<super::Settings> {
+    let text = super::read_definition(paths.service())?;
+    let line = text
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart="))?;
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut escape = false;
+    for ch in line.chars() {
+        if escape {
+            current.push(match ch {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                '\\' => '\\',
+                '"' => '"',
+                _ => return None,
+            });
+            escape = false;
+        } else {
+            match ch {
+                '\\' => escape = true,
+                '"' => quoted = !quoted,
+                ' ' if !quoted => {
+                    if !current.is_empty() {
+                        args.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(ch),
+            }
+        }
+    }
+    if quoted || escape {
+        return None;
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    if args.is_empty() {
+        return None;
+    }
+    args.remove(0);
+    // Undo the escaping used by systemd_quote; other specifier forms are not guessed.
+    for arg in &mut args {
+        *arg = arg.replace("%%", "%").replace("$$", "$");
+    }
+    super::Settings::from_arguments(args)
 }
 
 fn systemd_quote_path(path: &Path) -> Result<String, LifecycleError> {
@@ -530,6 +588,7 @@ mod tests {
 
     fn options(directory: &TempDir) -> InstallOptions {
         InstallOptions {
+            valuation_arguments: Vec::new(),
             executable: directory.path().join("codex cost meter"),
             codex_home: directory.path().join("Codex Home"),
             idle_minutes: 15,
@@ -539,6 +598,34 @@ mod tests {
             title_metrics: "tokens,cost".into(),
             reprice_before: Some(OffsetDateTime::UNIX_EPOCH),
         }
+    }
+
+    #[test]
+    fn inspection_round_trips_metric_arguments_with_systemd_escaping() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(&directory);
+        let mut options = options(&directory);
+        options.title_metrics = "credits,quota-pp".into();
+        let config = directory.path().join("quota %u $POLICY with spaces.toml");
+        options.valuation_arguments = vec![
+            "--cost-metric".into(),
+            "credits,quota-pp".into(),
+            "--quota-window".into(),
+            "five-hour".into(),
+            "--quota-config".into(),
+            config.to_string_lossy().into_owned(),
+        ];
+        super::write_unit(
+            paths.service(),
+            &super::service_unit(&options, &options.executable).unwrap(),
+        )
+        .unwrap();
+        let mut runner = FakeRunner::with_outputs([output_with_exit_code(3, b"")]);
+        let inspection = inspect_with_runner(&paths, &mut runner).unwrap();
+        let settings = inspection.settings.unwrap();
+        assert_eq!(settings.recipe, "credits,quota-pp");
+        assert_eq!(settings.config, Some(config));
+        assert_eq!(settings.window, crate::quota::Window::FiveHour);
     }
 
     #[test]

@@ -1,0 +1,36 @@
+[
+  {
+    "observed_at": "2026-10-15T14:54:21Z",
+    "source": "https://web.archive.org/web/20261015145421id_/https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu-credit-based-pricing",
+    "rows": [
+      {"model":"gpt-6.1-sol","input":50,"cached_input":2.5,"output":250,"fast":2,"ultrafast":6},
+      {"model":"gpt-6-astra","input":250,"cached_input":25,"output":1250,"fast":2,"ultrafast":6},
+      {"model":"gpt-6-sol","input":50,"cached_input":5,"output":250,"fast":2},
+      {"model":"gpt-6-luna","input":2.5,"cached_input":0.25,"output":12.5,"fast":2},
+      {"model":"gpt-5.6-sol","input":100,"cached_input":10,"output":500},
+      {"model":"gpt-5.6-terra","input":50,"cached_input":5,"output":300},
+      {"model":"gpt-5.6-luna","input":5,"cached_input":0.5,"output":30}
+    ]
+  },
+  {
+    "observed_at": "2026-11-01T19:09:56Z",
+    "source": "https://web.archive.org/web/20261101190956id_/https://learn.chatgpt.com/docs/pricing",
+    "rows": [
+      {"model":"gpt-6.1-sol","input":50,"cached_input":2.5,"output":250,"fast":2,"ultrafast":6},
+      {"model":"gpt-6.1-terra","input":25,"cached_input":1.25,"output":125},
+      {"model":"gpt-6-astra","input":250,"cached_input":25,"output":1250,"fast":2,"ultrafast":6},
+      {"model":"gpt-6-sol","input":50,"cached_input":5,"output":250,"fast":2},
+      {"model":"gpt-6-luna","input":2.5,"cached_input":0.25,"output":12.5,"fast":2},
+      {"model":"gpt-5.6-sol","input":100,"cached_input":10,"output":500},
+      {"model":"gpt-5.6-terra","input":50,"cached_input":5,"output":300},
+      {"model":"gpt-5.6-luna","input":5,"cached_input":0.5,"output":30}
+    ]
+  },
+  {
+    "observed_at": "2026-11-19T22:45:55Z",
+    "source": "https://help.openai.com/en/articles/11481834",
+    "rows": [
+      {"model":"gpt-6.1-terra","input":25,"cached_input":1.25,"output":125,"fast":2}
+    ]
+  }
+]

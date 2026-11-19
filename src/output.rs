@@ -251,7 +251,9 @@ fn stats_row(scope: &str, stats: &StatsReport) -> Vec<String> {
         nested_tokens(stats.input_tokens, stats.input_cache_read_tokens),
         nested_tokens(stats.output_tokens, stats.reasoning_tokens),
         human_duration(stats.total_turn_duration_seconds),
-        human_cost(stats.estimated_cost_usd, stats.known_model_cost_usd),
+        stats
+            .costs
+            .human(stats.estimated_cost_usd, stats.known_model_cost_usd),
     ]
 }
 
@@ -275,7 +277,9 @@ fn model_row(model: &str, stats: &ModelReport) -> Vec<String> {
         compact_tokens(stats.input_tokens),
         compact_tokens(stats.output_tokens),
         human_duration(stats.total_turn_duration_seconds),
-        human_cost(stats.estimated_cost_usd, stats.known_model_cost_usd),
+        stats
+            .costs
+            .human(stats.estimated_cost_usd, stats.known_model_cost_usd),
     ]
 }
 
@@ -286,7 +290,9 @@ fn model_tier_row(label: &str, stats: &ModelTierReport) -> Vec<String> {
         compact_tokens(stats.input_tokens),
         compact_tokens(stats.output_tokens),
         String::new(),
-        human_cost(stats.estimated_cost_usd, stats.known_model_cost_usd),
+        stats
+            .costs
+            .human(stats.estimated_cost_usd, stats.known_model_cost_usd),
     ]
 }
 
@@ -339,6 +345,7 @@ fn show_model_section(by_model: &std::collections::BTreeMap<String, ModelReport>
 fn merge_tiers<'a>(tiers: impl IntoIterator<Item = &'a ModelTierReport>) -> ModelTierReport {
     tiers.into_iter().fold(
         ModelTierReport {
+            costs: crate::costs::Bundle::default(),
             input_tokens: 0,
             input_cache_write_tokens: 0,
             input_cache_read_tokens: 0,
@@ -348,6 +355,7 @@ fn merge_tiers<'a>(tiers: impl IntoIterator<Item = &'a ModelTierReport>) -> Mode
             known_model_cost_usd: 0.0,
         },
         |mut total, tier| {
+            total.costs.merge(&tier.costs);
             total.input_tokens = total.input_tokens.saturating_add(tier.input_tokens);
             total.input_cache_write_tokens = total
                 .input_cache_write_tokens
@@ -482,59 +490,97 @@ fn append_footer(
     stats: &StatsReport,
     warnings: &[String],
 ) {
-    let custom = pricing.metadata.mode == "standalone"
-        || pricing
-            .metadata
-            .bases
-            .contains(&crate::pricing::catalog::Basis::Custom);
-    if pricing.metadata.mode == "standalone" {
+    if let Some(credits) = stats.costs.costs.get(&crate::costs::Metric::Credits) {
+        rendered.push_str("Estimated credit cost: independent published token card, not verified deductions; no separate write/reasoning fee.\n");
         let _ = writeln!(
             rendered,
-            "Estimated {} cost.",
-            if custom {
-                "user-controlled pricing"
-            } else {
-                "pricing"
-            }
-        );
-    } else {
-        let _ = writeln!(
-            rendered,
-            "Estimated {} cost using pricing dated {}.",
-            if custom {
-                "user-controlled pricing"
-            } else {
-                "API list"
-            },
-            safe_text(pricing.as_of.as_deref().unwrap_or("unknown"))
+            "Credit coverage gaps: {}. Applied tier may differ from served tier.",
+            safe_text(
+                serde_json::to_string(&credits.unsupported_events)
+                    .unwrap_or_default()
+                    .as_str()
+            )
         );
     }
-    let metadata = &pricing.metadata;
-    let _ = writeln!(
-        rendered,
-        "Pricing catalog: {}; version {}{}{}.",
-        metadata.mode,
-        safe_text(&metadata.version),
-        metadata
-            .label
-            .as_ref()
-            .map(|l| format!("; label {}", safe_text(l)))
-            .unwrap_or_default(),
-        if metadata.mode == "standalone"
-            || metadata
+    if let Some(quota) = stats.costs.costs.get(&crate::costs::Metric::Quota) {
+        let _ = writeln!(
+            rendered,
+            "Estimated {} usage (pp): approximate cumulative modeled contributions, not remaining allowance or statistical lower bounds; {}. Extrapolated events: {}. Coverage gaps: {}.",
+            if quota.provenance["window"] == "five-hour" {
+                "five-hour"
+            } else {
+                "weekly"
+            },
+            safe_text(
+                quota.provenance["config_fingerprint"]
+                    .as_str()
+                    .unwrap_or("unknown fingerprint")
+            ),
+            quota.extrapolated_events,
+            safe_text(&serde_json::to_string(&quota.unsupported_events).unwrap_or_default())
+        );
+    }
+    let show_usd = stats.costs.cost_metrics.is_empty()
+        || stats
+            .costs
+            .cost_metrics
+            .contains(&crate::costs::Metric::ApiUsd);
+    if show_usd {
+        let custom = pricing.metadata.mode == "standalone"
+            || pricing
+                .metadata
                 .bases
-                .contains(&crate::pricing::catalog::Basis::Custom)
-        {
-            "; user-controlled prices"
-        } else if metadata.bases.iter().any(|b| matches!(
-            b,
-            crate::pricing::catalog::Basis::Observed | crate::pricing::catalog::Basis::Researched
-        )) {
-            "; inferred prices"
+                .contains(&crate::pricing::catalog::Basis::Custom);
+        if pricing.metadata.mode == "standalone" {
+            let _ = writeln!(
+                rendered,
+                "Estimated {} cost.",
+                if custom {
+                    "user-controlled pricing"
+                } else {
+                    "pricing"
+                }
+            );
         } else {
-            ""
+            let _ = writeln!(
+                rendered,
+                "Estimated {} cost using pricing dated {}.",
+                if custom {
+                    "user-controlled pricing"
+                } else {
+                    "API list"
+                },
+                safe_text(pricing.as_of.as_deref().unwrap_or("unknown"))
+            );
         }
-    );
+        let metadata = &pricing.metadata;
+        let _ = writeln!(
+            rendered,
+            "Pricing catalog: {}; version {}{}{}.",
+            metadata.mode,
+            safe_text(&metadata.version),
+            metadata
+                .label
+                .as_ref()
+                .map(|l| format!("; label {}", safe_text(l)))
+                .unwrap_or_default(),
+            if metadata.mode == "standalone"
+                || metadata
+                    .bases
+                    .contains(&crate::pricing::catalog::Basis::Custom)
+            {
+                "; user-controlled prices"
+            } else if metadata.bases.iter().any(|b| matches!(
+                b,
+                crate::pricing::catalog::Basis::Observed
+                    | crate::pricing::catalog::Basis::Researched
+            )) {
+                "; inferred prices"
+            } else {
+                ""
+            }
+        );
+    }
     if stats.assumed_standard_tokens > 0 {
         let _ = writeln!(
             rendered,
@@ -542,7 +588,13 @@ fn append_footer(
             compact_tokens(stats.assumed_standard_tokens)
         );
     }
-    if stats.estimated_cost_usd.is_none() {
+    if (stats.costs.cost_metrics.is_empty() && stats.estimated_cost_usd.is_none())
+        || stats
+            .costs
+            .costs
+            .values()
+            .any(|amount| amount.estimated.is_none())
+    {
         rendered.push_str("+ is the known priced minimum; the complete estimate is unavailable.\n");
     }
     if !warnings.is_empty() {
@@ -594,7 +646,7 @@ fn human_duration(seconds: f64) -> String {
     parts.join(" ")
 }
 
-fn human_cost(estimated: Option<f64>, known: f64) -> String {
+pub(crate) fn human_cost(estimated: Option<f64>, known: f64) -> String {
     match estimated {
         Some(cost) => format!("${cost:.2}"),
         None => format!("${known:.2}+"),
@@ -734,6 +786,7 @@ mod tests {
 
     fn stats(cost: Option<f64>, known_cost: f64) -> StatsReport {
         StatsReport {
+            costs: crate::costs::Bundle::default(),
             rollout_count: 1,
             majority_turn_model: Some("gpt-5.6-terra".into()),
             majority_reasoning_level: Some("high".into()),
@@ -761,6 +814,7 @@ mod tests {
         by_model.insert(
             "cheap".into(),
             ModelReport {
+                costs: crate::costs::Bundle::default(),
                 turns: 1,
                 input_tokens: 10,
                 input_cache_write_tokens: 0,
@@ -776,6 +830,7 @@ mod tests {
         by_model.insert(
             "gpt-5.6-terra".into(),
             ModelReport {
+                costs: crate::costs::Bundle::default(),
                 turns: 2,
                 input_tokens: 11_990,
                 input_cache_write_tokens: 500,
@@ -789,6 +844,7 @@ mod tests {
                     (
                         "standard".into(),
                         ModelTierReport {
+                            costs: crate::costs::Bundle::default(),
                             input_tokens: 6_000,
                             input_cache_write_tokens: 250,
                             input_cache_read_tokens: 1_000,
@@ -801,6 +857,7 @@ mod tests {
                     (
                         "fast".into(),
                         ModelTierReport {
+                            costs: crate::costs::Bundle::default(),
                             input_tokens: 5_000,
                             input_cache_write_tokens: 250,
                             input_cache_read_tokens: 1_000,
@@ -813,6 +870,7 @@ mod tests {
                     (
                         "assumed_standard".into(),
                         ModelTierReport {
+                            costs: crate::costs::Bundle::default(),
                             input_tokens: 990,
                             input_cache_write_tokens: 0,
                             input_cache_read_tokens: 0,
@@ -1045,6 +1103,7 @@ mod tests {
         report.by_model.insert(
             forged,
             ModelReport {
+                costs: crate::costs::Bundle::default(),
                 turns: 0,
                 input_tokens: 0,
                 input_cache_write_tokens: 0,

@@ -18,12 +18,58 @@ use crate::{
     long_about = "Report Codex task usage and estimated API-list-price cost, or preview and apply bounded task-title updates."
 )]
 pub(crate) struct Cli {
+    #[arg(
+        long = "cost-metric",
+        global = true,
+        default_value = "api-usd",
+        help = "Ordered api-usd,credits,quota-pp selection, or standalone all."
+    )]
+    pub(crate) cost_metrics: crate::costs::Selection,
+    #[arg(long, global = true, value_enum, default_value = "weekly")]
+    pub(crate) quota_window: crate::quota::Window,
+    #[arg(long, global = true, value_name = "PATH")]
+    pub(crate) quota_config: Option<PathBuf>,
     #[command(subcommand)]
     pub(crate) command: Command,
 }
 
+impl Cli {
+    pub(crate) fn parse_arguments<I, T>(arguments: I) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        let arguments = arguments
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<std::ffi::OsString>>();
+        let mut count = 0;
+        for argument in arguments
+            .iter()
+            .skip(1)
+            .take_while(|argument| *argument != "--")
+        {
+            let text = argument.to_string_lossy();
+            if text == "--cost-metric" || text.starts_with("--cost-metric=") {
+                count += 1;
+            }
+        }
+        // Clap's global propagation otherwise lets one occurrence on either side
+        // of a subcommand silently override the other.
+        if count > 1 {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--cost-metric may be supplied only once",
+            ));
+        }
+        <Self as Parser>::try_parse_from(arguments)
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    #[command(about = "Create the opt-in, user-owned quota estimation preset.")]
+    QuotaConfig(QuotaConfigArgs),
     #[command(
         about = "Report usage and estimated cost by task, project, or corpus.",
         long_about = "Report usage and estimated API-list-price cost by task, project, or corpus.\n\nHuman output nests cached input under input and reasoning under output. Turn time sums recorded turn lifecycle intervals; all-agent and aggregate values can include overlapping work. A trailing + marks a known priced minimum when the complete estimate is unavailable.\n\nPricing uses the service tier recorded in rollout settings; the tier actually served is unavailable. Missing tier data is priced as assumed Standard and identified in human output. Internal model identities can use effective-dated public-model proxies whose boundaries are estimates, not observed routing or billing cutovers. Auto-review assumes ChatGPT sign-in and is free from the October 6, 2026 documentation observation date; API-key pricing and the actual policy start date are unverified.\n\nUse --json for exact token counts, full paths and identifiers, selection diagnostics, service-tier detail, pricing sources, and effective-dated model-proxy history."
@@ -59,6 +105,17 @@ Regenerate saved scripts after upgrading."#
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[command(about = "Remove the schedule and this executable.")]
     Uninstall,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct QuotaConfigArgs {
+    #[command(subcommand)]
+    pub(crate) command: QuotaConfigCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum QuotaConfigCommand {
+    Init,
 }
 
 #[derive(Debug, Args)]
@@ -177,6 +234,8 @@ pub(crate) struct ScheduleRunArgs {
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Args)]
 pub(crate) struct ScheduledUpdateArgs {
+    #[arg(long, conflicts_with = "title_metrics", value_parser = parse_template)]
+    title_format: Option<MetricList>,
     #[arg(
         long,
         default_value_t = 15,
@@ -215,7 +274,7 @@ pub(crate) struct ScheduledUpdateArgs {
         long,
         default_value = "cost,total-tokens",
         value_parser = parse_metric_text,
-        help = "Comma-separated title metrics: cost, total-tokens, input-tokens, output-tokens, or all."
+        help = "Ordered title slots: cost, api-usd, credits, quota-pp, total-tokens, input-tokens, output-tokens, or legacy all."
     )]
     title_metrics: String,
     #[arg(long, help = "Use this Codex storage directory.")]
@@ -288,6 +347,8 @@ pub(crate) struct ReportArgs {
         .multiple(true)
 ))]
 pub(crate) struct UpdateArgs {
+    #[arg(long, conflicts_with = "title_metrics", value_parser = parse_template)]
+    pub(crate) title_format: Option<MetricList>,
     #[arg(
         long = "thread-id",
         conflicts_with = "idle_minutes",
@@ -350,7 +411,7 @@ pub(crate) struct UpdateArgs {
         long,
         default_value = "cost,total-tokens",
         value_parser = parse_metrics,
-        help = "Comma-separated title metrics: cost, total-tokens, input-tokens, output-tokens, or all."
+        help = "Ordered title slots: cost, api-usd, credits, quota-pp, total-tokens, input-tokens, output-tokens, or legacy all."
     )]
     pub(crate) title_metrics: MetricList,
     #[arg(long, help = "Use this Codex storage directory.")]
@@ -398,8 +459,12 @@ impl UpdateArgs {
         resolve_codex_home(&self.codex_home)
     }
 
-    pub(crate) fn options(&self) -> UpdateOptions {
-        UpdateOptions {
+    pub(crate) fn options(
+        &self,
+        selection: &crate::costs::Selection,
+        window: crate::quota::Window,
+    ) -> Result<UpdateOptions, crate::title::TitleError> {
+        Ok(UpdateOptions {
             thread_ids: self.thread_ids.clone(),
             title_matches: self.title_matches.clone(),
             idle_minutes: self.idle_minutes,
@@ -407,8 +472,15 @@ impl UpdateArgs {
             max_runtime: self.max_runtime,
             reprice_before: self.reprice_before,
             apply: self.apply,
-            title_format: TitleFormat::new(self.max_width, self.title_metrics.clone()),
-        }
+            title_format: TitleFormat::resolve(
+                self.max_width,
+                self.title_format
+                    .clone()
+                    .unwrap_or_else(|| self.title_metrics.clone()),
+                selection,
+                window,
+            )?,
+        })
     }
 }
 
@@ -433,8 +505,12 @@ impl ScheduledUpdateArgs {
         resolve_codex_home(&self.codex_home)
     }
 
-    pub(crate) fn update_options(&self) -> UpdateOptions {
-        UpdateOptions {
+    pub(crate) fn update_options(
+        &self,
+        selection: &crate::costs::Selection,
+        window: crate::quota::Window,
+    ) -> Result<UpdateOptions, crate::title::TitleError> {
+        Ok(UpdateOptions {
             thread_ids: Vec::new(),
             title_matches: Vec::new(),
             idle_minutes: Some(self.idle_minutes),
@@ -442,11 +518,15 @@ impl ScheduledUpdateArgs {
             max_runtime: Some(self.max_runtime),
             reprice_before: self.reprice_before,
             apply: true,
-            title_format: TitleFormat::new(
+            title_format: TitleFormat::resolve(
                 self.max_width,
-                parse_metrics(&self.title_metrics).expect("clap validates title metrics"),
-            ),
-        }
+                self.title_format.clone().unwrap_or_else(|| {
+                    parse_metrics(&self.title_metrics).expect("clap validates title metrics")
+                }),
+                selection,
+                window,
+            )?,
+        })
     }
 
     pub(crate) fn idle_minutes(&self) -> u64 {
@@ -463,10 +543,6 @@ impl ScheduledUpdateArgs {
 
     pub(crate) fn max_width(&self) -> usize {
         self.max_width
-    }
-
-    pub(crate) fn title_metrics(&self) -> &str {
-        &self.title_metrics
     }
 
     pub(crate) fn reprice_before(&self) -> Option<OffsetDateTime> {
@@ -592,6 +668,10 @@ fn parse_metrics(value: &str) -> Result<MetricList, String> {
         .map_err(|error| error.to_string())
 }
 
+fn parse_template(value: &str) -> Result<MetricList, String> {
+    MetricList::template(value).map_err(|error| error.to_string())
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn parse_metric_text(value: &str) -> Result<String, String> {
     parse_metrics(value).map(|_| value.into())
@@ -623,12 +703,101 @@ mod tests {
     use super::{Cli, Command, UpdateArgs, parse_thread_id, windows_home, windows_local_app_data};
     use crate::title::MetricList;
 
+    #[test]
+    fn ordered_cost_selection_is_global_and_unambiguous() {
+        for value in [
+            "api-usd",
+            "credits",
+            "quota-pp",
+            "api-usd,credits",
+            "quota-pp,api-usd",
+            "credits,quota-pp",
+            "all",
+        ] {
+            let before = Cli::try_parse_from(["meter", "--cost-metric", value, "rates"]).unwrap();
+            let after = Cli::try_parse_from(["meter", "rates", "--cost-metric", value]).unwrap();
+            assert_eq!(before.cost_metrics, after.cost_metrics);
+            assert_eq!(
+                before.cost_metrics.text(),
+                if value == "all" {
+                    "api-usd,credits,quota-pp"
+                } else {
+                    value
+                }
+            );
+        }
+        for value in [
+            "",
+            ",",
+            "credits,",
+            ",credits",
+            "credits,credits",
+            "money",
+            "all,credits",
+            "credits,all",
+        ] {
+            assert!(
+                Cli::try_parse_from(["meter", "rates", "--cost-metric", value]).is_err(),
+                "{value}"
+            );
+        }
+        for args in [
+            vec![
+                "meter",
+                "rates",
+                "--cost-metric",
+                "credits",
+                "--cost-metric",
+                "api-usd",
+            ],
+            vec![
+                "meter",
+                "--cost-metric",
+                "credits",
+                "rates",
+                "--cost-metric",
+                "api-usd",
+            ],
+        ] {
+            assert!(Cli::parse_arguments(args).is_err());
+        }
+    }
+
+    #[test]
+    fn title_format_conflicts_with_explicit_title_metrics() {
+        assert!(
+            Cli::try_parse_from([
+                "meter",
+                "update",
+                "--thread-id",
+                "root",
+                "--title-format",
+                "{title} · {credits}"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "meter",
+                "update",
+                "--thread-id",
+                "root",
+                "--title-format",
+                "{title} · {credits}",
+                "--title-metrics",
+                "cost"
+            ])
+            .is_err()
+        );
+    }
+
     fn update(arguments: &[&str]) -> UpdateArgs {
         let mut command = vec!["codex-cost-meter", "update"];
         command.extend_from_slice(arguments);
         match Cli::try_parse_from(command) {
             Ok(Cli {
                 command: Command::Update(arguments),
+                ..
             }) => arguments,
             Ok(_) => panic!("expected update arguments"),
             Err(error) => panic!("expected valid arguments: {error}"),
@@ -669,7 +838,7 @@ mod tests {
         let report =
             Cli::try_parse_from(["codex-cost-meter", "report", "codex://threads/abc-123"]).unwrap();
         assert!(
-            matches!(report, Cli { command: Command::Report(args) } if args.thread_id.as_deref() == Some("abc-123"))
+            matches!(report, Cli { command: Command::Report(args), .. } if args.thread_id.as_deref() == Some("abc-123"))
         );
 
         let update = update(&["--thread-id", "codex://threads/abc-123"]);
