@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.0]
+
 - Add explicit local pricing refresh, dry-run/apply review, reset, and offline research prompts with independently verified proposal imports; retain historical data and report partial coverage.
 - Support offline user pricing overlays and standalone catalogs, with custom labels, provenance, and effective-rate inspection across reports, exports, and title valuation.
 
