@@ -78,3 +78,15 @@ directly to main). The owner authorized that publication after archive.
 At this local-readiness snapshot, changes are uncommitted and nothing has been
 pushed, merged, installed in the user's environment or released. Hosted check
 results must be verified separately on the published PR.
+
+### First hosted run and Windows correction
+
+[PR #78](https://github.com/deinspanjer/codex-cost-meter/pull/78) was published
+after archive. In [run 44638789177](https://github.com/deinspanjer/codex-cost-meter/actions/runs/44638789177),
+macOS checks, both macOS architecture builds and both Linux builds passed.
+Windows tests passed, but warnings-denied Clippy rejected the unused
+`read_definition` helper in the Windows production binary. Gate that Unix
+file-definition reader to macOS/Linux and tests; Windows reads its definition
+from native task-query XML instead. No warning suppression or runtime behavior
+change is needed. The corrected head must pass hosted Windows CI before delivery
+verification is complete.

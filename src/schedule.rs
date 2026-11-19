@@ -149,6 +149,7 @@ fn xml_text(value: &str) -> Option<String> {
     Some(out)
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn read_definition(path: &Path) -> Option<String> {
     let file = File::open(path).ok()?;
     let mut text = String::new();
