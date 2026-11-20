@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.0]
+
 - Add ordered API-USD, public-credit and configurable allowance-point estimates with independent coverage, additive schema-1 JSON/JSONL costs, explicit title recipes and pinned schedule settings.
 - Add create-only installation of an editable, dated, single-owner Pro 20x weekly quota example; preserve historical credit evidence, calibration assumptions and cloud-coverage limits.
 

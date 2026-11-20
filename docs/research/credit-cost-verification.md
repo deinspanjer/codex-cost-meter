@@ -8,7 +8,7 @@
 Reviewed the proposal, design, requirement scenarios and all 15 task entries
 against the implementation. All 15 tasks meet their implementation/local
 verification criteria. On 2026-11-19 the owner moved hosted platform CI to
-post-archive PR delivery verification; it is not claimed as already passed.
+post-archive PR delivery verification; results are recorded below.
 
 - Credits: independently sourced observation boundaries, cache partition,
   tier/context/history gaps, known minima, and no inherited API exemptions.
@@ -71,13 +71,8 @@ is documented with the existing explicit-config-path workaround.
 ## Post-archive delivery verification
 
 The existing `.github/workflows/ci.yml` runs for pull requests or pushes to
-`main`; it has no workflow-dispatch trigger. Native Windows/Linux CI and the
-architecture build matrix have not run for these local changes. Running that
-workflow requires publishing a feature branch and opening a PR (not pushing
-directly to main). The owner authorized that publication after archive.
-At this local-readiness snapshot, changes are uncommitted and nothing has been
-pushed, merged, installed in the user's environment or released. Hosted check
-results must be verified separately on the published PR.
+`main`; it has no workflow-dispatch trigger. As requested, the feature branch
+was published for hosted verification after archiving the OpenSpec change.
 
 ### First hosted run and Windows correction
 
@@ -88,5 +83,9 @@ Windows tests passed, but warnings-denied Clippy rejected the unused
 `read_definition` helper in the Windows production binary. Gate that Unix
 file-definition reader to macOS/Linux and tests; Windows reads its definition
 from native task-query XML instead. No warning suppression or runtime behavior
-change is needed. The corrected head must pass hosted Windows CI before delivery
-verification is complete.
+change was needed.
+
+[Run 44639508651](https://github.com/deinspanjer/codex-cost-meter/actions/runs/44639508651)
+passed all seven jobs on corrected commit `48ef9d9`: macOS checks and both
+architecture builds, both Linux builds and scheduler contract checks, and native
+Windows tests, warnings-denied Clippy, release build and scheduler lifecycle smoke.
