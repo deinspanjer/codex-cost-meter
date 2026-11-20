@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.8.0]
+
+- Add ordered API-USD, public-credit and configurable allowance-point estimates with independent coverage, additive schema-1 JSON/JSONL costs, explicit title recipes and pinned schedule settings.
+- Add create-only installation of an editable, dated, single-owner Pro 20x weekly quota example; preserve historical credit evidence, calibration assumptions and cloud-coverage limits.
+
 - Add explicit local pricing refresh, dry-run/apply review, reset, and offline research prompts with independently verified proposal imports; retain historical data and report partial coverage.
 - Support offline user pricing overlays and standalone catalogs, with custom labels, provenance, and effective-rate inspection across reports, exports, and title valuation.
 

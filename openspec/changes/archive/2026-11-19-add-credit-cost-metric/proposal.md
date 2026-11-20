@@ -1,6 +1,6 @@
 # Selectable cost metrics
 
-Status: planning and review only. On 2026-10-30 the owner extended the original dollars/credits proposal to include configurable subscription percentage-point estimates, combinations in reports, and explicit title placeholders. Implementation remains on hold until explicitly resumed by the owner.
+Status: implementation resumed by explicit owner request on 2026-11-19. On 2026-10-30 the owner extended the original dollars/credits proposal to include configurable subscription percentage-point estimates, combinations in reports, and explicit title placeholders.
 
 ## Why
 
@@ -32,4 +32,4 @@ None. Existing tier-aware API-dollar behavior remains the default; this capabili
 
 ## Impact
 
-`src/cli.rs`, `src/main.rs`, valuation, a separate embedded credit catalog and installable quota preset under `data/`, report aggregation, human rendering, JSON/JSONL exports, title composition and suffix recognition, update selection, and native schedule arguments. Add a small TOML parser dependency if needed; retain one Rust crate. Update completions and user/developer documentation. No runtime network access, billing integration, automatic recalibration, or API/credit price overrides. This request changes planning artifacts only; it does not install the preset or alter titles/schedules.
+`src/cli.rs`, `src/main.rs`, valuation, a separate embedded credit catalog and installable quota preset under `data/`, report aggregation, human rendering, JSON/JSONL exports, title composition and suffix recognition, update selection, and native schedule arguments. Add a small TOML parser dependency if needed; retain one Rust crate. Update completions and user/developer documentation. No runtime network access for valuation, billing integration, automatic recalibration, or new API/credit price overrides. Implementation does not install user configuration or alter real titles/schedules.

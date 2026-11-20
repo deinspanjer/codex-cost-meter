@@ -34,6 +34,11 @@ Preserve the existing Python Codex task-cost tools for reference while developin
 - Use repository-provided `just` recipes once they exist; run focused checks before broad suites.
 - Do not call work complete without reporting the validation commands and their results.
 
+## Release delivery
+
+- Before landing a user-facing change intended to ship, include the appropriate `just bump` in the release-bound PR. If release is intentionally deferred, say so explicitly at handoff.
+- A green CI build does not ship the change. Verify the public GitHub release and the merged Homebrew formula PR before reporting it shipped. Report local installation separately; upgrade it only when requested.
+
 ## Program continuation
 
 - The owner has authorized autonomous just-in-time design, planning, and execution for roadmap milestones after v0.1 under `docs/adr/0004-preserve-the-python-prototype-and-port-to-rust.md`.

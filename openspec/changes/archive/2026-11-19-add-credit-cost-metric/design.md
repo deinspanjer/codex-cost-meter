@@ -204,4 +204,10 @@ No pricing-result cache is introduced. Reuse normalized usage across all three m
 
 ## Implementation sequence
 
-Implementation is on hold by owner instruction as of 2026-10-30; planning and review may continue. Once the owner explicitly resumes implementation: capture credit evidence; implement independent valuations and the externally configurable quota preset from the research above; propagate combinations through reports/exports/rates; implement explicit title placeholders and schedule persistence; document and validate with focused checks. No production account access or real scheduler installation is required for validation.
+The owner explicitly resumed implementation on 2026-11-19: capture credit evidence; implement independent valuations and the externally configurable quota preset from the research above; propagate combinations through reports/exports/rates; implement explicit title placeholders and schedule persistence; document and validate with focused checks. No production account access or real scheduler installation is required for local validation. Historical coverage gaps remain explicit as documented in docs/research/credit-rate-evidence.md.
+
+The owner directed closeout on 2026-11-19 in this order: finish local validation
+and artifact verification, complete the implementation tasks, archive the change,
+then publish the PR and finish hosted platform CI. Hosted checks remain required
+delivery verification but are not a pre-archive implementation-task gate. Do not
+describe local success or archive completion as a hosted-CI result.

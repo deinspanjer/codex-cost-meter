@@ -34,6 +34,10 @@ pub(crate) struct UsageEvent {
     pub service_tier: ServiceTier,
     pub usage: Usage,
     pub reasoning_output: u64,
+    pub account_id: Option<String>,
+    pub account_source: String,
+    pub guardian_review: bool,
+    pub timestamp_source: String,
 }
 
 pub(crate) struct EventSource<'a> {
@@ -252,6 +256,8 @@ pub(crate) fn analyze_observed(
     let mut malformed_timestamp = false;
     let mut valid_turns = HashSet::new();
     let mut turn_contexts = HashMap::new();
+    let mut account_id = None;
+    let mut guardian_review = false;
 
     read_rollout(record, |line| {
         let Ok(item) = serde_json::from_slice::<Value>(line) else {
@@ -261,6 +267,14 @@ pub(crate) fn analyze_observed(
             Some("session_meta") => {
                 session_meta_count += 1;
                 if session_meta_count == 1 {
+                    let payload = &item["payload"];
+                    account_id = payload
+                        .get("creator_account_id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_owned);
+                    guardian_review = payload.get("thread_source").and_then(Value::as_str)
+                        == Some("guardian_review");
                     creator_version = item
                         .get("payload")
                         .and_then(Value::as_object)
@@ -299,6 +313,7 @@ pub(crate) fn analyze_observed(
     let mut legacy_model = None::<String>;
     let mut service_tier = ServiceTier::Unpriced("missing".into());
     let mut previous_total = None;
+    let mut response_identity = None;
     let mut replay_records_remaining = replay_prefix_len;
     let summary = read_rollout_located(record, |source_path, source_line, line| {
         let Ok(item) = serde_json::from_slice::<Value>(line) else {
@@ -325,6 +340,27 @@ pub(crate) fn analyze_observed(
         let Some(event_type) = payload.get("type").and_then(Value::as_str) else {
             return;
         };
+        if event_type == "raw_response_completed" {
+            response_identity = payload
+                .get("token_usage")
+                .and_then(TokenUsage::from_json)
+                .map(|usage| {
+                    let metadata = payload
+                        .get("usage_metadata")
+                        .and_then(|usage| usage.get("metadata"));
+                    let account = metadata
+                        .and_then(|metadata| metadata.get("account_id"))
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_owned);
+                    let guardian = metadata
+                        .and_then(|metadata| metadata.get("thread_source"))
+                        .and_then(Value::as_str)
+                        == Some("guardian_review");
+                    (usage, account, guardian)
+                });
+            return;
+        }
         if event_type == "thread_settings_applied" {
             service_tier = applied_service_tier(payload);
             return;
@@ -395,6 +431,7 @@ pub(crate) fn analyze_observed(
         if event_type != "token_count" {
             return;
         }
+        let completed_identity = response_identity.take();
 
         let Some(info) = payload.get("info").and_then(Value::as_object) else {
             return;
@@ -451,12 +488,36 @@ pub(crate) fn analyze_observed(
         }
         let event_at = timestamp_or_incomplete(&item, &mut stats);
         let at = event_at.or(session_at);
+        // Attach identity only to an identical-category completion immediately
+        // preceding this normalized observation. Never add its token counters.
+        let response = completed_identity.filter(|(usage, _, _)| *usage == normalized);
+        let response_account = response
+            .as_ref()
+            .and_then(|(_, account, _)| account.clone());
+        let account_source = if response_account.is_some() {
+            "response_metadata"
+        } else if account_id.is_some() {
+            "creator_account_assumption"
+        } else {
+            "unknown"
+        };
         let event = UsageEvent {
             model,
             at,
             service_tier: tier_for_usage(&service_tier, event_at, creator_version.as_deref()),
             usage: normalized.usage,
             reasoning_output: normalized.reasoning_output,
+            account_id: response_account.or_else(|| account_id.clone()),
+            account_source: account_source.into(),
+            guardian_review: guardian_review || response.is_some_and(|(_, _, guardian)| guardian),
+            timestamp_source: if event_at.is_some() {
+                "event"
+            } else if session_at.is_some() {
+                "session"
+            } else {
+                "unknown"
+            }
+            .into(),
         };
         if let Some(observer) = &mut observer {
             observer(
@@ -668,6 +729,26 @@ mod tests {
     use super::{RolloutStats, analyze, replay_prefix_len};
     use crate::pricing::{ServiceTier, Usage};
     use crate::rollout::discovery::{ForkHistoryMode, RolloutKind, RolloutRecord};
+
+    #[test]
+    fn recorded_response_identity_attaches_only_to_matching_normalized_usage() {
+        let tokens = usage(100, 20, 10);
+        let stats = analyze_fixture(&[
+            json!({"type":"session_meta","timestamp":"2026-11-01T00:00:00Z","payload":{"id":"rollout","creator_account_id":"creator","thread_source":"guardian_review"}}),
+            context(None, "gpt-6.1-sol", "high"),
+            json!({"type":"event_msg","payload":{"type":"raw_response_completed","response_id":"synthetic-response","token_usage":tokens.json(),"usage_metadata":{"metadata":{"account_id":"resumed"}}}}),
+            token_event(tokens, tokens),
+            json!({"type":"event_msg","payload":{"type":"raw_response_completed","response_id":"other","token_usage":usage(99, 0, 0).json(),"usage_metadata":{"metadata":{"account_id":"must-not-attach"}}}}),
+            token_event(usage(1, 0, 0), usage(101, 20, 10)),
+        ]);
+        assert_eq!(stats.events.len(), 2);
+        assert_eq!(stats.known_usage.input, 101);
+        assert_eq!(stats.events[0].account_id.as_deref(), Some("resumed"));
+        assert_eq!(stats.events[0].account_source, "response_metadata");
+        assert_eq!(stats.events[1].account_id.as_deref(), Some("creator"));
+        assert_eq!(stats.events[1].account_source, "creator_account_assumption");
+        assert!(stats.events.iter().all(|event| event.guardian_review));
+    }
 
     #[derive(Clone, Copy, Default)]
     struct FixtureUsage {

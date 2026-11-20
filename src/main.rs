@@ -1,5 +1,7 @@
 mod cache;
 mod cli;
+mod costs;
+mod credits;
 mod date_filter;
 mod output;
 mod pricing;
@@ -9,6 +11,7 @@ mod pricing_evidence;
 mod pricing_store;
 mod progress;
 mod project;
+mod quota;
 mod report;
 mod rollout;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -26,7 +29,7 @@ use std::{
     rc::Rc,
 };
 
-use clap::{CommandFactory, Parser, error::ErrorKind};
+use clap::{CommandFactory, error::ErrorKind};
 use thiserror::Error as ThisError;
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -41,6 +44,10 @@ use crate::{
 
 #[derive(Debug, ThisError)]
 enum AppError {
+    #[error("{0}")]
+    Valuation(String),
+    #[error(transparent)]
+    Title(#[from] title::TitleError),
     #[error("pricing refresh has unresolved items")]
     PricingPartial,
     #[error("{0}")]
@@ -135,7 +142,16 @@ fn run_with_writers(
     error_writer: &mut impl Write,
     stderr_is_terminal: bool,
 ) -> Result<(), AppError> {
+    let selection = cli.cost_metrics;
+    let window = cli.quota_window;
+    let config_path = cli.quota_config;
     match cli.command {
+        Command::QuotaConfig(_) => {
+            let path = quota::resolve(config_path.as_deref()).map_err(AppError::Valuation)?;
+            quota::init(&path).map_err(AppError::Valuation)?;
+            writeln!(writer, "created {} (single-account owner-derived Pro 20x weekly example; edit to match your policy)", path.display())
+                .map_err(|source| AppError::WriteReport { source })
+        }
         Command::Pricing(args) => {
             let partial = pricing_command::run(
                 args.command,
@@ -151,13 +167,58 @@ fn run_with_writers(
             }
         }
         Command::Rates(args) => {
-            let table = pricing_store::Snapshot::load(pricing_store::path()?)?
-                .effective
-                .rate_table(args.model.as_deref(), args.as_of)?;
+            let catalog = valuation_catalog(selection.clone(), window, config_path.as_deref())?;
+            let table = match catalog.rate_table(args.model.as_deref(), args.as_of) {
+                Ok(table) => table,
+                Err(pricing::PricingError::NoRates { .. })
+                    if !selection.0.contains(&costs::Metric::ApiUsd) =>
+                {
+                    let mut table = catalog.rate_table(None, args.as_of)?;
+                    table.rows.clear();
+                    table
+                }
+                Err(error) => return Err(error.into()),
+            };
             let rendered = if args.json {
-                format!("{}\n", output::json(&table)?)
+                let mut value = serde_json::to_value(&table)?;
+                value["cost_metrics"] = serde_json::json!(selection.0);
+                let mut rates = serde_json::Map::new();
+                for metric in &selection.0 {
+                    let value = match metric {
+                        costs::Metric::ApiUsd => serde_json::to_value(&table)?,
+                        costs::Metric::Credits => credit_rates(args.model.as_deref(), args.as_of),
+                        costs::Metric::Quota => catalog
+                            .cost_context
+                            .quota
+                            .as_ref()
+                            .expect("quota loaded")
+                            .provenance(window),
+                    };
+                    rates.insert(metric.name().into(), value);
+                }
+                value["costs"] = rates.into();
+                format!("{}\n", output::json(&value)?)
             } else {
-                output::rates_human(&table)
+                let mut output = String::new();
+                for metric in &selection.0 {
+                    match metric {
+                        costs::Metric::ApiUsd => output.push_str(&output::rates_human(&table)),
+                        costs::Metric::Credits => output.push_str(&credit_rates_human(
+                            &credit_rates(args.model.as_deref(), args.as_of),
+                        )),
+                        costs::Metric::Quota => output.push_str(&format!(
+                            "Estimated {} usage (pp), not an official quota card\n{}\n",
+                            window.name(),
+                            catalog
+                                .cost_context
+                                .quota
+                                .as_ref()
+                                .expect("quota loaded")
+                                .provenance(window)
+                        )),
+                    }
+                }
+                output
             };
             writer
                 .write_all(rendered.as_bytes())
@@ -175,7 +236,7 @@ fn run_with_writers(
                 .map_err(|source| AppError::WriteCompletions { source })
         }
         Command::Report(mut args) => {
-            let catalog = pricing_store::Snapshot::load(pricing_store::path()?)?.effective;
+            let catalog = valuation_catalog(selection.clone(), window, config_path.as_deref())?;
             let filter = args.date_filter()?;
             let home = args.codex_home()?;
             let cache = Rc::new(cache::RolloutCache::open(&home, args.refresh));
@@ -317,17 +378,30 @@ fn run_with_writers(
             Ok(())
         }
         Command::Update(args) => {
-            let catalog = pricing_store::Snapshot::load(pricing_store::path()?)?.effective;
+            let options = args.options(&selection, window)?;
+            let catalog = valuation_catalog(
+                options.title_format.requested(),
+                window,
+                config_path.as_deref(),
+            )?;
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+            warn_schedule(&options.title_format, &selection, &catalog, error_writer);
             let home = args.codex_home()?;
             let cache = Rc::new(cache::RolloutCache::open(&home, args.refresh));
-            let options = args.options();
             let result = update::run_cached(&home, &options, Rc::clone(&cache), &catalog)?;
             write_cache_notices(error_writer, &cache);
             write_update_output(writer, &result, options.apply)?;
             Ok(())
         }
         #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-        Command::Schedule(args) => run_schedule(args.command, writer, error_writer),
+        Command::Schedule(args) => run_schedule(
+            args.command,
+            writer,
+            error_writer,
+            &selection,
+            window,
+            config_path.as_deref(),
+        ),
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         Command::Uninstall => {
             let paths = schedule_paths()?;
@@ -352,12 +426,34 @@ fn run_schedule(
     command: ScheduleCommand,
     writer: &mut impl Write,
     error_writer: &mut impl Write,
+    selection: &costs::Selection,
+    window: quota::Window,
+    config_path: Option<&std::path::Path>,
 ) -> Result<(), AppError> {
     match command {
         ScheduleCommand::Install(args) => {
             let schedule_options = args.options();
+            let recipe = schedule_options
+                .update_options(selection, window)?
+                .title_format;
+            let catalog = valuation_catalog(recipe.requested(), window, config_path)?;
             let paths = schedule_paths()?;
             let options = InstallOptions {
+                valuation_arguments: {
+                    let mut arguments = vec![
+                        "--cost-metric".into(),
+                        selection.text(),
+                        "--quota-window".into(),
+                        window.name().into(),
+                    ];
+                    if let Some(quota) = &catalog.cost_context.quota {
+                        arguments.extend([
+                            "--quota-config".into(),
+                            quota.path.to_string_lossy().into_owned(),
+                        ]);
+                    }
+                    arguments
+                },
                 executable: std::env::current_exe()
                     .map_err(|source| ScheduleError::CurrentExecutable { source })?,
                 codex_home: schedule_options.codex_home()?,
@@ -365,7 +461,7 @@ fn run_schedule(
                 limit: schedule_options.limit(),
                 max_runtime: schedule_options.max_runtime(),
                 max_width: schedule_options.max_width(),
-                title_metrics: schedule_options.title_metrics().into(),
+                title_metrics: recipe.recipe(),
                 reprice_before: schedule_options.reprice_before(),
             };
             schedule::install(&paths, &options)?;
@@ -389,6 +485,11 @@ fn run_schedule(
             );
             #[cfg(target_os = "windows")]
             let mut output = format!("registered: {}\n", yes_no(inspection.registered));
+            if let Some(settings) = &inspection.settings {
+                output.push_str(&format!("settings: {}\n", sanitize(settings.description())));
+            } else {
+                output.push_str("settings: absent or indeterminate\n");
+            }
             if let Some(status) = inspection.status {
                 let last_run = status
                     .last_run_at
@@ -426,15 +527,16 @@ fn run_schedule(
                 .map_err(|source| AppError::WriteScheduleOutput { source })
         }
         ScheduleCommand::Run(args) => {
-            let catalog = pricing_store::Snapshot::load(pricing_store::path()?)?.effective;
             let paths = schedule_paths()?;
             let schedule_options = args.options();
+            let options = schedule_options.update_options(selection, window)?;
+            let catalog = valuation_catalog(options.title_format.requested(), window, config_path)?;
             let home = schedule_options.codex_home()?;
             let cache = Rc::new(cache::RolloutCache::open(&home, false));
             let result = schedule::run_scheduled_cached(
                 &paths,
                 &home,
-                &schedule_options.update_options(),
+                &options,
                 writer,
                 Rc::clone(&cache),
                 &catalog,
@@ -444,6 +546,122 @@ fn run_schedule(
             Ok(())
         }
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn warn_schedule(
+    recipe: &title::TitleFormat,
+    selection: &costs::Selection,
+    catalog: &pricing::Catalog,
+    writer: &mut impl Write,
+) {
+    let manual = schedule::Settings {
+        selection: selection.text(),
+        recipe: recipe.recipe(),
+        window: recipe.window,
+        config: catalog.cost_context.quota.as_ref().map(|q| q.path.clone()),
+    };
+    let inspection = schedule_paths()
+        .map_err(|error| error.to_string())
+        .and_then(|paths| schedule::inspect(&paths).map_err(|error| error.to_string()));
+    let installed = match inspection {
+        Ok(inspection) => {
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            let installed = inspection.installed;
+            #[cfg(target_os = "windows")]
+            let installed = inspection.registered;
+            Ok(if !installed {
+                schedule::TitleSettings::Absent
+            } else if let Some(settings) = inspection.settings {
+                schedule::TitleSettings::Known(settings)
+            } else {
+                schedule::TitleSettings::Indeterminate
+            })
+        }
+        Err(error) => Err(error),
+    };
+    if let Some(notice) = schedule::settings_warning(&manual, installed) {
+        let _ = writeln!(writer, "warning: {}", sanitize(notice));
+    }
+}
+
+fn valuation_catalog(
+    selection: costs::Selection,
+    window: quota::Window,
+    path: Option<&std::path::Path>,
+) -> Result<pricing::Catalog, AppError> {
+    let quota = if selection.0.contains(&costs::Metric::Quota) {
+        Some(Rc::new(
+            quota::Snapshot::load(quota::resolve(path).map_err(AppError::Valuation)?)
+                .map_err(AppError::Valuation)?,
+        ))
+    } else {
+        None
+    };
+    let mut catalog = pricing_store::Snapshot::load(pricing_store::path()?)?.effective;
+    catalog.cost_context = costs::Context {
+        selection,
+        quota,
+        window,
+    };
+    Ok(catalog)
+}
+
+fn credit_rates(model: Option<&str>, at: Option<time::Date>) -> serde_json::Value {
+    let cards = credits::cards();
+    let mut rows = std::collections::BTreeMap::new();
+    for card in cards
+        .iter()
+        .filter(|card| at.is_none_or(|at| at.to_string().as_str() >= &card.observed_at[..10]))
+    {
+        for row in card
+            .rows
+            .iter()
+            .filter(|row| model.is_none_or(|model| model == row.model))
+        {
+            let mut value = serde_json::to_value(row).expect("finite embedded rates");
+            value["observed_at"] = serde_json::json!(card.observed_at);
+            value["source"] = serde_json::json!(card.source);
+            rows.insert(row.model.clone(), value);
+        }
+    }
+    serde_json::json!({
+        "unit":"credits_per_million_tokens",
+        "catalog_observed":"2026-11-19",
+        "coverage":"token-only; observation-boundary estimates; unknown historical cutovers, special workloads and context above 272000 incomplete",
+        "speed_values":"multipliers relative to Standard; null means unsupported",
+        "rows":rows.into_values().collect::<Vec<_>>()
+    })
+}
+
+fn credit_rates_human(rates: &serde_json::Value) -> String {
+    let mut output = String::from(
+        "Estimated credit cost: credits per million tokens (independent of USD)\nModel | Observed | Input | Cached input | Output | Fast × | Ultrafast ×\n",
+    );
+    for row in rates["rows"].as_array().expect("credit rows") {
+        let cells = [
+            "model",
+            "observed_at",
+            "input",
+            "cached_input",
+            "output",
+            "fast",
+            "ultrafast",
+        ]
+        .map(|key| {
+            if row[key].is_null() {
+                "?".into()
+            } else if let Some(value) = row[key].as_str() {
+                value.into()
+            } else {
+                row[key].to_string()
+            }
+        });
+        output.push_str(&cells.join(" | "));
+        output.push('\n');
+    }
+    output.push_str("No separate cache-write or reasoning fee. Observation dates are not established billing cutovers; token-only coverage is limited to gross input <=272000. See docs/research/credit-rate-evidence.md for sources and gaps.\n");
+    output
 }
 
 fn write_cache_notices(writer: &mut impl Write, cache: &cache::RolloutCache) {
@@ -500,7 +718,7 @@ fn parse_cli() -> Result<Cli, clap::Error> {
             "command-line argument contains a control character",
         ));
     }
-    Cli::try_parse_from(arguments)
+    Cli::parse_arguments(arguments)
 }
 
 fn update_output(result: &update::UpdateResult, apply: bool) -> String {
@@ -587,7 +805,7 @@ mod tests {
 
     #[test]
     fn completion_write_failure_reports_io_error() {
-        let cli = Cli::try_parse_from(["codex-cost-meter", "completions", "bash"]).unwrap();
+        let cli = Cli::parse_arguments(["codex-cost-meter", "completions", "bash"]).unwrap();
         let error = run_with_writers(cli, &mut FailingWriter, &mut Vec::new(), false).unwrap_err();
         assert!(matches!(error, AppError::WriteCompletions { .. }));
     }

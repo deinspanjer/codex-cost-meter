@@ -137,6 +137,8 @@ pub(crate) struct RolloutReport {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct StatsReport {
+    #[serde(flatten)]
+    pub(crate) costs: crate::costs::Bundle,
     pub rollout_count: usize,
     pub majority_turn_model: Option<String>,
     pub majority_reasoning_level: Option<String>,
@@ -162,6 +164,8 @@ pub(crate) struct StatsReport {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ModelReport {
+    #[serde(flatten)]
+    pub(crate) costs: crate::costs::Bundle,
     pub turns: usize,
     pub input_tokens: u64,
     pub input_cache_write_tokens: u64,
@@ -176,6 +180,8 @@ pub(crate) struct ModelReport {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ModelTierReport {
+    #[serde(flatten)]
+    pub(crate) costs: crate::costs::Bundle,
     pub input_tokens: u64,
     pub input_cache_write_tokens: u64,
     pub input_cache_read_tokens: u64,
@@ -389,6 +395,7 @@ impl ReportContext {
             || self.index.malformed_lines_skipped() > 0
             || self.index.oversized_lines_skipped() > 0;
         total.incomplete |= scan_incomplete;
+        total.incomplete_usage |= scan_incomplete;
         if self.index.malformed_lines_skipped() > 0 {
             warnings.insert("rollout scan skipped malformed JSONL records".into());
             total.incomplete = true;
@@ -416,7 +423,7 @@ impl ReportContext {
                         thread_name: self.names.get(&id),
                         rollout_type: "unknown".into(),
                         agent_label: None,
-                        stats: missing.report(),
+                        stats: missing.report(&self.catalog),
                     });
                 }
                 warnings.insert("selected root rollout could not be read".into());
@@ -500,7 +507,7 @@ impl ReportContext {
                         }
                         _ => None,
                     },
-                    stats: own.report(),
+                    stats: own.report(&self.catalog),
                 });
             }
             if let Some(progress) = progress.as_deref_mut() {
@@ -520,8 +527,8 @@ impl ReportContext {
                 })
                 .or_default();
         }
-        let by_model = total.model_reports();
-        let tree = total.report();
+        let by_model = total.model_reports(&self.catalog);
+        let tree = total.report(&self.catalog);
         if scan_incomplete {
             for stats in root_totals.values_mut() {
                 stats.incomplete = true;
@@ -552,7 +559,7 @@ impl ReportContext {
             by_model,
             by_rollout_type: by_type
                 .into_iter()
-                .map(|(kind, stats)| (kind, stats.report()))
+                .map(|(kind, stats)| (kind, stats.report(&self.catalog)))
                 .collect(),
             groups: grouped
                 .into_iter()
@@ -560,7 +567,7 @@ impl ReportContext {
                     period: key.period.to_string(),
                     rollout_type: key.rollout_type,
                     model: key.model,
-                    stats: stats.report(),
+                    stats: stats.report(&self.catalog),
                 })
                 .collect(),
             pricing: pricing_report(&self.catalog),
@@ -682,6 +689,8 @@ pub(crate) fn pricing_report(catalog: &Catalog) -> PricingReport {
 
 #[derive(Default)]
 pub(crate) struct Aggregate {
+    costs: crate::costs::Ledger,
+    incomplete_usage: bool,
     rollout_count: usize,
     usage: Usage,
     reasoning_output: u64,
@@ -700,6 +709,7 @@ pub(crate) struct Aggregate {
 
 #[derive(Default)]
 struct ModelAggregate {
+    costs: crate::costs::Ledger,
     usage: Usage,
     reasoning_output: u64,
     turns: usize,
@@ -711,6 +721,7 @@ struct ModelAggregate {
 
 #[derive(Default)]
 struct ModelTierAggregate {
+    costs: crate::costs::Ledger,
     usage: Usage,
     reasoning_output: u64,
     known_cost: f64,
@@ -781,6 +792,10 @@ fn add_groups(
 }
 
 impl Aggregate {
+    pub(crate) fn mark_incomplete(&mut self) {
+        self.incomplete = true;
+        self.incomplete_usage = true;
+    }
     fn add(&mut self, stats: &RolloutStats, catalog: &Catalog) {
         self.rollout_count = self.rollout_count.saturating_add(1);
         self.usage.input = self.usage.input.saturating_add(stats.known_usage.input);
@@ -807,6 +822,7 @@ impl Aggregate {
             .unattributed_tokens
             .saturating_add(stats.unattributed_tokens);
         self.incomplete |= stats.incomplete_usage || stats.unattributed_tokens > 0;
+        self.incomplete_usage |= stats.incomplete_usage || stats.unattributed_tokens > 0;
 
         for ((model, effort), count) in &stats.turn_models {
             *self
@@ -842,9 +858,11 @@ impl Aggregate {
     ) -> Result<(), crate::date_filter::Error> {
         self.rollout_count = self.rollout_count.saturating_add(1);
         self.incomplete |= stats.incomplete_usage || stats.unattributed_tokens > 0;
+        self.incomplete_usage |= stats.incomplete_usage || stats.unattributed_tokens > 0;
         for event in &stats.events {
             if event.at.is_none() {
                 self.incomplete = true;
+                self.incomplete_usage = true;
             } else if filter.includes(event.at)? {
                 self.add_event(event, catalog, true);
             }
@@ -876,6 +894,7 @@ impl Aggregate {
     }
 
     fn add_event(&mut self, event: &UsageEvent, catalog: &Catalog, add_total: bool) {
+        self.costs.add(event, catalog);
         if add_total {
             self.usage.input = self.usage.input.saturating_add(event.usage.input);
             self.usage.cached_input = self
@@ -890,6 +909,7 @@ impl Aggregate {
             self.reasoning_output = self.reasoning_output.saturating_add(event.reasoning_output);
         }
         let model = self.models.entry(event.model.clone()).or_default();
+        model.costs.add(event, catalog);
         model.usage.input = model.usage.input.saturating_add(event.usage.input);
         model.usage.cached_input = model
             .usage
@@ -907,6 +927,7 @@ impl Aggregate {
             .by_service_tier
             .entry(service_tier_key(&event.service_tier).into())
             .or_default();
+        tier.costs.add(event, catalog);
         tier.usage.input = tier.usage.input.saturating_add(event.usage.input);
         tier.usage.cached_input = tier
             .usage
@@ -954,9 +975,10 @@ impl Aggregate {
     pub(crate) fn add_unreadable(&mut self) {
         self.rollout_count = self.rollout_count.saturating_add(1);
         self.incomplete = true;
+        self.incomplete_usage = true;
     }
 
-    pub(crate) fn report(self) -> StatsReport {
+    pub(crate) fn report(self, catalog: &Catalog) -> StatsReport {
         let majority = self
             .turn_models
             .iter()
@@ -966,6 +988,12 @@ impl Aggregate {
             .map(|((model, effort), _)| (model.clone(), effort.clone()));
         let estimated_cost_usd = (!self.incomplete).then(|| round(self.known_cost, 8));
         StatsReport {
+            costs: self.costs.finish(
+                catalog,
+                estimated_cost_usd,
+                round(self.known_cost, 8),
+                self.incomplete_usage,
+            ),
             rollout_count: self.rollout_count,
             majority_turn_model: majority.as_ref().map(|(model, _)| model.clone()),
             majority_reasoning_level: majority.map(|(_, effort)| effort),
@@ -989,13 +1017,19 @@ impl Aggregate {
         }
     }
 
-    fn model_reports(&self) -> BTreeMap<String, ModelReport> {
+    fn model_reports(&self, catalog: &Catalog) -> BTreeMap<String, ModelReport> {
         self.models
             .iter()
             .map(|(name, model)| {
                 (
                     name.clone(),
                     ModelReport {
+                        costs: model.costs.finish(
+                            catalog,
+                            (!model.incomplete).then(|| round(model.known_cost, 8)),
+                            round(model.known_cost, 8),
+                            self.incomplete_usage,
+                        ),
                         turns: model.turns,
                         input_tokens: model.usage.input,
                         input_cache_write_tokens: model.usage.cache_write_input,
@@ -1012,6 +1046,13 @@ impl Aggregate {
                                 (
                                     tier.clone(),
                                     ModelTierReport {
+                                        costs: detail.costs.finish(
+                                            catalog,
+                                            (!detail.incomplete)
+                                                .then(|| round(detail.known_cost, 8)),
+                                            round(detail.known_cost, 8),
+                                            self.incomplete_usage,
+                                        ),
                                         input_tokens: detail.usage.input,
                                         input_cache_write_tokens: detail.usage.cache_write_input,
                                         input_cache_read_tokens: detail.usage.cached_input,
@@ -1114,6 +1155,12 @@ fn build_with_state(
     let mut root_stats = Aggregate::default();
     let mut children_stats = Aggregate::default();
     let mut tree_stats = Aggregate::default();
+    if !index.warnings().is_empty()
+        || index.malformed_lines_skipped() > 0
+        || index.oversized_lines_skipped() > 0
+    {
+        tree_stats.mark_incomplete();
+    }
     let mut by_rollout_type = BTreeMap::<String, Aggregate>::new();
     let mut warnings = index
         .warnings()
@@ -1193,10 +1240,10 @@ fn build_with_state(
         }
     }
 
-    let by_model = tree_stats.model_reports();
-    let tree = tree_stats.report();
-    let root_stats = root_stats.report();
-    let children_stats = children_stats.report();
+    let by_model = tree_stats.model_reports(catalog);
+    let tree = tree_stats.report(catalog);
+    let root_stats = root_stats.report(catalog);
+    let children_stats = children_stats.report(catalog);
     Ok(Report {
         date_range: filter
             .filter(|filter| filter.is_filtered())
@@ -1214,7 +1261,7 @@ fn build_with_state(
         by_model,
         by_rollout_type: by_rollout_type
             .into_iter()
-            .map(|(kind, stats)| (kind, stats.report()))
+            .map(|(kind, stats)| (kind, stats.report(catalog)))
             .collect(),
         pricing: pricing_report(catalog),
         has_unusable_rollout,

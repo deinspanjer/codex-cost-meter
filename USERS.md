@@ -231,7 +231,7 @@ Export provenance stays in memory while each thread is parsed and is never added
 
 `--thread-id` and `--match-title` are repeatable and can be combined; a case-insensitive title match must resolve to exactly one root. `--idle-minutes` is an alternative selection mode. It chooses eligible idle roots newest first, after filtering, and accepts `--limit` (default 20), `--max-runtime SECONDS|MINUTESm`, and `--reprice-before` with an ISO date or RFC 3339 timestamp with a timezone. A repricing cutoff cannot be in the future.
 
-Titles default to `--title-metrics cost,total-tokens` and `--max-width 65`. Choose an ordered comma-separated subset of `cost`, `total-tokens`, `input-tokens`, and `output-tokens`, or use `all`; duplicate metrics and a width too small for a visible base and suffix are rejected. The tool removes only its trailing canonical metric suffix before recomposing a title, preserves Unicode-scalar width, and marks incomplete known cost with `+`.
+Titles default to `--title-metrics cost,total-tokens` and `--max-width 65`. Choose an ordered comma-separated subset of `cost`, `api-usd`, `credits`, `quota-pp`, `total-tokens`, `input-tokens`, and `output-tokens`, or use `all`. `cost` expands the global cost selection; title `all` retains its legacy expansion of cost and the three token slots. Duplicate expanded metrics and a width too small for a visible base and every requested suffix are rejected. The tool removes only its trailing canonical metric suffix before recomposing a title, preserves Unicode-scalar width, and marks incomplete known cost with `+`. See [explicit title recipes](#explicit-title-recipes).
 
 Title updates skip a selected base name that is empty, equals `Untitled` (case-insensitive), or starts with `<`, including internal message envelopes. This check ignores surrounding whitespace and existing canonical metric suffixes. Skipped tasks leave both SQLite naming fields and the session index unchanged and do not consume the idle update limit. They can be updated after a usable name is saved in Codex.
 
@@ -286,6 +286,8 @@ Reports read local Codex JSONL files. Reports, update previews, warnings, and ru
 
 ## Local pricing files
 
+This section concerns API-equivalent USD only; credits and quota policy are independent.
+
 Normal reports, exports, title valuation, and `rates` use one offline pricing snapshot per invocation. The optional file is `~/.codex-cost-meter/model-prices.json` (`%USERPROFILE%\.codex-cost-meter\model-prices.json` on Windows), independent of `CODEX_HOME` and `--codex-home`. Without it, the bundled catalog is used. Reports expose the catalog mode, display version, optional user label, and pricing bases; labels are sanitized in terminal output.
 
 The default file is a sparse overlay. Each point replaces all rate components for its exact model/tier/context/date key; omitted or null components stay unknown. Unoverridden built-in prices follow maintenance releases automatically. For example, this deliberately custom price charges one cent per million input, cached input, cache-write input, and output tokens from November 1:
@@ -335,3 +337,187 @@ Exit codes are 0 for complete results or cancellation, 1 for operational/malform
 Refresh/import may prune generated points only if removing them preserves effective history for every date; custom and standalone points are retained. Generated points can mask later built-in changes until researched/manual removal. A differing `official` or `observed` point is reported as a conflict only when the embedded review date covers that point's date. Researched corrections remain resolved on subsequent runs, while remaining eligible for history-preserving pruning. An older embedded review date does not disclose this conflict.
 
 Reset discards the external catalog, even if invalid, and returns to current built-in data. No backups or catalog revision history are retained. Updates use same-directory temporary files and a final byte comparison before replacement; reset similarly checks before deletion. These checks detect intervening edits but permit a race between checking and acting, so simultaneous writers can lose an update. Avoid overlapping update jobs. Crashed temporary files with the application's fixed prefix are removed after one hour on a later startup; user prompts, proposals, and results are yours to retain or delete. Neither refresh nor reset rewrites existing titles.
+
+## Cost metrics and quota policy
+
+Global `--cost-metric` accepts any nonempty ordered subset of `api-usd`,
+`credits`, and `quota-pp`. Standalone `all` means that order. The default remains
+API-equivalent USD, not a subscription bill. The flag works before or after a
+subcommand; duplicates, empty elements, unknown values, repeated flags and
+combining `all` with anything are errors.
+
+```sh
+codex-cost-meter --cost-metric api-usd,credits report <THREAD_ID>
+codex-cost-meter report --all --cost-metric credits,quota-pp --quota-config ./quota.toml
+codex-cost-meter rates --cost-metric credits
+codex-cost-meter rates --cost-metric quota-pp --quota-config ./quota.toml --json
+codex-cost-meter report <THREAD_ID> --cost-metric all --jsonl
+```
+
+All scopes, groups, model/tier rows and totals retain separate units and
+independent coverage. An unavailable metric does not suppress another.
+Aggregation precedes rounding (up to eight decimal places in structured amounts).
+These are token-based estimates, not verified deductions, invoices, balances,
+or remaining allowance.
+
+### Public credits
+
+Credits use an independent embedded card, not a USD conversion. Cache reads are
+partitioned within input; writes count once as ordinary input without a
+separate write fee; reasoning counts once within output. Fast/Ultrafast factors
+apply only to evidenced model/date combinations, independently of API and quota
+factors. Missing tier uses the disclosed assumed-Standard convention; applied
+tier is not proof of served tier.
+
+Initial coverage is the eight general-purpose model IDs in the quota example.
+Seven Standard rows begin at the October 15, 2026 archived observation; 6.1 Terra
+Standard begins at the November 1 capture and Terra Fast at the November 19
+observation. These are observation boundaries, not exact billing cutovers.
+Fast covers the evidenced 6-family rows; Ultrafast covers Astra and 6.1 Sol.
+Pre-card history, recovered but unresolved retired-model intervals, unknown IDs
+and special workloads remain incomplete. Gross input above 272000 is outside
+initial credit coverage; neither API surcharges nor a subscription-only
+exemption is borrowed. Enterprise-only context guidance cannot establish a
+universal credit rule. Guardian/auto-review credits remain unsupported without
+authentication evidence, not automatically free.
+
+Legacy Enterprise cards, USD-billed agreements, purchase prices, discounts and
+non-token image/tool/voice charges are excluded. November 21 is a minimum
+promotional period for 5.6 Sol, not an automatic expiry. `rates` shows Standard
+credit triples and separate speed multipliers, with observation/source
+provenance in JSON. See [credit evidence](docs/research/credit-rate-evidence.md).
+
+### Install and edit a quota policy
+
+```sh
+codex-cost-meter quota-config init
+codex-cost-meter --quota-config ./my-quota.toml quota-config init
+codex-cost-meter report <THREAD_ID> --cost-metric quota-pp --quota-window weekly
+```
+
+Initialization is opt-in and create-only, including existing or dangling
+symlinks. It installs a commented example derived from one owner's Pro **20x**
+account, not an official card or detection of your plan. Upgrades and uninstall
+leave it intact. No private logs, credentials, network or recalibration scan
+are required.
+
+Explicit relative paths resolve against the current directory. Without
+`--quota-config`, resolution is `$CODEX_HOME/codex-cost-meter/quota.toml`, then
+the platform home plus `.codex/codex-cost-meter/quota.toml`. **`--codex-home`
+selects storage, not this policy.** The file is read and validated once when
+quota output or a title slot requests it. A missing, unreadable or invalid
+requested file fails before title writes or schedule installation; unused
+broken quota files do not affect USD/credits-only commands.
+
+On macOS/Linux, an older direct-install binary at
+`~/.codex/codex-cost-meter` occupies the default policy's parent path.
+Use an explicit alternate `--quota-config` path, or move the executable to
+a separate location and reinstall its schedule. Initialization never replaces
+that binary or migrates an existing installation automatically.
+
+Schema 1 requires nonoverlapping `[[periods]]` with unique IDs, explicit
+`subscription_plan`/`subscription_variant`, offset-bearing RFC3339
+`effective_from`, optional exclusive `effective_until`, `calibration_id`,
+`calibrated_from`, `calibrated_through` and explanatory `notes`. Events select
+their own half-open period; unknown dates/history are not filled from today.
+Each period holds independent `windows.weekly` and/or `windows.five-hour`
+positive `points_per_reference_unit`, exact `models` with nonnegative per-million
+`input`, `cached_input`, `output` and optional `cache_write_input`, `defaults`
+for speed/context, and ordinary/guardian workload multipliers.
+
+Copy a complete period, set its new ID/plan/variant and coefficient, close the
+predecessor at the same instant, and set the successor's `effective_from` to
+that instant. There is no inferred plan scaling: changing a variant to `5x`
+does not multiply anything. A model-specific speed value replaces that tier's
+default; model-specific context bands replace the whole default list. Distinct
+speed, context and workload dimensions multiply once. For example, replace
+one existing model entry (do not add a duplicate key):
+
+```toml
+"gpt-6.1-sol" = { input = 2.0, cached_input = 0.1, output = 10.0, speed_multipliers = { fast = 2.0 }, context_bands = [{ min_input_tokens = 0, max_input_tokens = 272000, multiplier = 1.0 }, { min_input_tokens = 272001, multiplier = 2.0 }] }
+```
+
+Those sample multipliers are arithmetic examples, not provider evidence.
+Bands use inclusive gross per-response input bounds. Gaps, missing models,
+windows and factors are unsupported, not 1× defaults. Unknown fields/version,
+duplicate keys/IDs, invalid dates, inverted/overlapping periods/bands,
+negative/nonfinite numbers and overflow never select fallback prices.
+No scripts, includes or interpolation run.
+
+The weekly coefficient is `0.08236824622767631`; the eight model weights are
+frozen reference units, unaffected by API catalog edits. October 16 is an
+estimation boundary, not a provider change. Standard-only speed and flat context
+are explicit pooled-fit assumptions. Recorded `guardian_review`/exact
+`codex-auto-review` has factor zero, unlike ordinary review prose. Writes
+default to ordinary input and reasoning remains output. One million 6.1 Sol
+input, 800000 cached and 100000 output is 1.48 reference units, approximately
+0.121905 weekly points.
+
+`--quota-window weekly|five-hour` selects an independent denominator. The preset
+has **no five-hour calibration**: requesting it is unavailable, not zero or a
+weekly conversion. Open-ended periods extrapolate beyond calibrated-through.
+Values can exceed 100 across reset cycles; they are cumulative modeled points.
+Supported minima are modeled contributions, **not statistical lower bounds**.
+Mixed known accounts refuse quota aggregation; separate their input and policy
+files. Missing identity is disclosed; creator identity is not verified on resume.
+Missing cloud/device usage stays unattributed, never distributed as an account
+residual. See the [research handoff](docs/research/quota-calibration.md).
+
+### Explicit title recipes
+
+```sh
+codex-cost-meter update --thread-id <THREAD_ID> --cost-metric credits
+codex-cost-meter update --thread-id <THREAD_ID> --title-metrics credits,total-tokens
+codex-cost-meter update --thread-id <THREAD_ID> --title-format '{title} · {api-usd} · {credits} · {quota-pp}'
+codex-cost-meter schedule install --cost-metric all --quota-config ./quota.toml
+```
+
+The format grammar is exactly `{title}` followed by one or more
+` · {placeholder}` segments. Placeholders are `cost`, explicit cost names,
+and the three existing token names. Arbitrary literals/braces, duplicates after
+cost expansion, and explicit `--title-format` plus `--title-metrics` are rejected.
+Explicit slots request valuations independently of report selection. Nothing
+is dropped to meet width limits: impossible recipes fail before writes.
+
+Canonical credit forms include `¤12.34`, `¤1,234.56`, `¤12.34+`,
+`<¤0.01` and `<¤0.01+`; U+00A4 is not cents. No rendering issue required an
+ASCII fallback. Quota uses `~1.23pp/wk` or `~1.23pp/5h`; `~` always means
+approximate. Positive subprecision is `~<0.01pp/wk`, incomplete supported
+subtotal is `~1.23pp/wk+`, unknown without a contribution is `~?pp/wk`, and
+complete zero is `~0.00pp/wk`. Only strict grouped two-decimal suffixes are
+replaced across metric/order/window changes; loose `12%`, `1.2pp` and credit
+prose are preserved.
+
+Schedules persist the metric list, expanded validated recipe, window and an
+absolute policy path (including a resolved default). Different working
+directories or CODEX_HOME cannot redirect that policy. Each run reads fresh
+contents even with cached usage. Existing jobs without these options remain
+USD. `schedule status` reports installed settings independently of invocation
+flags; unrecognized hand-edited definitions are indeterminate.
+
+Manual previews/applies warn on **stderr** about conflicting effective recipes,
+quota windows or config paths. Identical explicit recipes do not conflict merely
+because report selections differ. Missing jobs need no warning; failed inspection
+reports uncertainty. Warnings never reconfigure jobs or add an apply gate.
+Conflicting runs can repeatedly replace suffixes, consume update limits and
+append session-index entries. Align manual flags with `schedule status`, or
+explicitly reinstall with the intended recipe. After policy edits, use a fixed
+`--reprice-before` cutoff with idle updates to deliberately revalue existing
+matching titles; edits do not bypass the idle/high-water controls.
+
+### Additive structured costs
+
+Ordinary JSON and JSONL schema **1** add ordered `cost_metrics` and a `costs`
+map wherever amounts occur. Each selected entry identifies `unit`, nullable
+`estimated`, `known_minimum`, supported/unsupported events and independent
+assumptions/provenance. Quota adds window, absolute config path, version,
+fingerprint, calibration/plan periods, contributions and extrapolation counts.
+Metadata describes the policy with zero initial totals; usage rows and the
+terminal summary carry contributions.
+
+Existing `estimated_cost_usd` and `known_model_cost_usd` retain their USD meanings
+and values even when human selection excludes USD. Legacy `incomplete_input`
+still qualifies the old USD/input path; use each metric's own diagnostics for
+its coverage. Null is unavailable, not zero. Consumers must tolerate unknown
+optional fields; old exports without selection metadata remain API-USD exports.
+There is no singular selected-cost field or cross-unit total.

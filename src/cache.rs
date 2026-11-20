@@ -20,7 +20,7 @@ use crate::{
 
 const CACHE_FILENAME: &str = "codex-cost-meter.sqlite";
 const DISCOVERY_VERSION: i64 = 3;
-const ANALYSIS_VERSION: i64 = 7;
+const ANALYSIS_VERSION: i64 = 8;
 
 pub(crate) struct RolloutCache {
     path: PathBuf,

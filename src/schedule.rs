@@ -35,6 +35,7 @@ pub(crate) use windows::{Inspection, Paths};
 const MAX_STATUS_BYTES: u64 = 4096;
 
 pub(crate) struct InstallOptions {
+    pub(crate) valuation_arguments: Vec<String>,
     pub(crate) executable: PathBuf,
     pub(crate) codex_home: PathBuf,
     pub(crate) idle_minutes: u64,
@@ -43,6 +44,117 @@ pub(crate) struct InstallOptions {
     pub(crate) max_width: usize,
     pub(crate) title_metrics: String,
     pub(crate) reprice_before: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Settings {
+    pub(crate) selection: String,
+    pub(crate) recipe: String,
+    pub(crate) window: crate::quota::Window,
+    pub(crate) config: Option<PathBuf>,
+}
+
+impl Settings {
+    pub(crate) fn from_arguments(arguments: Vec<String>) -> Option<Self> {
+        let cli = crate::cli::Cli::parse_arguments(
+            std::iter::once("codex-cost-meter".to_owned()).chain(arguments),
+        )
+        .ok()?;
+        let crate::cli::Command::Schedule(schedule) = cli.command else {
+            return None;
+        };
+        let crate::cli::ScheduleCommand::Run(args) = schedule.command else {
+            return None;
+        };
+        let recipe = args
+            .options()
+            .update_options(&cli.cost_metrics, cli.quota_window)
+            .ok()?
+            .title_format;
+        let quota = recipe.requested().0.contains(&crate::costs::Metric::Quota);
+        let config = if quota {
+            Some(cli.quota_config.filter(|path| path.is_absolute())?)
+        } else {
+            None
+        };
+        Some(Self {
+            selection: cli.cost_metrics.text(),
+            recipe: recipe.recipe(),
+            window: cli.quota_window,
+            config,
+        })
+    }
+
+    pub(crate) fn describes_same_titles(&self, other: &Self) -> bool {
+        self.recipe == other.recipe
+            && (self.config.is_none() && other.config.is_none()
+                || self.window == other.window && self.config == other.config)
+    }
+
+    pub(crate) fn description(&self) -> String {
+        format!(
+            "metrics={}, title={}, quota-window={}, quota-config={}",
+            self.selection,
+            self.recipe,
+            self.window.name(),
+            self.config
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "unused".into())
+        )
+    }
+}
+
+pub(crate) enum TitleSettings {
+    Absent,
+    Known(Settings),
+    Indeterminate,
+}
+
+pub(crate) fn settings_warning(
+    manual: &Settings,
+    installed: Result<TitleSettings, String>,
+) -> Option<String> {
+    match installed {
+        Ok(TitleSettings::Absent) => None,
+        Ok(TitleSettings::Known(settings)) if manual.describes_same_titles(&settings) => None,
+        Ok(TitleSettings::Known(settings)) => Some(format!(
+            "manual settings [{}] conflict with schedule [{}]; runs may repeatedly replace title suffixes, consume update limits and append session_index records. Align the effective title recipe/window/config path; no job was changed.",
+            manual.description(), settings.description()
+        )),
+        Ok(TitleSettings::Indeterminate) => Some("installed schedule title settings are indeterminate; could not establish whether they conflict".into()),
+        Err(error) => Some(format!("could not inspect schedule settings: {error}")),
+    }
+}
+
+// These bounded readers deliberately recognize the emitted argument syntax,
+// rather than guessing settings for arbitrary hand-edited job definitions.
+fn xml_text(value: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut rest = value;
+    while let Some((left, right)) = rest.split_once('&') {
+        out.push_str(left);
+        let (entity, tail) = right.split_once(';')?;
+        out.push(match entity {
+            "amp" => '&',
+            "lt" => '<',
+            "gt" => '>',
+            "quot" => '"',
+            "apos" => '\'',
+            _ => return None,
+        });
+        rest = tail;
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn read_definition(path: &Path) -> Option<String> {
+    let file = File::open(path).ok()?;
+    let mut text = String::new();
+    file.take(65537).read_to_string(&mut text).ok()?;
+    (text.len() <= 65536).then_some(text)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -455,6 +567,74 @@ fn set_private_permissions(_: &File) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn title_conflicts_compare_effective_recipes_and_disclose_uncertainty() {
+        let parse = |args: &[&str]| {
+            super::Settings::from_arguments(args.iter().map(|s| (*s).to_owned()).collect()).unwrap()
+        };
+        let usd = parse(&["schedule", "run", "--apply"]);
+        let credits = parse(&[
+            "schedule",
+            "run",
+            "--cost-metric",
+            "credits",
+            "--title-metrics",
+            "credits",
+            "--apply",
+        ]);
+        for (manual, installed) in [(&usd, &credits), (&credits, &usd)] {
+            let warning =
+                super::settings_warning(manual, Ok(super::TitleSettings::Known(installed.clone())))
+                    .unwrap();
+            assert!(
+                warning.contains("replace title suffixes") && warning.contains("session_index")
+            );
+        }
+        let explicit = parse(&["schedule", "run", "--title-metrics", "credits", "--apply"]);
+        assert!(
+            super::settings_warning(&explicit, Ok(super::TitleSettings::Known(credits.clone())))
+                .is_none()
+        );
+        assert!(super::settings_warning(&usd, Ok(super::TitleSettings::Absent)).is_none());
+        assert!(
+            super::settings_warning(&usd, Ok(super::TitleSettings::Indeterminate))
+                .unwrap()
+                .contains("indeterminate")
+        );
+        assert!(
+            super::settings_warning(&usd, Err("denied".into()))
+                .unwrap()
+                .contains("could not inspect")
+        );
+        let path = std::env::current_dir()
+            .unwrap()
+            .join("quota with spaces.toml");
+        let path = path.to_str().unwrap();
+        let weekly = parse(&[
+            "schedule",
+            "run",
+            "--title-metrics",
+            "quota-pp",
+            "--quota-config",
+            path,
+            "--apply",
+        ]);
+        let five = parse(&[
+            "schedule",
+            "run",
+            "--title-metrics",
+            "quota-pp",
+            "--quota-config",
+            path,
+            "--quota-window",
+            "five-hour",
+            "--apply",
+        ]);
+        assert!(!weekly.describes_same_titles(&five));
+        let mut different = weekly.clone();
+        different.config = Some(std::env::current_dir().unwrap().join("another.toml"));
+        assert!(!weekly.describes_same_titles(&different));
+    }
     use std::fs;
 
     #[cfg(unix)]

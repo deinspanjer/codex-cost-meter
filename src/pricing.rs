@@ -37,6 +37,7 @@ pub(crate) struct CostResult {
 
 #[derive(Clone)]
 pub(crate) struct Catalog {
+    pub(crate) cost_context: crate::costs::Context,
     points: BTreeMap<PointKey, Rates>,
     overlay: Option<catalog::Overlay>,
     as_of: String,
@@ -474,6 +475,7 @@ impl Catalog {
             }
         }
         Ok(Self {
+            cost_context: crate::costs::Context::default(),
             points,
             overlay: None,
             as_of: raw.as_of,

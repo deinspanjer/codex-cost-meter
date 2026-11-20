@@ -16,9 +16,43 @@ Bump `DISCOVERY_VERSION` when session-metadata interpretation or cached linkage 
 
 ## Usage exports
 
-`usage_export` writes versioned metadata, normalized usage rows, and a terminal summary as JSONL. Project selection resolves to a `ProjectScope` shared by ordinary reporting and export; it does not parse usage until a consumer requests aggregation or export. The located reader preserves segment path and physical decompressed line number across bounded reading, page-header suppression, and overlap deduplication. An optional normalization observer receives transient source/turn/ordinal metadata only after replay suppression, delta normalization, attribution, and usage validation. Export always reparses; it leaves `UsageEvent`, `CachedStats`, and analysis-cache version 7 unchanged. Usage facts stay in memory for the current thread and are discarded afterward; the app does not retain export files. Read/write failures return nonzero without a success summary. Completeness and unknown rates remain separate from successful stream termination.
+`usage_export` writes schema-1 metadata, normalized usage rows and a terminal summary. Project selection resolves to a `ProjectScope` shared with ordinary reporting. The located reader preserves physical decompressed line numbers across page overlap and replay suppression. Export always reparses; locator/turn/ordinal metadata remains transient and no export files are retained by the app. Shared normalized identity/workload facts use the analysis version described below. Read/write failures return nonzero without a success summary. Stream success and per-metric completeness remain separate.
 
 The reporting CLI tests verify dated self/tree separation, self-only per-thread reconciliation, physical locators across compressed pages and reused ordinals, counter resets, legacy replay, selection parity, unknown/untimestamped data, and fresh/cached export equality. A failed-writer test checks that a partial stream cannot end with a successful summary.
+
+## Independent cost metrics
+
+`costs` holds ordered selection, per-metric ledgers and unit-bearing output.
+`credits` reads an independent embedded observation-dated card; `quota` uses
+typed, validated TOML and the frozen opt-in preset. Neither inherits API model
+proxies, zero-price policies, context surcharges or mutable API rates.
+The invocation's existing catalog snapshot carries the independent cost context
+so all report/export/title paths receive one selection and one quota snapshot.
+FNV-1a-64 fingerprints identify file contents, not security signatures.
+
+Analysis-cache version 8 adds timestamp-source, recorded guardian classification
+and account-identity facts to normalized events. Completion metadata attaches
+only to identical-category normalized token_count usage; completion counters
+are never charged again. Creator account identity is a disclosed resume-time
+assumption, not verified billing identity. Locator/ordinal export data remains
+transient. Discovery semantics are unchanged. Valuations/configs are not cached.
+
+Per-metric ledgers are accumulated before rounding and carried through scope,
+model, tier and date/group aggregation. Legacy USD completeness and amounts
+retain their meaning; each extra metric has its own unsupported/assumed counts.
+Quota provenance retains policy periods and contributions, selected window,
+calibration bounds, assumptions and extrapolation. Known mixed accounts cannot
+be assigned one quota subtotal.
+
+Native jobs persist validated expanded recipes and global valuation arguments;
+status reads bounded native definitions, returning indeterminate rather than
+guessing unsupported syntax. Manual warnings compare effective titles, not
+unrelated report selection, and write only stderr. No sidecar settings store,
+runtime network dependency or automatic user-policy replacement is introduced.
+Focused coverage lives in `credits`, `quota`, `costs`, `title`, `cli`, native
+scheduler tests and `tests/cost_metrics_cli.rs`. The latter reconciles cached
+reports, grouped totals, schema-1 export and immutable title preview across a
+policy boundary and unsupported speed.
 
 ## Rate table
 
