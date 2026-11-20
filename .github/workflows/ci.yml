@@ -230,6 +230,8 @@ jobs:
         run: |
           cargo test schedule::linux::tests
           cargo test --test linux_schedule_cli
+      - if: needs.changes.outputs.full_ci == 'true' && matrix.musl
+        run: cargo clippy --locked --all-targets --keep-going -- -D warnings
       - if: needs.changes.outputs.full_ci == 'true'
         name: Build release binary
         env:
