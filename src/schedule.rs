@@ -129,6 +129,7 @@ pub(crate) fn settings_warning(
 
 // These bounded readers deliberately recognize the emitted argument syntax,
 // rather than guessing settings for arbitrary hand-edited job definitions.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn xml_text(value: &str) -> Option<String> {
     let mut out = String::new();
     let mut rest = value;
