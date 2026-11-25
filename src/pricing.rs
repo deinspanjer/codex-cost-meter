@@ -145,7 +145,7 @@ impl RateRow {
 
 #[derive(Clone, Copy, Deserialize)]
 struct TierRates {
-    standard: Rates,
+    standard: Option<Rates>,
     fast: Option<Rates>,
     ultrafast: Option<Rates>,
 }
@@ -155,7 +155,7 @@ impl PricePoint {
         if long_context {
             let rates = self.long_context?;
             return match tier {
-                ServiceTier::Standard | ServiceTier::AssumedStandard => Some(rates.standard),
+                ServiceTier::Standard | ServiceTier::AssumedStandard => rates.standard,
                 ServiceTier::Fast => rates.fast,
                 ServiceTier::Ultrafast => rates.ultrafast,
                 ServiceTier::Unpriced(_) => None,
@@ -167,7 +167,8 @@ impl PricePoint {
                 cached_input: self.cached_input,
                 cache_write_input: self.cache_write_input,
                 output: self.output,
-            }),
+            })
+            .filter(|rates| *rates != Rates::default()),
             ServiceTier::Fast => self.fast,
             ServiceTier::Ultrafast => self.ultrafast,
             ServiceTier::Unpriced(_) => None,
@@ -184,7 +185,7 @@ impl PricePoint {
         rates.extend(self.fast);
         rates.extend(self.ultrafast);
         if let Some(long_context) = self.long_context {
-            rates.push(long_context.standard);
+            rates.extend(long_context.standard);
             rates.extend(long_context.fast);
             rates.extend(long_context.ultrafast);
         }
@@ -679,6 +680,18 @@ mod tests {
                 datetime!(2026-10-26 0:00 UTC),
                 0.340,
                 0.642502,
+            ),
+            (
+                "gpt-6.2-astra",
+                datetime!(2026-11-17 0:00 UTC),
+                2.720,
+                5.140016,
+            ),
+            (
+                "gpt-6.2-sol",
+                datetime!(2026-11-17 0:00 UTC),
+                0.680,
+                1.285004,
             ),
         ] {
             for (input, standard) in [(272_000, short), (272_001, long)] {
