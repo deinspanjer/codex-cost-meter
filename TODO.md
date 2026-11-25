@@ -1,6 +1,5 @@
 # TODO
 
-- Research and resolve [ccusage issue #950](https://github.com/ccusage/ccusage/issues/950): distinguish duplicated historical `token_count` records from billable inherited context before changing totals, retain ambiguous usage, and avoid heuristic deletion.
 - Decide from deployment evidence whether Windows arm64 is warranted.
 - Clean Apple Silicon Homebrew install and first run are verified. Still verify the formula on clean Intel macOS, plus schedule repair after upgrade and package-manager uninstall on both architectures.
 - Verify the first Developer ID-signed and notarized direct archive on clean Apple Silicon and Intel Macs, including a quarantined browser download and first execution while online.
@@ -11,7 +10,6 @@
 - Execute the [ccusage accounting and pricing follow-up](docs/plans/ccusage-accounting-pricing-and-multi-home-handoff.md):
   - Add effective-dated long-context thresholds and rates, rechecking the rapidly changing official pricing immediately before implementation.
   - Price recorded Standard and Fast/Priority service tiers, including mixed-tier rollouts.
-  - Validate physical parent/child usage replay before suppressing anything; qualify unresolved replay ambiguity instead of applying heuristic deletion.
   - Rename the report option to `--codex-homes` and accept a comma-separated list while keeping update and scheduling mutations scoped to one `--codex-home`.
 - Add a privacy-safe, confirmation-gated submit-issue mode using an allowlist only.
 - Evaluate naming threads younger than 15 minutes without racing or preempting Codex's own delayed, improved title evaluation.
