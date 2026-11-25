@@ -14,6 +14,12 @@ Rollout discovery accepts `.jsonl` and `.jsonl.zst` files; the bundled Zstandard
 
 Bump `DISCOVERY_VERSION` when session-metadata interpretation or cached linkage changes, and bump `ANALYSIS_VERSION` when parsed `RolloutStats` semantics change. Pricing or report-only changes need neither bump because those calculations remain live. Per-thread report rows are transient views over existing usage facts; exact-thread date bounds reuse the same scoped event aggregation as project/corpus reports.
 
+## Desktop title updates
+
+The [Codex app-server API](https://learn.chatgpt.com/docs/app-server#api-overview) documents `thread/name/set` and its `thread/name/updated` notification. That renames a thread through a connected server. It is not a reload signal for direct storage edits. The public docs do not describe a way for an external tool to attach to the server of an already-running local desktop app or add an action to its thread context menu.
+
+Keep scheduled updates as the default. If the delay becomes a problem, [Codex lifecycle hooks](https://learn.chatgpt.com/docs/hooks#stop) offer `UserPromptSubmit` and `Stop`, and the [notification setting](https://learn.chatgpt.com/docs/config-file/config-advanced#notifications) documents `agent-turn-complete`. Before using a turn-end trigger, verify that the rollout contains final usage and Codex has settled on a usable title. None of those triggers is a general idle event.
+
 ## Usage exports
 
 `usage_export` writes schema-1 metadata, normalized usage rows and a terminal summary. Project selection resolves to a `ProjectScope` shared with ordinary reporting. The located reader preserves physical decompressed line numbers across page overlap and replay suppression. Export always reparses; locator/turn/ordinal metadata remains transient and no export files are retained by the app. Shared normalized identity/workload facts use the analysis version described below. Read/write failures return nonzero without a success summary. Stream success and per-metric completeness remain separate.
