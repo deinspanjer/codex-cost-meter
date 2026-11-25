@@ -113,9 +113,13 @@ fn html_to_text(input: &str) -> String {
         return String::new();
     }
     let mut result = String::new();
-    let mut chars = input.chars();
+    let mut chars = input.chars().peekable();
     while let Some(c) = chars.next() {
-        if c != '<' {
+        if c != '<'
+            || !chars
+                .peek()
+                .is_some_and(|ch| ch.is_ascii_alphabetic() || matches!(ch, '/' | '!' | '?'))
+        {
             result.push(c);
             continue;
         }

@@ -1,7 +1,9 @@
 {
-  "as_of": "2026-10-27",
-  "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra, https://developers.openai.com/api/docs/guides/ultrafast-mode, https://developers.openai.com/api/docs/guides/prompt-caching, https://developers.openai.com/api/docs/pricing, https://developers.openai.com/api/docs/guides/fast-mode, https://developers.openai.com/api/docs/models/gpt-6-astra, https://developers.openai.com/api/docs/changelog, https://developers.openai.com/api/docs/models/gpt-6-sol, https://developers.openai.com/api/docs/models/gpt-6-luna, https://developers.openai.com/api/docs/models/gpt-6.1-sol, https://developers.openai.com/api/docs/models/gpt-5.4-pro, https://developers.openai.com/api/docs/models/gpt-5.5-pro, https://web.archive.org/web/20260305212701/https://developers.openai.com/api/docs/pricing, https://web.archive.org/web/20260425104644/https://developers.openai.com/api/docs/pricing, https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu-credit-based-pricing",
+  "as_of": "2026-11-25",
+  "source": "https://developers.openai.com/api/docs/models/gpt-6.2-astra, https://developers.openai.com/api/docs/models/gpt-6.2-sol, https://web.archive.org/web/20261118005301id_/https://developers.openai.com/api/docs/pricing, https://web.archive.org/web/20251211103307id_/https://platform.openai.com/docs/pricing, https://web.archive.org/web/20260116030822id_/https://platform.openai.com/docs/pricing, https://developers.openai.com/api/docs/models/gpt-6.1-terra, https://developers.openai.com/api/docs/guides/ultrafast-mode, https://developers.openai.com/api/docs/guides/prompt-caching, https://developers.openai.com/api/docs/pricing, https://developers.openai.com/api/docs/guides/fast-mode, https://developers.openai.com/api/docs/models/gpt-6-astra, https://developers.openai.com/api/docs/changelog, https://developers.openai.com/api/docs/models/gpt-6-sol, https://developers.openai.com/api/docs/models/gpt-6-luna, https://developers.openai.com/api/docs/models/gpt-6.1-sol, https://developers.openai.com/api/docs/models/gpt-5.4-pro, https://developers.openai.com/api/docs/models/gpt-5.5-pro, https://web.archive.org/web/20260305212701/https://developers.openai.com/api/docs/pricing, https://web.archive.org/web/20260425104644/https://developers.openai.com/api/docs/pricing, https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu-credit-based-pricing",
   "long_context_thresholds": {
+    "gpt-6.2-astra": 272000,
+    "gpt-6.2-sol": 272000,
     "gpt-6.1-terra": 272000,
     "gpt-6-sol": 272000,
     "gpt-6-luna": 272000,
@@ -16,6 +18,14 @@
     "gpt-5.6-luna": 272000
   },
   "histories": {
+    "gpt-6.2-astra": [
+      {"effective_from": "2026-11-17", "input": 8, "cached_input": 0.4, "cache_write_input": 10, "output": 40, "fast": {"input": 16, "cached_input": 0.8, "cache_write_input": 20, "output": 80}, "ultrafast": {"input": 24, "cached_input": 1.2, "cache_write_input": 30, "output": 120}, "long_context": {"standard": {"input": 16, "cached_input": 0.8, "cache_write_input": 20, "output": 60}, "fast": {"input": 32, "cached_input": 1.6, "cache_write_input": 40, "output": 120}, "ultrafast": {"input": 48, "cached_input": 2.4, "cache_write_input": 60, "output": 180}}},
+      {"effective_from": "2027-03-01", "ultrafast": {"input": 48, "cached_input": 2.4, "cache_write_input": 60, "output": 240}, "long_context": {"ultrafast": {"input": 96, "cached_input": 4.8, "cache_write_input": 120, "output": 360}}}
+    ],
+    "gpt-6.2-sol": [
+      {"effective_from": "2026-11-17", "input": 2, "cached_input": 0.1, "cache_write_input": 2.5, "output": 10, "fast": {"input": 4, "cached_input": 0.2, "cache_write_input": 5, "output": 20}, "ultrafast": {"input": 6, "cached_input": 0.3, "cache_write_input": 7.5, "output": 30}, "long_context": {"standard": {"input": 4, "cached_input": 0.2, "cache_write_input": 5, "output": 15}, "fast": {"input": 8, "cached_input": 0.4, "cache_write_input": 10, "output": 30}, "ultrafast": {"input": 12, "cached_input": 0.6, "cache_write_input": 15, "output": 45}}},
+      {"effective_from": "2027-03-01", "ultrafast": {"input": 12, "cached_input": 0.6, "cache_write_input": 15, "output": 60}, "long_context": {"ultrafast": {"input": 24, "cached_input": 1.2, "cache_write_input": 30, "output": 90}}}
+    ],
     "gpt-6.1-terra": [
       {"effective_from": "2026-10-26", "input": 1.0, "cached_input": 0.05, "cache_write_input": 1.25, "output": 5.0, "fast": {"input": 2.0, "cached_input": 0.1, "cache_write_input": 2.5, "output": 10.0}, "long_context": {"standard": {"input": 2.0, "cached_input": 0.1, "cache_write_input": 2.5, "output": 7.5}, "fast": {"input": 4.0, "cached_input": 0.2, "cache_write_input": 5.0, "output": 15.0}}}
     ],
@@ -45,13 +55,19 @@
       {"effective_from": "2026-08-22", "input": 1.25, "cached_input": 0.125, "cache_write_input": null, "output": 10.0, "fast": {"input": 2.5, "cached_input": 0.25, "cache_write_input": null, "output": 20.0}}
     ],
     "gpt-5.1-codex-mini": [{"effective_from": "2025-11-13", "input": 0.25, "cached_input": 0.025, "cache_write_input": null, "output": 2.0}],
-    "gpt-5.1-codex-max": [{"effective_from": "2025-11-13", "input": 1.25, "cached_input": 0.125, "cache_write_input": null, "output": 10.0}],
+    "gpt-5.1-codex-max": [
+      {"effective_from": "2025-11-13", "input": 1.25, "cached_input": 0.125, "cache_write_input": null, "output": 10.0},
+      {"effective_from": "2025-12-11", "input": 1.25, "cached_input": 0.125, "cache_write_input": null, "output": 10.0, "fast": {"input": 2.5, "cached_input": 0.25, "cache_write_input": null, "output": 20}}
+    ],
     "gpt-5.2": [
       {"effective_from": "2025-12-11", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0, "fast": {"input": 3.5, "cached_input": 0.35, "cache_write_input": null, "output": 28.0}},
       {"effective_from": "2026-08-22", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0, "fast": {"input": 3.5, "cached_input": 0.35, "cache_write_input": null, "output": 28.0}}
     ],
     "gpt-5.2-pro": [{"effective_from": "2025-12-11", "input": 21.0, "cached_input": null, "cache_write_input": null, "output": 168.0}],
-    "gpt-5.2-codex": [{"effective_from": "2025-12-11", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0}],
+    "gpt-5.2-codex": [
+      {"effective_from": "2025-12-11", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0},
+      {"effective_from": "2026-01-16", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0, "fast": {"input": 3.5, "cached_input": 0.35, "cache_write_input": null, "output": 28}}
+    ],
     "gpt-5.3-codex": [
       {"effective_from": "2026-02-05", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0, "fast": {"input": 3.5, "cached_input": 0.35, "cache_write_input": null, "output": 28.0}},
       {"effective_from": "2026-08-22", "input": 1.75, "cached_input": 0.175, "cache_write_input": null, "output": 14.0, "fast": {"input": 3.5, "cached_input": 0.35, "cache_write_input": null, "output": 28.0}}

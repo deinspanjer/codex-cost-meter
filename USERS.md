@@ -314,6 +314,8 @@ Basis defaults to `custom`; manual prices need no official evidence. Generated v
 
 ## Refresh or research pricing
 
+The bundled catalog includes [GPT-6.2 Astra and Sol pricing](docs/research/pricing-refresh-2026-11-25.md). For a new flagship model, refresh can use a shared, explicitly labeled input-token cutoff with the model's Standard and Fast price rows. These observed prices start on the UTC retrieval date. Eligible rates can be applied even when the result also identifies unsupported promotional pricing. Use `--json` to inspect the cited excerpts.
+
 `pricing refresh` collects current official pricing Markdown, prepares a before/after summary, and asks whether to apply. Bare refresh/reset require an interactive terminal; unattended use must choose `--dry-run` or `--apply`. Both modes print their outcome. They are mutually exclusive. Add `--json` for structured changes, evidence, unresolved coverage, and activation; interactive prompts go to stderr.
 
 ```sh

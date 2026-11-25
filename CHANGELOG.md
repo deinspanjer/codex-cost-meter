@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.9.0]
+
+- Price GPT-6.2 Astra and Sol offline from November 17, including Fast, Ultrafast, and long context. Restore two historical Codex Priority rates.
+- Let `pricing refresh` discover new flagship models when the official pricing table gives their shared context cutoff. Preview each model's rates, cutoff, and remaining gaps together.
+
 ## [1.8.0]
 
 - Add ordered API-USD, public-credit and configurable allowance-point estimates with independent coverage, additive schema-1 JSON/JSONL costs, explicit title recipes and pinned schedule settings.

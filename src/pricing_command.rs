@@ -102,8 +102,75 @@ fn target_text(target: &proposal::Target) -> String {
     }
 }
 fn render_review(summary: &ResultSummary<'_>) -> String {
-    let mut text = String::new();
+    let mut text = format!(
+        "Activation: {}; coverage: {}\n",
+        summary.activation,
+        if summary.coverage_complete {
+            "complete"
+        } else {
+            "partial"
+        }
+    );
+    let mut shown = std::collections::BTreeSet::new();
+    let mut shown_gaps = std::collections::BTreeSet::new();
+    if let Some(p) = summary.proposal {
+        for op in &p.operations {
+            let proposal::Target::Threshold { model } = &op.target else {
+                continue;
+            };
+            let Some(threshold) = summary.changes.iter().find(|c| c.id == op.id) else {
+                continue;
+            };
+            let Some(legend) = p.evidence.iter().find(|e| {
+                op.evidence_ids.contains(&e.id) && pricing_evidence::cutoff(&e.excerpt).is_some()
+            }) else {
+                continue;
+            };
+            text.push_str(&format!(
+                "\n{model}: eligible\n  Flagship models — {} ({})\n  Cutoff: {} → {}\n",
+                legend.excerpt,
+                legend.url,
+                value_text(&threshold.before),
+                value_text(&threshold.after)
+            ));
+            shown.insert(op.id.as_str());
+            for member in p.operations.iter().filter(|m| m.group == op.group) {
+                let Some(c) = summary.changes.iter().find(|c| c.id == member.id) else {
+                    continue;
+                };
+                if let Some(proposal::Replacement::Point { key, .. }) = &c.replacement
+                    && key.model == *model
+                    && member.kind == proposal::Kind::Add
+                {
+                    text.push_str(&format!(
+                        "  {:?} {:?} from {} ({}): {} → {}\n",
+                        key.tier,
+                        key.context,
+                        key.effective_from,
+                        member.date_basis,
+                        value_text(&c.before),
+                        value_text(&c.after)
+                    ));
+                    shown.insert(member.id.as_str());
+                }
+            }
+            if op.date_basis == "observation" {
+                text.push_str("  Observation date is provisional; earlier usage has no newly established price.\n");
+            }
+            for gap in summary
+                .unresolved
+                .iter()
+                .filter(|s| s.starts_with(&format!("{model} / ")))
+            {
+                text.push_str(&format!("  Unresolved: {gap}\n"));
+                shown_gaps.insert(gap.as_str());
+            }
+        }
+    }
     for change in summary.changes {
+        if shown.contains(change.id.as_str()) {
+            continue;
+        }
         text.push_str(&format!(
             "{}: {}\n  Before: {}\n  After:  {}\n",
             change.id,
@@ -126,34 +193,20 @@ fn render_review(summary: &ResultSummary<'_>) -> String {
             ));
         }
     }
-    if let Some(proposal) = summary.proposal {
-        for e in &proposal.evidence {
-            text.push_str(&format!(
-                "Evidence {}: {} (retrieved {})\n  {}\n",
-                e.id, e.url, e.retrieved_at, e.excerpt
-            ));
-        }
-    }
     for check in summary.evidence_checks {
         if let Some(reason) = &check.reason {
             text.push_str(&format!("Evidence {} not verified: {reason}\n", check.id));
         }
     }
     for item in summary.unresolved {
+        if shown_gaps.contains(item.as_str()) {
+            continue;
+        }
         text.push_str(&format!("Unresolved: {item}\n"));
     }
     if summary.changes.is_empty() {
         text.push_str("No eligible pricing changes.\n");
     }
-    text.push_str(&format!(
-        "Activation: {}; coverage: {}\n",
-        summary.activation,
-        if summary.coverage_complete {
-            "complete"
-        } else {
-            "partial"
-        }
-    ));
     text.lines()
         .map(|line| crate::sanitize(line.into()))
         .collect::<Vec<_>>()
@@ -271,12 +324,18 @@ fn run_with_input(
                     reason: result.as_ref().err().cloned(),
                 })
                 .collect();
-            let mut prepared = proposal::prepare(
+            let scoped = if deterministic {
+                Default::default()
+            } else {
+                pricing_evidence::scoped_documents(&fetched)
+            };
+            let mut prepared = proposal::prepare_scoped(
                 &snapshot.embedded,
                 &snapshot.overlay,
                 &proposal,
                 &verified,
                 deterministic,
+                &scoped,
             )?;
             let changed = prepared.candidate != snapshot.overlay;
             if changed {
