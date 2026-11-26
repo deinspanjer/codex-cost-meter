@@ -12,7 +12,11 @@ use serde_json::Value;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::{cache::RolloutCache, date_filter::Filter};
+use crate::{
+    cache::RolloutCache,
+    date_filter::Filter,
+    homes::{HomeId, HomeScan},
+};
 
 const MAX_JSONL_RECORD_BYTES: usize = 16 * 1024 * 1024;
 const INITIAL_JSONL_RECORD_BYTES: usize = 8 * 1024;
@@ -46,6 +50,8 @@ pub(crate) struct RolloutRecord {
     pub path: PathBuf,
     pub page_start: Option<(u64, OffsetDateTime)>,
     pub pages: Vec<RolloutPage>,
+    /// The home this copy was read from; set by discovery, never cached.
+    pub home: HomeId,
 }
 
 #[derive(Clone, Debug)]
@@ -82,131 +88,182 @@ impl JsonlReadError {
 pub(crate) struct RolloutIndex {
     records: HashMap<String, RolloutRecord>,
     children: HashMap<String, Vec<String>>,
+    holders: HashMap<String, Vec<HomeId>>,
     warnings: Vec<DiscoveryWarning>,
     oversized_lines_skipped: usize,
     malformed_lines_skipped: usize,
 }
 
+#[derive(Default)]
+struct Scan {
+    candidates: Vec<(RolloutRecord, SystemTime)>,
+    warnings: Vec<DiscoveryWarning>,
+    oversized_lines_skipped: usize,
+    malformed_lines_skipped: usize,
+}
+
+impl Scan {
+    fn file(&mut self, path: &Path, cache: Option<&RolloutCache>) {
+        scan_file(
+            path,
+            &mut self.candidates,
+            &mut self.warnings,
+            &mut self.oversized_lines_skipped,
+            &mut self.malformed_lines_skipped,
+            cache,
+        );
+    }
+
+    fn home(&mut self, home: HomeScan<'_>, indexed_file: &mut impl FnMut()) {
+        for root in [
+            home.path.join("sessions"),
+            home.path.join("archived_sessions"),
+        ] {
+            scan_root(
+                &root,
+                &mut self.candidates,
+                &mut self.warnings,
+                &mut self.oversized_lines_skipped,
+                &mut self.malformed_lines_skipped,
+                home.cache,
+                indexed_file,
+            );
+        }
+    }
+
+    fn tag(&mut self, start: usize, home: HomeId) {
+        for (record, _) in &mut self.candidates[start..] {
+            record.home = home;
+        }
+    }
+
+    fn holders(&self) -> HashMap<String, Vec<HomeId>> {
+        let mut holders = HashMap::<String, Vec<HomeId>>::new();
+        for (record, _) in &self.candidates {
+            let homes = holders.entry(record.id.clone()).or_default();
+            if !homes.contains(&record.home) {
+                homes.push(record.home);
+            }
+        }
+        for homes in holders.values_mut() {
+            homes.sort_unstable();
+        }
+        holders
+    }
+
+    fn index(self) -> RolloutIndex {
+        let holders = self.holders();
+        RolloutIndex::from_records(
+            resolve_duplicates(self.candidates),
+            holders,
+            self.warnings,
+            self.oversized_lines_skipped,
+            self.malformed_lines_skipped,
+        )
+    }
+}
+
 impl RolloutIndex {
     #[cfg(test)]
     pub(crate) fn build(home: &Path) -> Self {
-        Self::build_with_progress(home, || {})
-    }
-
-    pub(crate) fn build_cached(home: &Path, cache: &RolloutCache) -> Self {
-        Self::build_with_cache_progress(home, Some(cache), || {})
+        Self::build_homes(
+            &[HomeScan {
+                id: 0,
+                path: home,
+                cache: None,
+            }],
+            || {},
+        )
     }
 
     #[cfg(test)]
-    pub(crate) fn build_with_progress(home: &Path, mut indexed_file: impl FnMut()) -> Self {
-        Self::build_with_cache_progress(home, None, &mut indexed_file)
-    }
-
-    pub(crate) fn build_with_cache_progress(
-        home: &Path,
-        cache: Option<&RolloutCache>,
-        mut indexed_file: impl FnMut(),
-    ) -> Self {
-        let mut candidates = Vec::new();
-        let mut warnings = Vec::new();
-        let mut oversized_lines_skipped = 0;
-        let mut malformed_lines_skipped = 0;
-
-        for root in [home.join("sessions"), home.join("archived_sessions")] {
-            scan_root(
-                &root,
-                &mut candidates,
-                &mut warnings,
-                &mut oversized_lines_skipped,
-                &mut malformed_lines_skipped,
-                cache,
-                &mut indexed_file,
-            );
-        }
-
-        Self::from_records(
-            resolve_duplicates(candidates),
-            warnings,
-            oversized_lines_skipped,
-            malformed_lines_skipped,
+    pub(crate) fn build_cached(home: &Path, cache: &RolloutCache) -> Self {
+        Self::build_homes(
+            &[HomeScan {
+                id: 0,
+                path: home,
+                cache: Some(cache),
+            }],
+            || {},
         )
     }
 
-    pub(crate) fn build_corpus_with_cache_progress(
-        home: &Path,
+    /// Scan every rollout in every home, then select one file per rollout ID.
+    pub(crate) fn build_homes(homes: &[HomeScan<'_>], mut indexed_file: impl FnMut()) -> Self {
+        let mut scan = Scan::default();
+        for home in homes {
+            let start = scan.candidates.len();
+            scan.home(*home, &mut indexed_file);
+            scan.tag(start, home.id);
+        }
+        scan.index()
+    }
+
+    /// Like [`Self::build_homes`], but skip metadata-backed rollouts outside the date filter.
+    pub(crate) fn build_corpus(
+        homes: &[HomeScan<'_>],
         filter: &Filter,
-        cache: Option<&RolloutCache>,
         mut indexed_file: impl FnMut(),
     ) -> Self {
-        let Some(paths) = corpus_paths(home, filter) else {
-            return Self::build_with_cache_progress(home, cache, indexed_file);
-        };
-        let mut candidates = Vec::new();
-        let mut warnings = Vec::new();
-        let mut oversized_lines_skipped = 0;
-        let mut malformed_lines_skipped = 0;
-        for path in paths {
-            scan_file(
-                &path,
-                &mut candidates,
-                &mut warnings,
-                &mut oversized_lines_skipped,
-                &mut malformed_lines_skipped,
-                cache,
-            );
-            indexed_file();
+        let mut scan = Scan::default();
+        for home in homes {
+            let start = scan.candidates.len();
+            match corpus_paths(home.path, filter) {
+                Some(paths) => {
+                    for path in paths {
+                        scan.file(&path, home.cache);
+                        indexed_file();
+                    }
+                }
+                None => scan.home(*home, &mut indexed_file),
+            }
+            scan.tag(start, home.id);
         }
-        Self::from_records(
-            resolve_duplicates(candidates),
-            warnings,
-            oversized_lines_skipped,
-            malformed_lines_skipped,
-        )
+        scan.index()
     }
 
-    pub(crate) fn build_for_cached(
-        home: &Path,
+    /// Index the requested rollouts and their descendants. One home uses its
+    /// SQLite projection when that is reliable; several homes always scan.
+    pub(crate) fn build_for(
+        homes: &[HomeScan<'_>],
         ids: &[String],
-        cache: Option<&RolloutCache>,
         mut indexed_file: impl FnMut(),
     ) -> Self {
-        targeted_paths(home, ids, cache)
+        let [home] = homes else {
+            return Self::build_homes(homes, indexed_file);
+        };
+        targeted_paths(home.path, ids, home.cache)
             .and_then(|paths| {
-                let mut candidates = Vec::new();
-                let mut warnings = Vec::new();
-                let mut oversized_lines_skipped = 0;
-                let mut malformed_lines_skipped = 0;
+                let mut scan = Scan::default();
                 for path in &paths {
-                    scan_file(
-                        path,
-                        &mut candidates,
-                        &mut warnings,
-                        &mut oversized_lines_skipped,
-                        &mut malformed_lines_skipped,
-                        cache,
-                    );
+                    scan.file(path, home.cache);
                     indexed_file();
                 }
-                let all_paths_resolved = candidates.len() == paths.len();
-                let mut records = resolve_duplicates(candidates);
+                scan.tag(0, home.id);
+                let all_paths_resolved = scan.candidates.len() == paths.len();
+                let holders = scan.holders();
+                let mut records = resolve_duplicates(std::mem::take(&mut scan.candidates));
                 retain_workset(&mut records, ids);
-                (warnings.is_empty()
+                (scan.warnings.is_empty()
                     && all_paths_resolved
-                    && ids.iter().all(|id| records.contains_key(id)))
+                    && ids.iter().all(|id| records.contains_key(id))
+                    && replay_parents_present(&records, ids))
                 .then(|| {
                     Self::from_records(
                         records,
-                        warnings,
-                        oversized_lines_skipped,
-                        malformed_lines_skipped,
+                        holders,
+                        scan.warnings,
+                        scan.oversized_lines_skipped,
+                        scan.malformed_lines_skipped,
                     )
                 })
             })
-            .unwrap_or_else(|| Self::build_with_cache_progress(home, cache, indexed_file))
+            .unwrap_or_else(|| Self::build_homes(homes, indexed_file))
     }
 
     fn from_records(
         records: HashMap<String, RolloutRecord>,
+        holders: HashMap<String, Vec<HomeId>>,
         warnings: Vec<DiscoveryWarning>,
         oversized_lines_skipped: usize,
         malformed_lines_skipped: usize,
@@ -226,10 +283,16 @@ impl RolloutIndex {
         Self {
             records,
             children,
+            holders,
             warnings,
             oversized_lines_skipped,
             malformed_lines_skipped,
         }
+    }
+
+    /// Every home that holds a copy of this rollout, in home order.
+    pub(crate) fn holders(&self, id: &str) -> &[HomeId] {
+        self.holders.get(id).map_or(&[], Vec::as_slice)
     }
 
     pub(crate) fn record(&self, id: &str) -> Option<&RolloutRecord> {
@@ -283,6 +346,41 @@ impl RolloutIndex {
     }
 }
 
+/// The rollout directories of one home, under its given and canonical spellings.
+struct HomeRoots {
+    home: PathBuf,
+    directories: Vec<PathBuf>,
+}
+
+impl HomeRoots {
+    fn new(home: &Path) -> Self {
+        let mut bases = vec![home.to_path_buf()];
+        bases.extend(fs::canonicalize(home).ok().filter(|path| path != home));
+        Self {
+            home: home.into(),
+            directories: bases
+                .iter()
+                .flat_map(|base| [base.join("sessions"), base.join("archived_sessions")])
+                .collect(),
+        }
+    }
+
+    /// Resolve a SQLite rollout path, or `None` when it lies outside this home,
+    /// as a copied home's metadata can still point into the original home.
+    fn resolve(&self, stored: &str) -> Option<PathBuf> {
+        let path = PathBuf::from(stored);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            self.home.join(path)
+        };
+        self.directories
+            .iter()
+            .any(|directory| path.starts_with(directory))
+            .then_some(path)
+    }
+}
+
 fn targeted_paths(
     home: &Path,
     ids: &[String],
@@ -326,17 +424,12 @@ fn targeted_paths(
         .cloned()
         .chain(selected.iter().map(|(id, _)| id.clone()))
         .collect::<HashSet<_>>();
+    let roots = HomeRoots::new(home);
+    // A requested rollout recorded outside this home cannot be read from it.
     let mut paths = selected
         .into_iter()
-        .map(|(_, path)| PathBuf::from(path))
-        .map(|path| {
-            if path.is_absolute() {
-                path
-            } else {
-                home.join(path)
-            }
-        })
-        .collect::<Vec<_>>();
+        .map(|(_, path)| roots.resolve(&path))
+        .collect::<Option<Vec<_>>>()?;
     let all_paths = connection
         .prepare("SELECT rollout_path FROM threads")
         .ok()?
@@ -345,14 +438,7 @@ fn targeted_paths(
         .collect::<Result<Vec<_>, _>>()
         .ok()?
         .into_iter()
-        .map(PathBuf::from)
-        .map(|path| {
-            if path.is_absolute() {
-                path
-            } else {
-                home.join(path)
-            }
-        })
+        .filter_map(|path| roots.resolve(&path))
         .collect::<HashSet<_>>();
     let mut reconciliation_paths = all_paths.iter().cloned().collect::<Vec<_>>();
     reconciliation_paths.extend(unindexed_rollout_paths(home, &all_paths)?);
@@ -391,14 +477,14 @@ fn corpus_paths(home: &Path, filter: &Filter) -> Option<Vec<PathBuf>> {
         .ok()?
         .collect::<Result<Vec<_>, _>>()
         .ok()?;
+    let roots = HomeRoots::new(home);
     let mut indexed = HashSet::new();
     let mut paths = Vec::new();
     for (path, created_at, updated_at) in rows {
-        let path = PathBuf::from(path);
-        let path = if path.is_absolute() {
-            path
-        } else {
-            home.join(path)
+        // A path outside this home stays unindexed, so the walk below keeps
+        // this home's own copy without date pruning.
+        let Some(path) = roots.resolve(&path) else {
+            continue;
         };
         indexed.insert(path.clone());
         let created_at =
@@ -415,39 +501,55 @@ fn corpus_paths(home: &Path, filter: &Filter) -> Option<Vec<PathBuf>> {
     Some(paths)
 }
 
-pub(crate) fn state_roots(home: &Path, cache: &RolloutCache) -> Option<Vec<RolloutRecord>> {
-    let database = [
+/// Root rollouts sorted by ID. A root without a recorded starting directory
+/// takes one from the SQLite projection of a home that holds it.
+pub(crate) fn project_roots(index: &RolloutIndex, homes: &[&Path]) -> Vec<RolloutRecord> {
+    let mut cwds = vec![None; homes.len()];
+    let mut roots = index.roots().cloned().collect::<Vec<_>>();
+    for root in &mut roots {
+        if root.cwd.is_some() {
+            continue;
+        }
+        root.cwd = index.holders(&root.id).iter().find_map(|home| {
+            cwds[*home]
+                .get_or_insert_with(|| recorded_cwds(homes[*home]))
+                .get(&root.id)
+                .cloned()
+        });
+    }
+    roots.sort_by(|left, right| left.id.cmp(&right.id));
+    roots
+}
+
+/// Nonempty thread starting directories from a home's SQLite projection.
+fn recorded_cwds(home: &Path) -> HashMap<String, String> {
+    let Some(database) = [
         home.join("state_5.sqlite"),
         home.join("sqlite/state_5.sqlite"),
     ]
     .into_iter()
-    .find(|path| path.is_file())?;
-    let connection =
-        Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-    let cwd_by_id = connection
-        .prepare("SELECT id, cwd FROM threads")
-        .ok()?
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-        })
-        .ok()?
-        .collect::<Result<HashMap<_, _>, _>>()
-        .ok()?;
-    let index = RolloutIndex::build_cached(home, cache);
-    if !index.warnings().is_empty() {
-        return None;
-    }
-    let mut roots = index.roots().cloned().collect::<Vec<_>>();
-    for root in &mut roots {
-        if root.cwd.is_none() {
-            root.cwd = cwd_by_id
-                .get(&root.id)
-                .and_then(Clone::clone)
-                .filter(|cwd| !cwd.is_empty());
-        }
-    }
-    roots.sort_by(|left, right| left.id.cmp(&right.id));
-    Some(roots)
+    .find(|path| path.is_file()) else {
+        return HashMap::new();
+    };
+    let rows = || -> Option<HashMap<String, String>> {
+        let connection =
+            Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+        connection
+            .prepare("SELECT id, cwd FROM threads")
+            .ok()?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .ok()?
+            .filter_map(|row| match row {
+                Ok((id, Some(cwd))) if !cwd.is_empty() => Some(Ok((id, cwd))),
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<HashMap<_, _>, _>>()
+            .ok()
+    };
+    rows().unwrap_or_default()
 }
 
 fn unindexed_rollout_paths(home: &Path, indexed: &HashSet<PathBuf>) -> Option<Vec<PathBuf>> {
@@ -838,6 +940,7 @@ fn record_from_value(value: &Value, path: &Path) -> Option<RolloutRecord> {
                 .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok()),
         ),
         pages: Vec::new(),
+        home: 0,
     })
 }
 
@@ -957,7 +1060,25 @@ fn retain_workset(records: &mut HashMap<String, RolloutRecord>, root_ids: &[Stri
         }
         selected.extend(additions);
     }
+    // Keep each requested rollout's parent for fork-replay analysis only;
+    // its own descendants are not added to the workset.
+    selected.extend(
+        root_ids
+            .iter()
+            .filter_map(|id| records.get(id)?.parent_id.clone()),
+    );
     records.retain(|id, _| selected.contains(id));
+}
+
+/// A requested legacy fork needs its parent to suppress copied history.
+fn replay_parents_present(records: &HashMap<String, RolloutRecord>, ids: &[String]) -> bool {
+    ids.iter().filter_map(|id| records.get(id)).all(|record| {
+        record.fork_history_mode != Some(ForkHistoryMode::Legacy)
+            || record
+                .parent_id
+                .as_ref()
+                .is_none_or(|parent| records.contains_key(parent))
+    })
 }
 
 #[cfg(test)]
@@ -973,10 +1094,18 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        ForkHistoryMode, RolloutIndex, RolloutKind, RolloutRecord, resolve_duplicates,
-        rollout_kind, state_roots,
+        ForkHistoryMode, RolloutIndex, RolloutKind, RolloutRecord, project_roots,
+        resolve_duplicates, rollout_kind,
     };
-    use crate::cache::RolloutCache;
+    use crate::{cache::RolloutCache, homes::HomeScan};
+
+    fn scan<'a>(home: &'a TempDir, cache: &'a RolloutCache) -> HomeScan<'a> {
+        HomeScan {
+            id: 0,
+            path: home.path(),
+            cache: Some(cache),
+        }
+    }
 
     fn write_jsonl(home: &TempDir, relative: &str, rows: &[serde_json::Value]) -> PathBuf {
         let path = home.path().join(relative);
@@ -1150,15 +1279,13 @@ mod tests {
 
         let cache = RolloutCache::open(home.path(), false);
         let mut cold_indexed = 0;
-        let index =
-            RolloutIndex::build_for_cached(home.path(), &["root".into()], Some(&cache), || {
-                cold_indexed += 1
-            });
+        let index = RolloutIndex::build_for(&[scan(&home, &cache)], &["root".into()], || {
+            cold_indexed += 1
+        });
         let mut warm_indexed = 0;
-        let warm =
-            RolloutIndex::build_for_cached(home.path(), &["root".into()], Some(&cache), || {
-                warm_indexed += 1
-            });
+        let warm = RolloutIndex::build_for(&[scan(&home, &cache)], &["root".into()], || {
+            warm_indexed += 1
+        });
 
         assert_eq!(
             index.descendants("root").unwrap(),
@@ -1178,6 +1305,183 @@ mod tests {
         assert_eq!(index.malformed_lines_skipped(), 1);
         assert_eq!(warm.malformed_lines_skipped(), 0);
         assert!(cold_indexed >= warm_indexed);
+    }
+
+    fn homes<'a>(homes: &[&'a TempDir]) -> Vec<HomeScan<'a>> {
+        homes
+            .iter()
+            .enumerate()
+            .map(|(id, home)| HomeScan {
+                id,
+                path: home.path(),
+                cache: None,
+            })
+            .collect()
+    }
+
+    fn set_modified(path: &std::path::Path, seconds: u64) {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(seconds))
+            .unwrap();
+    }
+
+    fn index_threads(home: &TempDir, rows: &[(&str, &std::path::Path)], edges: &[(&str, &str)]) {
+        let database = Connection::open(home.path().join("state_5.sqlite")).unwrap();
+        database
+            .execute_batch(
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT);
+                 CREATE TABLE thread_spawn_edges (
+                     parent_thread_id TEXT, child_thread_id TEXT PRIMARY KEY
+                 );",
+            )
+            .unwrap();
+        for (id, path) in rows {
+            database
+                .execute(
+                    "INSERT INTO threads VALUES (?1, ?2)",
+                    params![id, path.to_string_lossy()],
+                )
+                .unwrap();
+        }
+        for (parent, child) in edges {
+            database
+                .execute(
+                    "INSERT INTO thread_spawn_edges VALUES (?1, ?2)",
+                    params![parent, child],
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn a_rollout_copied_into_two_homes_resolves_to_the_newest_copy_in_any_order() {
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let old = write_jsonl(
+            &first,
+            "sessions/shared.jsonl",
+            &[meta("shared", None, json!("cli"))],
+        );
+        let new = write_jsonl(
+            &second,
+            "archived_sessions/shared.jsonl",
+            &[meta("shared", None, json!("cli"))],
+        );
+        set_modified(&old, 1_000);
+        set_modified(&new, 2_000);
+
+        for order in [[&first, &second], [&second, &first]] {
+            let index = RolloutIndex::build_homes(&homes(&order), || {});
+            assert_eq!(index.records().count(), 1);
+            assert_eq!(index.record("shared").unwrap().path, new);
+            assert_eq!(index.holders("shared"), [0, 1]);
+        }
+    }
+
+    #[test]
+    fn descendants_resolve_across_homes() {
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let root = write_jsonl(
+            &first,
+            "sessions/root.jsonl",
+            &[meta("root", None, json!("cli"))],
+        );
+        let child = write_jsonl(
+            &first,
+            "sessions/child.jsonl",
+            &[meta(
+                "child",
+                Some("root"),
+                json!({"subagent": {"other": "worker"}}),
+            )],
+        );
+        write_jsonl(
+            &second,
+            "sessions/grandchild.jsonl",
+            &[meta(
+                "grandchild",
+                Some("child"),
+                json!({"subagent": {"other": "worker"}}),
+            )],
+        );
+        index_threads(
+            &first,
+            &[("root", &root), ("child", &child)],
+            &[("root", "child")],
+        );
+
+        let index = RolloutIndex::build_for(&homes(&[&first, &second]), &["root".into()], || {});
+
+        assert_eq!(index.descendants("root").unwrap(), ["child", "grandchild"]);
+    }
+
+    #[test]
+    fn copied_home_metadata_pointing_elsewhere_reads_only_its_own_files() {
+        let original = TempDir::new().unwrap();
+        let copy = TempDir::new().unwrap();
+        let original_path = write_jsonl(
+            &original,
+            "sessions/root.jsonl",
+            &[
+                json!({"type": "session_meta", "payload": {"id": "root", "source": "cli", "cwd": "/original"}}),
+            ],
+        );
+        let copy_path = write_jsonl(
+            &copy,
+            "sessions/root.jsonl",
+            &[meta("root", None, json!("cli"))],
+        );
+        // The original kept running after the copy was made.
+        set_modified(&copy_path, 1_000);
+        set_modified(&original_path, 2_000);
+        index_threads(&copy, &[("root", &original_path)], &[]);
+        let filter = crate::date_filter::Filter::try_from(crate::date_filter::Options {
+            since: Some(jiff::civil::date(2000, 1, 1)),
+            through: None,
+            group_by: Vec::new(),
+            include_empty: false,
+        })
+        .unwrap();
+
+        for index in [
+            RolloutIndex::build_for(&homes(&[&copy]), &["root".into()], || {}),
+            RolloutIndex::build_corpus(&homes(&[&copy]), &filter, || {}),
+        ] {
+            let record = index.record("root").unwrap();
+            assert!(record.path.starts_with(copy.path()), "{:?}", record.path);
+        }
+    }
+
+    #[test]
+    fn targeted_fork_child_keeps_its_parent_for_replay_only() {
+        let home = TempDir::new().unwrap();
+        let root = write_jsonl(
+            &home,
+            "sessions/root.jsonl",
+            &[meta("root", None, json!("cli"))],
+        );
+        let fork = write_jsonl(
+            &home,
+            "sessions/fork.jsonl",
+            &[json!({
+                "type": "session_meta",
+                "payload": {"id": "fork", "forked_from_id": "root", "source": "cli"}
+            })],
+        );
+        index_threads(&home, &[("root", &root), ("fork", &fork)], &[]);
+        let cache = RolloutCache::open(home.path(), false);
+        let scan = [scan(&home, &cache)];
+        // Warm the discovery cache, so the targeted pass skips unrelated files.
+        RolloutIndex::build_for(&scan, &["fork".into()], || {});
+
+        let index = RolloutIndex::build_for(&scan, &["fork".into()], || {});
+
+        assert!(index.record("root").is_some());
+        assert_eq!(index.descendants("fork").unwrap(), Vec::<String>::new());
     }
 
     #[test]
@@ -1248,7 +1552,8 @@ mod tests {
             .unwrap();
         let cache = RolloutCache::open(home.path(), false);
 
-        let roots = state_roots(home.path(), &cache).unwrap();
+        let index = RolloutIndex::build_cached(home.path(), &cache);
+        let roots = project_roots(&index, &[home.path()]);
         assert_eq!(roots[0].cwd.as_deref(), Some("/project"));
         let ids = roots.into_iter().map(|root| root.id).collect::<Vec<_>>();
 
@@ -1471,6 +1776,7 @@ mod tests {
             path: PathBuf::from(path),
             page_start: None,
             pages: Vec::new(),
+            home: 0,
         };
 
         let selected = resolve_duplicates(vec![

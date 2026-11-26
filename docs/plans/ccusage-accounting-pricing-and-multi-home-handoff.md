@@ -6,7 +6,7 @@
 
 Close the confirmed long-context and Fast/Priority pricing gaps, add multi-home reporting, and resolve replay accounting without trading a possible overcount for an opaque undercount. Preserve the existing historical-price, incomplete-input, and lower-bound guarantees.
 
-The date-reporting prerequisite is complete: project and `--all` corpus reports now support inclusive OS-local `--since`/`--through` bounds, day/week/month grouping, optional rollout-type/model dimensions, and explicit empty buckets. `--all` uses available Codex thread timestamps to skip indexed rollouts updated before `--since` or created after `--through`, while retaining unindexed or metadata-incomplete candidates. Unlike ccusage's focused Codex date views, filtered local reports retain pricing provenance and visibly qualify untimestamped data that had to be excluded. Multi-home discovery and replay-accounting decisions remain in this handoff.
+The date-reporting prerequisite is complete: project and `--all` corpus reports now support inclusive OS-local `--since`/`--through` bounds, day/week/month grouping, optional rollout-type/model dimensions, and explicit empty buckets. `--all` uses available Codex thread timestamps to skip indexed rollouts updated before `--since` or created after `--through`, while retaining unindexed or metadata-incomplete candidates. Unlike ccusage's focused Codex date views, filtered local reports retain pricing provenance and visibly qualify untimestamped data that had to be excluded. Replay-accounting decisions remain in this handoff; multi-home reporting shipped in 1.10.0.
 
 Read [`../research/ccusage-codex-primary-source-findings.md`](../research/ccusage-codex-primary-source-findings.md) before implementation. Recheck current official OpenAI pricing on the implementation day because long-context and Fast pricing changed rapidly after launch.
 
@@ -42,7 +42,7 @@ Read [`../research/ccusage-codex-primary-source-findings.md`](../research/ccusag
 3. Retain every unmatched, paginated, subagent-only, missing-parent, timing-only, and cross-session-signature candidate. Do not add a replay approximation marker for records that are neither removed nor proven ambiguous.
 4. Encode explicit long-context and Fast rates in the effective-dated catalog. Do not hardcode global multipliers: thresholds, rates, and effective dates can change independently by model.
 5. Price from the actually served tier when present. If rollouts expose only the requested/applied setting, use it as the best available estimate and mark that limitation in pricing provenance.
-6. Rename the read-only report option to `--codex-homes HOME[,HOME...]`. Keep `CODEX_HOME` and mutation commands single-path; do not add a compatibility shim for the pre-1.0 report flag.
+6. Rename the read-only report option to `--codex-homes HOME[,HOME...]`. Keep `CODEX_HOME` and mutation commands single-path; do not add a compatibility shim for the pre-1.0 report flag. *Superseded by the `add-multi-home-reporting` OpenSpec change: the project had shipped 1.x through Homebrew, so `report --codex-home` stays and `--codex-homes` was added in 1.10.0.*
 7. Across report homes, one rollout ID remains one rollout. Reuse the existing newest-file duplicate rule across the combined candidate set so copied homes do not double-count a task.
 
 ## Implementation sequence
@@ -86,6 +86,8 @@ Completion: mixed-tier requests are priced independently, unknown tiers cannot p
 Completion: exact task and project reports remove only structurally proven copied records, retain the first new child request, and a fresh read-only corpus comparison matches the documented aggregate direction without retaining private evidence.
 
 ### 5. Add multi-home reporting
+
+*Superseded by the `add-multi-home-reporting` OpenSpec change, released in 1.10.0. Its spec and design record the shipped behavior.*
 
 - Change `ReportArgs` to `--codex-homes` with Clap comma delimiting and reject empty entries. Explicit homes override the single-path `CODEX_HOME` fallback.
 - Leave update and schedule arguments as `--codex-home`; their locks, SQLite writes, session-index appends, and native schedules remain scoped to one store.

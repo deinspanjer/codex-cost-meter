@@ -138,6 +138,7 @@ impl RolloutCache {
                 path: path.to_path_buf(),
                 page_start: cached.page_start,
                 pages: Vec::new(),
+                home: 0,
             },
             malformed_lines_skipped: cached.malformed_lines_skipped,
             oversized_lines_skipped: cached.oversized_lines_skipped,
@@ -667,6 +668,7 @@ mod tests {
             path,
             page_start: None,
             pages: Vec::new(),
+            home: 0,
         }
     }
 
@@ -731,6 +733,7 @@ mod tests {
             path: path.clone(),
             page_start: None,
             pages: Vec::new(),
+            home: 0,
         };
         let cache = RolloutCache::open(home.path(), false);
         cache.store_discovery(&record, 0, 0);
@@ -855,6 +858,7 @@ mod tests {
             path,
             page_start: None,
             pages: Vec::new(),
+            home: 0,
         };
         let cache = RolloutCache::open(home.path(), false);
 

@@ -337,6 +337,15 @@ pub(crate) struct ReportArgs {
     pub(crate) refresh: bool,
     #[arg(long, help = "Use this Codex storage directory.")]
     codex_home: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "HOME[,HOME...]",
+        value_delimiter = ',',
+        value_parser = parse_home_entry,
+        conflicts_with = "codex_home",
+        help = "Combine these Codex storage directories instead of CODEX_HOME; each rollout counts once."
+    )]
+    codex_homes: Vec<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -422,14 +431,38 @@ pub(crate) struct UpdateArgs {
 pub(crate) enum CliError {
     #[error("could not resolve default Codex home: {0}")]
     HomeNotSet(&'static str),
+    #[error("Codex home {entry} is unavailable: {reason}")]
+    HomeUnavailable { entry: String, reason: String },
     #[cfg(any(target_os = "windows", test))]
     #[error("could not resolve scheduler state: {0}")]
     SchedulerStateNotSet(&'static str),
 }
 
 impl ReportArgs {
-    pub(crate) fn codex_home(&self) -> Result<PathBuf, CliError> {
-        resolve_codex_home(&self.codex_home)
+    /// The homes this report reads: the explicit list, or the one resolved home.
+    pub(crate) fn codex_homes(&self) -> Result<Vec<PathBuf>, CliError> {
+        if self.codex_homes.is_empty() {
+            return resolve_codex_home(&self.codex_home).map(|home| vec![home]);
+        }
+        let mut homes = Vec::<PathBuf>::new();
+        let mut canonical = Vec::new();
+        for entry in &self.codex_homes {
+            let unavailable = |reason: String| CliError::HomeUnavailable {
+                entry: entry.display().to_string(),
+                reason,
+            };
+            match std::fs::metadata(entry) {
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => return Err(unavailable("not a directory".into())),
+                Err(error) => return Err(unavailable(error.to_string())),
+            }
+            let resolved = std::fs::canonicalize(entry).unwrap_or_else(|_| entry.clone());
+            if !canonical.contains(&resolved) {
+                canonical.push(resolved);
+                homes.push(entry.clone());
+            }
+        }
+        Ok(homes)
     }
 
     pub(crate) fn date_filter(
@@ -604,6 +637,13 @@ fn resolve_codex_home(codex_home: &Option<PathBuf>) -> Result<PathBuf, CliError>
         return Ok(home.into());
     }
     Ok(user_home()?.join(".codex"))
+}
+
+fn parse_home_entry(value: &str) -> Result<PathBuf, String> {
+    if value.is_empty() {
+        return Err("Codex home entries cannot be empty".into());
+    }
+    Ok(value.into())
 }
 
 fn parse_positive_u64(value: &str) -> Result<u64, String> {
@@ -1019,6 +1059,75 @@ mod tests {
         };
         assert!(run.apply);
         assert_eq!(run.options().max_runtime().as_secs(), 240);
+    }
+
+    fn report_homes(arguments: &[&str]) -> Result<Vec<PathBuf>, String> {
+        let mut command = vec!["codex-cost-meter", "report", "--all"];
+        command.extend_from_slice(arguments);
+        match Cli::try_parse_from(command).map_err(|error| error.to_string())? {
+            Cli {
+                command: Command::Report(arguments),
+                ..
+            } => arguments.codex_homes().map_err(|error| error.to_string()),
+            _ => panic!("expected report arguments"),
+        }
+    }
+
+    #[test]
+    fn report_home_list_rejects_empty_entries_and_mixed_selectors() {
+        for arguments in [
+            vec!["--codex-homes", "a,,b"],
+            vec!["--codex-homes", "a,"],
+            vec!["--codex-homes", ",a"],
+            vec!["--codex-homes", ""],
+            vec!["--codex-home", "a", "--codex-homes", "b"],
+        ] {
+            assert!(report_homes(&arguments).is_err(), "{arguments:?}");
+        }
+        for command in [
+            vec!["update", "--thread-id", "root", "--codex-homes", "a"],
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+            vec!["schedule", "install", "--codex-homes", "a"],
+        ] {
+            let mut arguments = vec!["codex-cost-meter"];
+            arguments.extend(command.iter().copied());
+            assert!(Cli::try_parse_from(arguments).is_err(), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn report_home_list_validates_and_collapses_entries() {
+        let root = tempfile::TempDir::new().unwrap();
+        let first = root.path().join("first");
+        let second = root.path().join("second,copy");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let first = first.to_str().unwrap();
+        let second = second.to_str().unwrap();
+        let alias = format!("{first}/../first");
+
+        let listed = report_homes(&["--codex-homes", &format!("{first},{alias}")]).unwrap();
+        assert_eq!(listed, [PathBuf::from(first)]);
+        assert_eq!(
+            report_homes(&["--codex-homes", first, "--codex-homes", first]).unwrap(),
+            [PathBuf::from(first)]
+        );
+        // The single-home option keeps a comma as part of the path.
+        assert_eq!(
+            report_homes(&["--codex-home", second]).unwrap(),
+            [PathBuf::from(second)]
+        );
+        let missing = root.path().join("missing");
+        let error = report_homes(&["--codex-homes", &format!("{first},{}", missing.display())])
+            .unwrap_err();
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+        let file = root.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        assert!(
+            report_homes(&["--codex-homes", file.to_str().unwrap()])
+                .unwrap_err()
+                .contains("not a directory")
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
