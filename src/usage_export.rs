@@ -78,7 +78,11 @@ pub(crate) fn write(
             if context.index.record(id).is_none() {
                 return Err(ReportError::RolloutNotFound {
                     thread_id: id.into(),
-                    home: "selected Codex home".into(),
+                    home: if context.homes().len() > 1 {
+                        "selected Codex homes".into()
+                    } else {
+                        "selected Codex home".into()
+                    },
                 }
                 .into());
             }

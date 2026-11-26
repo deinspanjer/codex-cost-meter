@@ -3,6 +3,7 @@ mod cli;
 mod costs;
 mod credits;
 mod date_filter;
+mod homes;
 mod output;
 mod pricing;
 mod pricing_command;
@@ -39,6 +40,7 @@ use crate::{
 };
 use crate::{
     cli::{Cli, Command},
+    homes::Homes,
     report::ReportError,
 };
 
@@ -238,26 +240,23 @@ fn run_with_writers(
         Command::Report(mut args) => {
             let catalog = valuation_catalog(selection.clone(), window, config_path.as_deref())?;
             let filter = args.date_filter()?;
-            let home = args.codex_home()?;
-            let cache = Rc::new(cache::RolloutCache::open(&home, args.refresh));
+            let homes = Rc::new(Homes::open(args.codex_homes()?, args.refresh));
             let mut progress =
                 progress::Progress::new(error_writer, args.progress, stderr_is_terminal);
-            if let Some(query) = &args.match_title {
-                args.thread_id = Some(report::resolve_title(
-                    &home,
-                    query,
-                    Rc::clone(&cache),
-                    &mut progress,
-                )?);
-            }
-            if args.jsonl {
-                let result = (|| -> Result<(), AppError> {
+            let result = (|| -> Result<Option<String>, AppError> {
+                if let Some(query) = &args.match_title {
+                    args.thread_id = Some(report::resolve_title(
+                        Rc::clone(&homes),
+                        query,
+                        &mut progress,
+                    )?);
+                }
+                if args.jsonl {
                     if args.all {
-                        let mut context = report::ReportContext::new_corpus_cached_with_progress(
-                            &home,
+                        let mut context = report::ReportContext::corpus(
+                            Rc::clone(&homes),
                             &filter,
-                            Rc::clone(&cache),
-                            &mut progress,
+                            Some(&mut progress),
                         )
                         .map_err(ReportError::from)?;
                         context.catalog = catalog.clone();
@@ -269,12 +268,10 @@ fn run_with_writers(
                         )?;
                     } else if args.project.is_some() || args.thread_id.is_none() {
                         let mut scope = project::resolve_with_progress(
-                            &home,
+                            Rc::clone(&homes),
                             args.thread_id.as_deref(),
                             args.project.as_deref().unwrap_or(""),
-                            &filter,
                             &mut progress,
-                            Rc::clone(&cache),
                         )?;
                         scope.context.catalog = catalog.clone();
                         usage_export::write(
@@ -284,11 +281,10 @@ fn run_with_writers(
                             writer,
                         )?;
                     } else if let Some(id) = args.thread_id.as_deref() {
-                        let mut context = report::ReportContext::new_for_cached_with_progress(
-                            &home,
+                        let mut context = report::ReportContext::targeted(
+                            Rc::clone(&homes),
                             &[id.into()],
-                            Rc::clone(&cache),
-                            &mut progress,
+                            Some(&mut progress),
                         )
                         .map_err(ReportError::from)?;
                         context.catalog = catalog.clone();
@@ -299,82 +295,67 @@ fn run_with_writers(
                             writer,
                         )?;
                     }
-                    Ok(())
-                })();
-                progress.finish();
-                drop(progress);
-                write_cache_notices(error_writer, &cache);
-                return result;
-            }
-            let rendered = (|| -> Result<String, AppError> {
+                    return Ok(None);
+                }
                 if args.all {
-                    let mut context = report::ReportContext::new_corpus_cached_with_progress(
-                        &home,
+                    let mut context = report::ReportContext::corpus(
+                        Rc::clone(&homes),
                         &filter,
-                        Rc::clone(&cache),
-                        &mut progress,
+                        Some(&mut progress),
                     )
                     .map_err(ReportError::from)?;
                     context.catalog = catalog.clone();
                     let report = context.build_corpus_with_progress(&filter, &mut progress)?;
-                    if args.json {
-                        Ok(format!("{}\n", output::json(&report)?))
+                    return Ok(Some(if args.json {
+                        format!("{}\n", output::json(&report)?)
                     } else {
-                        Ok(output::project_human(&report))
-                    }
-                } else if let Some(project_ref) = args.project {
-                    let report = project::build_with_progress(
-                        &home,
-                        args.thread_id.as_deref(),
-                        &project_ref,
-                        &filter,
-                        &mut progress,
-                        Rc::clone(&cache),
-                        &catalog,
-                    )?;
-                    if args.json {
-                        Ok(format!("{}\n", output::json(&report)?))
-                    } else {
-                        Ok(output::project_human(&report))
-                    }
-                } else if let Some(thread_id) = args.thread_id {
-                    let report = report::build_with_progress(
-                        &thread_id,
-                        &home,
-                        &mut progress,
-                        Rc::clone(&cache),
-                        &filter,
-                        &catalog,
-                    )?;
-                    if args.json {
-                        Ok(format!("{}\n", output::json(&report)?))
-                    } else {
-                        Ok(output::human(&report))
-                    }
-                } else {
-                    let report = project::build_with_progress(
-                        &home,
-                        None,
-                        "",
-                        &filter,
-                        &mut progress,
-                        Rc::clone(&cache),
-                        &catalog,
-                    )?;
-                    if args.json {
-                        Ok(format!("{}\n", output::json(&report)?))
-                    } else {
-                        Ok(output::project_human(&report))
-                    }
+                        output::project_human(&report)
+                    }));
                 }
+                if args.project.is_some() || args.thread_id.is_none() {
+                    let report = project::build_with_progress(
+                        Rc::clone(&homes),
+                        args.thread_id.as_deref(),
+                        args.project.as_deref().unwrap_or(""),
+                        &filter,
+                        &mut progress,
+                        &catalog,
+                    )?;
+                    return Ok(Some(if args.json {
+                        format!("{}\n", output::json(&report)?)
+                    } else {
+                        output::project_human(&report)
+                    }));
+                }
+                let thread_id = args.thread_id.as_deref().expect("selected above");
+                let report = report::build_with_progress(
+                    thread_id,
+                    Rc::clone(&homes),
+                    &mut progress,
+                    &filter,
+                    &catalog,
+                )?;
+                Ok(Some(if args.json {
+                    format!("{}\n", output::json(&report)?)
+                } else {
+                    output::human(&report)
+                }))
             })();
             progress.finish();
             drop(progress);
-            let rendered = rendered?;
-            write_cache_notices(error_writer, &cache);
-            writer
-                .write_all(rendered.as_bytes())
-                .map_err(|source| AppError::WriteReport { source })?;
+            // An export may have written records before failing; its cache
+            // notices still apply. A failed rendered report writes nothing.
+            if result.is_ok() || args.jsonl {
+                for cache in homes.caches() {
+                    write_cache_notices(error_writer, cache);
+                }
+            }
+            let rendered = result?;
+            if let Some(rendered) = rendered {
+                writer
+                    .write_all(rendered.as_bytes())
+                    .map_err(|source| AppError::WriteReport { source })?;
+            }
             Ok(())
         }
         Command::Update(args) => {

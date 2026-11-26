@@ -31,7 +31,7 @@ The minimum useful follow-up is therefore: apply the confirmed explicit-legacy-f
 | Area | ccusage 20.0.20 | codex-cost-meter 0.8.0 | Assessment |
 | --- | --- | --- | --- |
 | Public report scope | Daily, monthly, and flat session reports with inclusive dates and timezone grouping | Exact root plus descendants, rollout types, and lifetime Desktop Project reports | Different strengths; daily/monthly are unique to ccusage, descendant accounting is unique locally |
-| Storage roots | Multiple `CODEX_HOME` values and direct headless-log directories | One selected Codex home | ccusage is broader |
+| Storage roots | Multiple `CODEX_HOME` values and direct headless-log directories | One selected Codex home (since 1.10.0, `report --codex-homes` combines homes) | ccusage also reads headless-log directories; across homes it counts a copied rollout twice, while codex-cost-meter counts each rollout ID once |
 | Active/archive discovery | Both trees | Both trees | Equivalent |
 | Duplicate files | Active-relative-path preference plus later event dedupe | Newest file per rollout ID by modification time | Neither dominates every shape |
 | Fork/subagent replay | Exact parent-prefix suppression plus a fallback burst heuristic | No cross-rollout replay filter | Explicit legacy-fork overcount is proven; ccusage's broader heuristics remain unsafe |
@@ -78,7 +78,7 @@ $CODEX_HOME/archived_sessions/2026/08/rollout-a.jsonl
 
 The key is `(Codex home root, relative JSONL path)`, so the same relative path in two different configured homes remains two inputs ([file key](https://github.com/ccusage/ccusage/blob/bd7f89b469aee5635fb2e6722dd6d70f2d113ac1/rust/adapters/codex/src/paths.rs#L81-L102)).
 
-`codex-cost-meter` also honors Codex home selection: an explicit `--codex-home` wins, followed by the `CODEX_HOME` environment variable, then the platform user's `.codex` directory. It treats the selected value as one path and scans that home's `sessions/` and `archived_sessions/`; it does not split or aggregate multiple homes in one report ([local resolution](https://github.com/deinspanjer/codex-cost-meter/blob/b90f05a4075f81eebdc1ea284eaed79e125a3021/src/cli.rs#L360-L367), [local discovery](https://github.com/deinspanjer/codex-cost-meter/blob/b90f05a4075f81eebdc1ea284eaed79e125a3021/src/rollout/discovery.rs#L69-L89)).
+`codex-cost-meter` also honors Codex home selection: an explicit `--codex-home` wins, followed by the `CODEX_HOME` environment variable, then the platform user's `.codex` directory. It treats the selected value as one path and scans that home's `sessions/` and `archived_sessions/`; it does not split or aggregate multiple homes in one report ([local resolution](https://github.com/deinspanjer/codex-cost-meter/blob/b90f05a4075f81eebdc1ea284eaed79e125a3021/src/cli.rs#L360-L367), [local discovery](https://github.com/deinspanjer/codex-cost-meter/blob/b90f05a4075f81eebdc1ea284eaed79e125a3021/src/rollout/discovery.rs#L69-L89)). Since 1.10.0, `report --codex-homes HOME[,HOME...]` combines several homes and selects one copy per rollout ID across them; `CODEX_HOME` remains one path.
 
 ### Verified fork/subagent replay suppression
 

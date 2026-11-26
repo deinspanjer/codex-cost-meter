@@ -9,12 +9,12 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::{
-    cache::RolloutCache,
     date_filter::Filter,
+    homes::{HomeId, Homes},
     pricing::Catalog,
     progress::Progress,
     report::{ProjectReport, ProjectSelection, ReportContext, ReportError},
-    rollout::discovery::{RolloutRecord, state_roots},
+    rollout::discovery::{RolloutIndex, RolloutRecord, project_roots},
 };
 
 #[derive(Debug, Error)]
@@ -77,12 +77,29 @@ struct ProjectAssignment {
     project_id: String,
 }
 
-struct ScopeRequest<'a> {
-    selected_project: Option<&'a str>,
-    fallback_paths: &'a [PathBuf],
+/// What a project reference resolved to, before roots are classified.
+struct Target<'a> {
+    /// The selected Desktop Project ID in each home, if that home has one.
+    projects: Vec<Option<String>>,
+    fallback_paths: Vec<PathBuf>,
     target: String,
     resolver: &'static str,
     required_thread: Option<&'a str>,
+    /// Select roots whose recorded starting directory equals the target.
+    exact_cwd: bool,
+}
+
+impl Target<'_> {
+    fn unscoped(target: String, resolver: &'static str, homes: usize) -> Self {
+        Self {
+            projects: vec![None; homes],
+            fallback_paths: Vec::new(),
+            target,
+            resolver,
+            required_thread: None,
+            exact_cwd: false,
+        }
+    }
 }
 
 pub(crate) struct ProjectScope {
@@ -111,88 +128,70 @@ impl ProjectScope {
 }
 
 pub(crate) fn build_with_progress(
-    codex_home: &Path,
+    homes: Rc<Homes>,
     thread_id: Option<&str>,
     project_ref: &str,
     filter: &Filter,
     progress: &mut Progress,
-    cache: Rc<RolloutCache>,
     catalog: &Catalog,
 ) -> Result<ProjectReport, ProjectError> {
-    let mut scope =
-        resolve_with_progress(codex_home, thread_id, project_ref, filter, progress, cache)?;
+    let mut scope = resolve_with_progress(homes, thread_id, project_ref, progress)?;
     scope.context.catalog = catalog.clone();
     scope.report(filter, progress)
 }
 
 pub(crate) fn resolve_with_progress(
-    codex_home: &Path,
+    homes: Rc<Homes>,
     thread_id: Option<&str>,
     project_ref: &str,
-    filter: &Filter,
     progress: &mut Progress,
-    cache: Rc<RolloutCache>,
 ) -> Result<ProjectScope, ProjectError> {
-    build_inner(
-        codex_home,
-        thread_id,
-        project_ref,
-        filter,
-        Some(progress),
-        cache,
-    )
+    // Several homes reuse this full index for the report; one home keeps its
+    // narrower targeted index below.
+    let multiple = homes.len() > 1;
+    let scanned = ReportContext::scan(Rc::clone(&homes), multiple.then_some(&mut *progress))
+        .map_err(ReportError::from)?;
+    let paths = (0..homes.len())
+        .map(|id| homes.path(id))
+        .collect::<Vec<_>>();
+    let roots = project_roots(&scanned.index, &paths);
+    let states = paths
+        .iter()
+        .map(|path| load_state(path))
+        .collect::<Vec<_>>();
+    let target = resolve_target(&roots, &states, thread_id, project_ref)?;
+    let (selection, thread_ids) = classify(&target, &roots, &scanned.index, &states)?;
+    let context = if multiple {
+        scanned
+    } else {
+        ReportContext::targeted(homes, &thread_ids, Some(progress)).map_err(ReportError::from)?
+    };
+    Ok(ProjectScope {
+        context,
+        selection,
+        thread_ids,
+    })
 }
 
-fn build_inner(
-    codex_home: &Path,
-    thread_id: Option<&str>,
+fn resolve_target<'a>(
+    roots: &[RolloutRecord],
+    states: &[(DesktopState, bool)],
+    thread_id: Option<&'a str>,
     project_ref: &str,
-    filter: &Filter,
-    mut progress: Option<&mut Progress>,
-    cache: Rc<RolloutCache>,
-) -> Result<ProjectScope, ProjectError> {
-    let roots = match state_roots(codex_home, &cache) {
-        Some(roots) => roots,
-        None => match progress.as_deref_mut() {
-            Some(progress) => {
-                ReportContext::new_cached_with_progress(codex_home, Rc::clone(&cache), progress)
-            }
-            None => ReportContext::new_cached(codex_home, Rc::clone(&cache)),
-        }
-        .map_err(ReportError::from)?
-        .roots()
-        .cloned()
-        .collect(),
-    };
-    let (state, metadata_available) = load_state(codex_home);
+) -> Result<Target<'a>, ProjectError> {
+    let metadata_available = states.iter().any(|(_, available)| *available);
     if !project_ref.is_empty() && metadata_available {
-        let named = state
-            .projects
-            .values()
-            .filter(|project| project.name.eq_ignore_ascii_case(project_ref))
-            .collect::<Vec<_>>();
-        if named.len() > 1 {
-            return Err(ProjectError::AmbiguousProjectName {
+        let named = matching_projects(states, |project| {
+            project.name.eq_ignore_ascii_case(project_ref)
+        });
+        if !named.is_empty() {
+            let grouped = one_group(&named).ok_or_else(|| ProjectError::AmbiguousProjectName {
                 reference: project_ref.into(),
                 matches: project_names(&named),
-            });
-        }
-        if let [project] = named.as_slice() {
-            return build_scope(
-                codex_home,
-                Rc::clone(&cache),
-                &roots,
-                &state,
-                ScopeRequest {
-                    selected_project: Some(project.id.as_str()),
-                    fallback_paths: &project.root_paths,
-                    target: project.name.clone(),
-                    resolver: "project_name",
-                    required_thread: thread_id,
-                },
-                filter,
-                progress,
-            );
+            })?;
+            let mut target = project_target(states, &grouped, "project_name")?;
+            target.required_thread = thread_id;
+            return Ok(target);
         }
     }
     if project_ref.is_empty()
@@ -204,40 +203,26 @@ fn build_inner(
         let root = roots
             .iter()
             .find(|root| root.id == thread_id)
-            .cloned()
             .ok_or_else(|| ProjectError::ThreadNotRoot(thread_id.into()))?;
+        let (state, available) = &states[root.home];
+        if !available {
+            return Err(ProjectError::MetadataUnavailable);
+        }
         if let Some(project) = state
             .assignments
             .get(&root.id)
             .and_then(|assignment| state.projects.get(&assignment.project_id))
         {
-            return build_scope(
-                codex_home,
-                Rc::clone(&cache),
-                &roots,
-                &state,
-                ScopeRequest {
-                    selected_project: Some(project.id.as_str()),
-                    fallback_paths: &project.root_paths,
-                    target: project.name.clone(),
-                    resolver: "thread_assignment",
-                    required_thread: None,
-                },
-                filter,
-                progress,
-            );
+            return project_target(states, &[(root.home, project)], "thread_assignment");
         }
-        return build_cwd_scope(
-            codex_home,
-            Rc::clone(&cache),
-            &roots,
-            &state,
-            root.cwd
-                .as_deref()
-                .ok_or_else(|| ProjectError::ThreadCwdMissing(thread_id.into()))?,
-            filter,
-            progress,
-        );
+        let cwd = root
+            .cwd
+            .as_deref()
+            .ok_or_else(|| ProjectError::ThreadCwdMissing(thread_id.into()))?;
+        return Ok(Target {
+            exact_cwd: true,
+            ..Target::unscoped(cwd.into(), "thread_cwd", states.len())
+        });
     }
     let current_directory = project_ref.is_empty() && thread_id.is_none();
     let path = if project_ref.is_empty() {
@@ -248,27 +233,9 @@ fn build_inner(
     } else {
         match PathBuf::from(project_ref).canonicalize() {
             Ok(path) => path,
-            Err(_) if metadata_available => {
-                return fuzzy_project(
-                    codex_home,
-                    Rc::clone(&cache),
-                    &roots,
-                    &state,
-                    project_ref,
-                    filter,
-                    progress,
-                );
-            }
+            Err(_) if metadata_available => return fuzzy_project(roots, states, project_ref),
             Err(_) => {
-                return match fuzzy_historical_cwd(
-                    codex_home,
-                    Rc::clone(&cache),
-                    &roots,
-                    &state,
-                    project_ref,
-                    filter,
-                    progress,
-                ) {
+                return match fuzzy_historical_cwd(roots, states.len(), project_ref) {
                     Err(ProjectError::ProjectRefNotFound(_)) => {
                         Err(ProjectError::MetadataUnavailable)
                     }
@@ -285,114 +252,147 @@ fn build_inner(
         },
     })?;
 
-    let owners = state
-        .projects
-        .values()
-        .filter(|project| {
-            project
-                .root_paths
-                .iter()
-                .filter_map(|root| root.canonicalize().ok())
-                .any(|root| root == path)
-        })
-        .collect::<Vec<_>>();
-    if owners.len() > 1 {
-        return Err(ProjectError::AmbiguousSourceRoot {
-            path: path.display().to_string(),
-            matches: project_names(&owners),
-        });
-    }
-
-    let (target, resolver, selected_project) = match owners.as_slice() {
-        [project] => (
-            project.name.clone(),
-            "source_root_path",
-            Some(project.id.as_str()),
-        ),
-        [] => (
+    // A path owns a project only when it is one of that project's source roots.
+    let owners = matching_projects(states, |project| {
+        project
+            .root_paths
+            .iter()
+            .filter_map(|root| root.canonicalize().ok())
+            .any(|root| root == path)
+    });
+    let mut target = if owners.is_empty() {
+        Target::unscoped(
             path.display().to_string(),
             if current_directory {
                 "current_directory"
             } else {
                 "path"
             },
-            None,
-        ),
-        _ => unreachable!(),
+            states.len(),
+        )
+    } else {
+        let grouped = one_group(&owners).ok_or_else(|| ProjectError::AmbiguousSourceRoot {
+            path: path.display().to_string(),
+            matches: project_names(&owners),
+        })?;
+        project_target(states, &grouped, "source_root_path")?
     };
-    build_scope(
-        codex_home,
-        cache,
-        &roots,
-        &state,
-        ScopeRequest {
-            selected_project,
-            fallback_paths: std::slice::from_ref(&path),
-            target,
-            resolver,
-            required_thread: thread_id,
-        },
-        filter,
-        progress,
-    )
+    target.fallback_paths = vec![path];
+    target.required_thread = thread_id;
+    Ok(target)
 }
 
-fn fuzzy_project(
-    codex_home: &Path,
-    cache: Rc<RolloutCache>,
-    roots: &[RolloutRecord],
-    state: &DesktopState,
-    project_ref: &str,
-    filter: &Filter,
-    progress: Option<&mut Progress>,
-) -> Result<ProjectScope, ProjectError> {
-    let mut matches = state
-        .projects
-        .values()
-        .filter(|project| high_confidence_match(project_ref, &project.name))
+/// Projects that satisfy `matches`, with the home each belongs to.
+fn matching_projects(
+    states: &[(DesktopState, bool)],
+    matches: impl Fn(&DesktopProject) -> bool,
+) -> Vec<(HomeId, &DesktopProject)> {
+    let mut projects = states
+        .iter()
+        .enumerate()
+        .flat_map(|(home, (state, _))| {
+            state
+                .projects
+                .values()
+                .filter(|project| matches(project))
+                .map(move |project| (home, project))
+        })
         .collect::<Vec<_>>();
-    matches.sort_by(|left, right| left.name.cmp(&right.name));
-    match matches.as_slice() {
-        [project] => build_scope(
-            codex_home,
-            cache,
-            roots,
-            state,
-            ScopeRequest {
-                selected_project: Some(project.id.as_str()),
-                fallback_paths: &project.root_paths,
-                target: project.name.clone(),
-                resolver: "fuzzy_project_name",
-                required_thread: None,
-            },
-            filter,
-            progress,
-        ),
-        [] => fuzzy_historical_cwd(
-            codex_home,
-            cache,
-            roots,
-            state,
-            project_ref,
-            filter,
-            progress,
-        ),
-        _ => Err(ProjectError::AmbiguousProjectRef {
-            reference: project_ref.into(),
-            matches: project_names(&matches),
-        }),
-    }
+    projects.sort_by(|left, right| left.1.name.cmp(&right.1.name).then(left.0.cmp(&right.0)));
+    projects
 }
 
-fn fuzzy_historical_cwd(
-    codex_home: &Path,
-    cache: Rc<RolloutCache>,
+/// The matches when they name one project: at most one per home, all with the
+/// same case-insensitive name. Same-named projects in different homes are one
+/// project, because each account home assigns its own project IDs.
+fn one_group<'a>(
+    projects: &[(HomeId, &'a DesktopProject)],
+) -> Option<Vec<(HomeId, &'a DesktopProject)>> {
+    let (_, first) = projects.first()?;
+    let mut homes = HashSet::new();
+    projects
+        .iter()
+        .all(|(home, project)| {
+            homes.insert(*home) && project.name.eq_ignore_ascii_case(&first.name)
+        })
+        .then(|| projects.to_vec())
+}
+
+/// Select the named project in every home. `fixed` projects are already
+/// chosen for their homes; other homes select their same-named project.
+fn project_target<'a>(
+    states: &[(DesktopState, bool)],
+    fixed: &[(HomeId, &DesktopProject)],
+    resolver: &'static str,
+) -> Result<Target<'a>, ProjectError> {
+    let name = &fixed[0].1.name;
+    let mut projects = Vec::with_capacity(states.len());
+    let mut fallback_paths = Vec::new();
+    for (home, (state, _)) in states.iter().enumerate() {
+        let project = match fixed.iter().find(|(fixed_home, _)| *fixed_home == home) {
+            Some((_, project)) => Some(*project),
+            None => {
+                let named = state
+                    .projects
+                    .values()
+                    .filter(|project| project.name.eq_ignore_ascii_case(name))
+                    .collect::<Vec<_>>();
+                if named.len() > 1 {
+                    return Err(ProjectError::AmbiguousProjectName {
+                        reference: name.clone(),
+                        matches: project_names(
+                            &named
+                                .into_iter()
+                                .map(|project| (home, project))
+                                .collect::<Vec<_>>(),
+                        ),
+                    });
+                }
+                named.into_iter().next()
+            }
+        };
+        if let Some(project) = project {
+            for path in &project.root_paths {
+                if !fallback_paths.contains(path) {
+                    fallback_paths.push(path.clone());
+                }
+            }
+        }
+        projects.push(project.map(|project| project.id.clone()));
+    }
+    Ok(Target {
+        projects,
+        fallback_paths,
+        target: name.clone(),
+        resolver,
+        required_thread: None,
+        exact_cwd: false,
+    })
+}
+
+fn fuzzy_project<'a>(
     roots: &[RolloutRecord],
-    state: &DesktopState,
+    states: &[(DesktopState, bool)],
     project_ref: &str,
-    filter: &Filter,
-    progress: Option<&mut Progress>,
-) -> Result<ProjectScope, ProjectError> {
+) -> Result<Target<'a>, ProjectError> {
+    let matches = matching_projects(states, |project| {
+        high_confidence_match(project_ref, &project.name)
+    });
+    if matches.is_empty() {
+        return fuzzy_historical_cwd(roots, states.len(), project_ref);
+    }
+    let grouped = one_group(&matches).ok_or_else(|| ProjectError::AmbiguousProjectRef {
+        reference: project_ref.into(),
+        matches: project_names(&matches),
+    })?;
+    project_target(states, &grouped, "fuzzy_project_name")
+}
+
+fn fuzzy_historical_cwd<'a>(
+    roots: &[RolloutRecord],
+    homes: usize,
+    project_ref: &str,
+) -> Result<Target<'a>, ProjectError> {
     let mut matches = roots
         .iter()
         .filter_map(|root| root.cwd.as_deref())
@@ -401,21 +401,10 @@ fn fuzzy_historical_cwd(
     matches.sort_unstable();
     matches.dedup();
     match matches.as_slice() {
-        [cwd] => build_scope(
-            codex_home,
-            cache,
-            roots,
-            state,
-            ScopeRequest {
-                selected_project: None,
-                fallback_paths: &[PathBuf::from(cwd)],
-                target: (*cwd).into(),
-                resolver: "fuzzy_historical_cwd",
-                required_thread: None,
-            },
-            filter,
-            progress,
-        ),
+        [cwd] => Ok(Target {
+            fallback_paths: vec![PathBuf::from(cwd)],
+            ..Target::unscoped((*cwd).into(), "fuzzy_historical_cwd", homes)
+        }),
         [] => Err(ProjectError::ProjectRefNotFound(project_ref.into())),
         _ => Err(ProjectError::AmbiguousHistoricalCwd {
             reference: project_ref.into(),
@@ -424,10 +413,10 @@ fn fuzzy_historical_cwd(
     }
 }
 
-fn project_names(projects: &[&DesktopProject]) -> String {
+fn project_names(projects: &[(HomeId, &DesktopProject)]) -> String {
     let mut names = projects
         .iter()
-        .map(|project| project.name.as_str())
+        .map(|(_, project)| project.name.as_str())
         .collect::<Vec<_>>();
     names.sort_unstable();
     short_list(names.into_iter())
@@ -476,26 +465,34 @@ fn levenshtein(left: &str, right: &str) -> usize {
     row[right.len()]
 }
 
-fn build_scope(
-    codex_home: &Path,
-    cache: Rc<RolloutCache>,
+/// Why one home includes or excludes a root, weakest first. A root copied into
+/// several homes takes the strongest reason any holding home gives.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Outcome {
+    Unrelated,
+    OtherProject,
+    ProjectlessExcluded,
+    ProjectlessIncluded,
+    WorkspaceFallback,
+    DirectAssignment,
+}
+
+fn classify(
+    target: &Target<'_>,
     roots: &[RolloutRecord],
-    state: &DesktopState,
-    request: ScopeRequest<'_>,
-    _filter: &Filter,
-    progress: Option<&mut Progress>,
-) -> Result<ProjectScope, ProjectError> {
-    let fallback_paths = request
+    index: &RolloutIndex,
+    states: &[(DesktopState, bool)],
+) -> Result<(ProjectSelection, Vec<String>), ProjectError> {
+    let fallback_paths = target
         .fallback_paths
         .iter()
         .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
         .collect::<Vec<_>>();
-    let missing_source_roots = usize::from(request.selected_project.is_some())
+    let missing_source_roots = usize::from(target.projects.iter().any(Option::is_some))
         * fallback_paths.iter().filter(|path| !path.exists()).count();
-    let mut thread_ids = Vec::new();
     let mut selection = ProjectSelection {
-        target: request.target,
-        resolver: request.resolver,
+        target: target.target.clone(),
+        resolver: target.resolver,
         missing_source_roots,
         direct_assignments: 0,
         workspace_fallbacks: 0,
@@ -505,33 +502,67 @@ fn build_scope(
         incomplete_root_reports: 0,
         unpriced_root_reports: 0,
     };
+    let mut thread_ids = Vec::new();
     for root in roots {
-        let Some(cwd) = root.cwd.as_deref().map(Path::new) else {
+        let Some(cwd) = root.cwd.as_deref() else {
             continue;
         };
-        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-        let assignment = state
-            .assignments
-            .get(&root.id)
-            .map(|entry| entry.project_id.as_str());
-        let direct = request
-            .selected_project
-            .is_some_and(|project| assignment == Some(project));
-        let beneath = fallback_paths.iter().any(|path| cwd.starts_with(path));
-        if direct {
-            selection.direct_assignments += 1;
+        let beneath = if target.exact_cwd {
+            cwd == target.target
+        } else {
+            let cwd = Path::new(cwd);
+            let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+            fallback_paths.iter().any(|path| cwd.starts_with(path))
+        };
+        let outcome = index
+            .holders(&root.id)
+            .iter()
+            .map(|home| {
+                let state = &states[*home].0;
+                let assignment = state
+                    .assignments
+                    .get(&root.id)
+                    .map(|entry| entry.project_id.as_str());
+                let projectless = state.projectless.contains(&root.id);
+                if target.projects[*home]
+                    .as_deref()
+                    .is_some_and(|project| assignment == Some(project))
+                {
+                    Outcome::DirectAssignment
+                } else if !beneath {
+                    Outcome::Unrelated
+                } else if target.exact_cwd {
+                    if assignment.is_some() {
+                        Outcome::OtherProject
+                    } else if projectless {
+                        Outcome::ProjectlessIncluded
+                    } else {
+                        Outcome::WorkspaceFallback
+                    }
+                } else if projectless {
+                    Outcome::ProjectlessExcluded
+                } else if assignment.is_some() {
+                    Outcome::OtherProject
+                } else {
+                    Outcome::WorkspaceFallback
+                }
+            })
+            .max()
+            .unwrap_or(Outcome::Unrelated);
+        match outcome {
+            Outcome::DirectAssignment => selection.direct_assignments += 1,
+            Outcome::WorkspaceFallback => selection.workspace_fallbacks += 1,
+            Outcome::ProjectlessIncluded => selection.projectless_threads += 1,
+            Outcome::ProjectlessExcluded => selection.projectless_exclusions += 1,
+            Outcome::OtherProject => selection.other_project_exclusions += 1,
+            Outcome::Unrelated => {}
+        }
+        if outcome >= Outcome::ProjectlessIncluded {
             thread_ids.push(root.id.clone());
-        } else if beneath && assignment.is_none() && !state.projectless.contains(&root.id) {
-            selection.workspace_fallbacks += 1;
-            thread_ids.push(root.id.clone());
-        } else if beneath && state.projectless.contains(&root.id) {
-            selection.projectless_exclusions += 1;
-        } else if beneath && assignment.is_some() {
-            selection.other_project_exclusions += 1;
         }
     }
     thread_ids.sort();
-    if let Some(thread_id) = request.required_thread
+    if let Some(thread_id) = target.required_thread
         && !thread_ids.iter().any(|candidate| candidate == thread_id)
     {
         return Err(ProjectError::ThreadOutsideProject {
@@ -539,66 +570,7 @@ fn build_scope(
             target: selection.target.clone(),
         });
     }
-    let context = match progress {
-        Some(progress) => {
-            ReportContext::new_for_cached_with_progress(codex_home, &thread_ids, cache, progress)
-        }
-        None => ReportContext::new_for_cached(codex_home, &thread_ids, cache),
-    }
-    .map_err(ReportError::from)?;
-    Ok(ProjectScope {
-        context,
-        selection,
-        thread_ids,
-    })
-}
-
-fn build_cwd_scope(
-    codex_home: &Path,
-    cache: Rc<RolloutCache>,
-    roots: &[RolloutRecord],
-    state: &DesktopState,
-    cwd: &str,
-    _filter: &Filter,
-    progress: Option<&mut Progress>,
-) -> Result<ProjectScope, ProjectError> {
-    let mut thread_ids = Vec::new();
-    let mut selection = ProjectSelection {
-        target: cwd.into(),
-        resolver: "thread_cwd",
-        missing_source_roots: 0,
-        direct_assignments: 0,
-        workspace_fallbacks: 0,
-        projectless_threads: 0,
-        projectless_exclusions: 0,
-        other_project_exclusions: 0,
-        incomplete_root_reports: 0,
-        unpriced_root_reports: 0,
-    };
-    for root in roots.iter().filter(|root| root.cwd.as_deref() == Some(cwd)) {
-        if state.assignments.contains_key(&root.id) {
-            selection.other_project_exclusions += 1;
-        } else if state.projectless.contains(&root.id) {
-            selection.projectless_threads += 1;
-            thread_ids.push(root.id.clone());
-        } else {
-            selection.workspace_fallbacks += 1;
-            thread_ids.push(root.id.clone());
-        }
-    }
-    thread_ids.sort();
-    let context = match progress {
-        Some(progress) => {
-            ReportContext::new_for_cached_with_progress(codex_home, &thread_ids, cache, progress)
-        }
-        None => ReportContext::new_for_cached(codex_home, &thread_ids, cache),
-    }
-    .map_err(ReportError::from)?;
-    Ok(ProjectScope {
-        context,
-        selection,
-        thread_ids,
-    })
+    Ok((selection, thread_ids))
 }
 
 fn load_state(codex_home: &Path) -> (DesktopState, bool) {

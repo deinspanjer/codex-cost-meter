@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    path::{Path, PathBuf},
+    path::Path,
     rc::Rc,
 };
 
@@ -10,6 +10,7 @@ use thiserror::Error;
 use crate::{
     cache::RolloutCache,
     date_filter::{Filter, GroupDimension},
+    homes::Homes,
     pricing::{Catalog, PricingError, ServiceTier, Usage},
     progress::Progress,
     rollout::{
@@ -209,14 +210,24 @@ pub(crate) struct ModelProxyPointReport {
 }
 
 pub(crate) struct ReportContext {
-    codex_home: PathBuf,
+    homes: Rc<Homes>,
     pub(crate) index: RolloutIndex,
     pub(crate) catalog: Catalog,
-    names: Names,
-    cache: Rc<RolloutCache>,
+    names: Vec<Names>,
 }
 
 impl ReportContext {
+    fn with_index(homes: Rc<Homes>, index: RolloutIndex) -> Result<Self, PricingError> {
+        Ok(Self {
+            names: (0..homes.len())
+                .map(|id| Names::load(homes.path(id)))
+                .collect(),
+            homes,
+            index,
+            catalog: Catalog::embedded()?,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn new(codex_home: &Path) -> Result<Self, PricingError> {
         Self::new_cached(codex_home, Rc::new(RolloutCache::open(codex_home, false)))
@@ -226,17 +237,7 @@ impl ReportContext {
         codex_home: &Path,
         cache: Rc<RolloutCache>,
     ) -> Result<Self, PricingError> {
-        Ok(Self {
-            codex_home: codex_home.into(),
-            index: RolloutIndex::build_cached(codex_home, &cache),
-            catalog: Catalog::embedded()?,
-            names: Names::load(codex_home),
-            cache,
-        })
-    }
-
-    pub(crate) fn build(&self, thread_id: &str) -> Result<Report, ReportError> {
-        self.build_inner(thread_id, None)
+        Self::scan(Rc::new(Homes::single(codex_home, cache)), None)
     }
 
     #[cfg(test)]
@@ -253,30 +254,64 @@ impl ReportContext {
         thread_ids: &[String],
         cache: Rc<RolloutCache>,
     ) -> Result<Self, PricingError> {
-        Ok(Self {
-            codex_home: codex_home.into(),
-            index: RolloutIndex::build_for_cached(codex_home, thread_ids, Some(&cache), || {}),
-            catalog: Catalog::embedded()?,
-            names: Names::load(codex_home),
-            cache,
-        })
+        Self::targeted(Rc::new(Homes::single(codex_home, cache)), thread_ids, None)
     }
 
-    fn build_inner(
-        &self,
-        thread_id: &str,
-        progress: Option<&mut Progress>,
-    ) -> Result<Report, ReportError> {
-        build_with_state(
-            thread_id,
-            &self.codex_home,
-            &self.index,
-            &self.catalog,
-            &self.names,
-            &self.cache,
-            progress,
-            None,
-        )
+    /// Index every rollout in every selected home.
+    pub(crate) fn scan(
+        homes: Rc<Homes>,
+        mut progress: Option<&mut Progress>,
+    ) -> Result<Self, PricingError> {
+        start_indexing(&mut progress);
+        let index = RolloutIndex::build_homes(&homes.scans(), || indexed_file(&mut progress));
+        Self::with_index(homes, index)
+    }
+
+    /// Index the rollouts a date-filtered corpus report can include.
+    pub(crate) fn corpus(
+        homes: Rc<Homes>,
+        filter: &Filter,
+        mut progress: Option<&mut Progress>,
+    ) -> Result<Self, PricingError> {
+        start_indexing(&mut progress);
+        let index =
+            RolloutIndex::build_corpus(&homes.scans(), filter, || indexed_file(&mut progress));
+        Self::with_index(homes, index)
+    }
+
+    /// Index the requested rollouts with their descendants and replay parents.
+    pub(crate) fn targeted(
+        homes: Rc<Homes>,
+        thread_ids: &[String],
+        mut progress: Option<&mut Progress>,
+    ) -> Result<Self, PricingError> {
+        start_indexing(&mut progress);
+        let index =
+            RolloutIndex::build_for(&homes.scans(), thread_ids, || indexed_file(&mut progress));
+        Self::with_index(homes, index)
+    }
+
+    pub(crate) fn homes(&self) -> &Homes {
+        &self.homes
+    }
+
+    /// A thread's display name, preferring the home that holds the selected copy.
+    pub(crate) fn name(&self, id: &str) -> Option<String> {
+        let selected = self.index.record(id).map(|record| record.home);
+        let holders = self.index.holders(id);
+        selected
+            .into_iter()
+            .chain(
+                self.homes
+                    .stable_order()
+                    .into_iter()
+                    .filter(|home| Some(*home) != selected && holders.contains(home)),
+            )
+            .find_map(|home| self.names[home].get(id))
+    }
+
+    pub(crate) fn build(&self, thread_id: &str) -> Result<Report, ReportError> {
+        self.build_report(thread_id, None, None)
     }
 
     pub(crate) fn is_root(&self, thread_id: &str) -> bool {
@@ -420,7 +455,7 @@ impl ReportContext {
                     rows.push(ThreadReport {
                         thread_id: id.clone(),
                         parent_thread_id: None,
-                        thread_name: self.names.get(&id),
+                        thread_name: self.name(&id),
                         rollout_type: "unknown".into(),
                         agent_label: None,
                         stats: missing.report(&self.catalog),
@@ -440,7 +475,11 @@ impl ReportContext {
                 .and_then(|parent_id| self.index.record(parent_id))
                 .map_or(0, |parent| replay_prefix_len(parent, record));
             let mut own = Aggregate::default();
-            match self.cache.analyze_with_replay(record, replay_prefix_len) {
+            match self
+                .homes
+                .cache(record.home)
+                .analyze_with_replay(record, replay_prefix_len)
+            {
                 Ok(stats) => {
                     if by_thread.is_some() {
                         own.add_filtered(&stats, &self.catalog, Some(filter))?;
@@ -499,7 +538,7 @@ impl ReportContext {
                 rows.push(ThreadReport {
                     thread_id: id,
                     parent_thread_id: record.parent_id.clone(),
-                    thread_name: self.names.get(&record.id),
+                    thread_name: self.name(&record.id),
                     rollout_type: record.kind.report_type(),
                     agent_label: match &record.kind {
                         crate::rollout::discovery::RolloutKind::OtherSubagent(label) => {
@@ -575,66 +614,22 @@ impl ReportContext {
         })
     }
 
+    /// The session index of the only home; title updates are single-home.
     pub(crate) fn session_index(&self) -> &Snapshot {
-        &self.names.index
+        debug_assert_eq!(self.names.len(), 1);
+        &self.names[0].index
     }
 }
 
-impl ReportContext {
-    pub(crate) fn new_cached_with_progress(
-        codex_home: &Path,
-        cache: Rc<RolloutCache>,
-        progress: &mut Progress,
-    ) -> Result<Self, PricingError> {
+fn start_indexing(progress: &mut Option<&mut Progress>) {
+    if let Some(progress) = progress.as_deref_mut() {
         progress.start_indexing();
-        Ok(Self {
-            codex_home: codex_home.into(),
-            index: RolloutIndex::build_with_cache_progress(codex_home, Some(&cache), || {
-                progress.indexed_file()
-            }),
-            catalog: Catalog::embedded()?,
-            names: Names::load(codex_home),
-            cache,
-        })
     }
+}
 
-    pub(crate) fn new_corpus_cached_with_progress(
-        codex_home: &Path,
-        filter: &Filter,
-        cache: Rc<RolloutCache>,
-        progress: &mut Progress,
-    ) -> Result<Self, PricingError> {
-        progress.start_indexing();
-        Ok(Self {
-            codex_home: codex_home.into(),
-            index: RolloutIndex::build_corpus_with_cache_progress(
-                codex_home,
-                filter,
-                Some(&cache),
-                || progress.indexed_file(),
-            ),
-            catalog: Catalog::embedded()?,
-            names: Names::load(codex_home),
-            cache,
-        })
-    }
-
-    pub(crate) fn new_for_cached_with_progress(
-        codex_home: &Path,
-        thread_ids: &[String],
-        cache: Rc<RolloutCache>,
-        progress: &mut Progress,
-    ) -> Result<Self, PricingError> {
-        progress.start_indexing();
-        Ok(Self {
-            codex_home: codex_home.into(),
-            index: RolloutIndex::build_for_cached(codex_home, thread_ids, Some(&cache), || {
-                progress.indexed_file()
-            }),
-            catalog: Catalog::embedded()?,
-            names: Names::load(codex_home),
-            cache,
-        })
+fn indexed_file(progress: &mut Option<&mut Progress>) {
+    if let Some(progress) = progress.as_deref_mut() {
+        progress.indexed_file();
     }
 }
 
@@ -1089,197 +1084,189 @@ pub(crate) fn build(thread_id: &str, codex_home: &Path) -> Result<Report, Report
 
 pub(crate) fn build_with_progress(
     thread_id: &str,
-    codex_home: &Path,
+    homes: Rc<Homes>,
     progress: &mut Progress,
-    cache: Rc<RolloutCache>,
     filter: &Filter,
     catalog: &Catalog,
 ) -> Result<Report, ReportError> {
-    let mut context = ReportContext::new_for_cached_with_progress(
-        codex_home,
-        &[thread_id.into()],
-        cache,
-        progress,
-    )?;
+    let mut context = ReportContext::targeted(homes, &[thread_id.into()], Some(progress))?;
     context.catalog = catalog.clone();
     progress.start_analysis(context.rollout_count(thread_id));
-    build_with_state(
-        thread_id,
-        codex_home,
-        &context.index,
-        &context.catalog,
-        &context.names,
-        &context.cache,
-        Some(progress),
-        Some(filter),
-    )
+    context.build_report(thread_id, Some(progress), Some(filter))
 }
 
 #[cfg(test)]
 fn build_with_index(
     thread_id: &str,
     codex_home: &Path,
-    index: &RolloutIndex,
+    index: RolloutIndex,
     catalog: &Catalog,
 ) -> Result<Report, ReportError> {
-    build_with_state(
-        thread_id,
-        codex_home,
-        index,
-        catalog,
-        &Names::load(codex_home),
-        &RolloutCache::open(codex_home, false),
-        None,
-        None,
-    )
+    let homes = Homes::single(codex_home, Rc::new(RolloutCache::open(codex_home, false)));
+    let mut context = ReportContext::with_index(Rc::new(homes), index)?;
+    context.catalog = catalog.clone();
+    context.build(thread_id)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_with_state(
-    thread_id: &str,
-    codex_home: &Path,
-    index: &RolloutIndex,
-    catalog: &Catalog,
-    names: &Names,
-    cache: &RolloutCache,
-    mut progress: Option<&mut Progress>,
-    filter: Option<&Filter>,
-) -> Result<Report, ReportError> {
-    let root = index
-        .record(thread_id)
-        .ok_or_else(|| ReportError::RolloutNotFound {
-            thread_id: thread_id.into(),
-            home: codex_home.display().to_string(),
-        })?;
-    let descendants = index.descendants(thread_id).unwrap_or_default();
-    let mut root_stats = Aggregate::default();
-    let mut children_stats = Aggregate::default();
-    let mut tree_stats = Aggregate::default();
-    if !index.warnings().is_empty()
-        || index.malformed_lines_skipped() > 0
-        || index.oversized_lines_skipped() > 0
-    {
-        tree_stats.mark_incomplete();
-    }
-    let mut by_rollout_type = BTreeMap::<String, Aggregate>::new();
-    let mut warnings = index
-        .warnings()
-        .iter()
-        .map(|warning| {
-            format!(
-                "rollout scan could not read {} ({})",
-                warning.path.display(),
-                warning.error
-            )
-        })
-        .collect::<Vec<_>>();
-    let mut has_unusable_rollout = false;
+impl ReportContext {
+    fn build_report(
+        &self,
+        thread_id: &str,
+        mut progress: Option<&mut Progress>,
+        filter: Option<&Filter>,
+    ) -> Result<Report, ReportError> {
+        let index = &self.index;
+        let catalog = &self.catalog;
+        let root = index
+            .record(thread_id)
+            .ok_or_else(|| ReportError::RolloutNotFound {
+                thread_id: thread_id.into(),
+                home: self.homes.display(),
+            })?;
+        let descendants = index.descendants(thread_id).unwrap_or_default();
+        let mut root_stats = Aggregate::default();
+        let mut children_stats = Aggregate::default();
+        let mut tree_stats = Aggregate::default();
+        if !index.warnings().is_empty()
+            || index.malformed_lines_skipped() > 0
+            || index.oversized_lines_skipped() > 0
+        {
+            tree_stats.mark_incomplete();
+        }
+        let mut by_rollout_type = BTreeMap::<String, Aggregate>::new();
+        let mut warnings = index
+            .warnings()
+            .iter()
+            .map(|warning| {
+                format!(
+                    "rollout scan could not read {} ({})",
+                    warning.path.display(),
+                    warning.error
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut has_unusable_rollout = false;
 
-    if index.malformed_lines_skipped() > 0 {
-        warnings.push("rollout scan skipped malformed JSONL records".into());
-        tree_stats.incomplete = true;
-    }
-    if index.oversized_lines_skipped() > 0 {
-        warnings.push("rollout scan skipped oversized JSONL records".into());
-        tree_stats.incomplete = true;
-    }
-    if !index.warnings().is_empty() {
-        tree_stats.incomplete = true;
-    }
+        if index.malformed_lines_skipped() > 0 {
+            warnings.push("rollout scan skipped malformed JSONL records".into());
+            tree_stats.incomplete = true;
+        }
+        if index.oversized_lines_skipped() > 0 {
+            warnings.push("rollout scan skipped oversized JSONL records".into());
+            tree_stats.incomplete = true;
+        }
+        if !index.warnings().is_empty() {
+            tree_stats.incomplete = true;
+        }
 
-    for id in std::iter::once(thread_id).chain(descendants.iter().map(String::as_str)) {
-        let record = index.record(id).expect("indexed descendant must exist");
-        let replay_prefix_len = record
-            .parent_id
-            .as_deref()
-            .and_then(|parent_id| index.record(parent_id))
-            .map_or(0, |parent| replay_prefix_len(parent, record));
-        let rollout_type = record.kind.report_type();
-        let type_stats = by_rollout_type.entry(rollout_type).or_default();
-        match cache.analyze_with_replay(record, replay_prefix_len) {
-            Ok(stats) => {
-                if filter.is_some_and(|filter| filter.is_filtered())
-                    && (stats.unattributed_tokens > 0
-                        || stats.events.iter().any(|event| event.at.is_none())
-                        || stats
-                            .turn_events
-                            .iter()
-                            .any(|turn| turn.started_at.is_none()))
-                {
-                    warnings.push(
+        for id in std::iter::once(thread_id).chain(descendants.iter().map(String::as_str)) {
+            let record = index.record(id).expect("indexed descendant must exist");
+            let replay_prefix_len = record
+                .parent_id
+                .as_deref()
+                .and_then(|parent_id| index.record(parent_id))
+                .map_or(0, |parent| replay_prefix_len(parent, record));
+            let rollout_type = record.kind.report_type();
+            let type_stats = by_rollout_type.entry(rollout_type).or_default();
+            match self
+                .homes
+                .cache(record.home)
+                .analyze_with_replay(record, replay_prefix_len)
+            {
+                Ok(stats) => {
+                    if filter.is_some_and(|filter| filter.is_filtered())
+                        && (stats.unattributed_tokens > 0
+                            || stats.events.iter().any(|event| event.at.is_none())
+                            || stats
+                                .turn_events
+                                .iter()
+                                .any(|turn| turn.started_at.is_none()))
+                    {
+                        warnings.push(
                         "date-filtered report excluded usage or turns without a usable timestamp"
                             .into(),
                     );
+                    }
+                    tree_stats.add_filtered(&stats, catalog, filter)?;
+                    type_stats.add_filtered(&stats, catalog, filter)?;
+                    if id == thread_id {
+                        has_unusable_rollout = stats.malformed_lines > 0
+                            || stats.oversized_lines > 0
+                            || stats.invalid_usage_records > 0;
+                        root_stats.add_filtered(&stats, catalog, filter)?;
+                    } else {
+                        children_stats.add_filtered(&stats, catalog, filter)?;
+                    }
                 }
-                tree_stats.add_filtered(&stats, catalog, filter)?;
-                type_stats.add_filtered(&stats, catalog, filter)?;
-                if id == thread_id {
-                    has_unusable_rollout = stats.malformed_lines > 0
-                        || stats.oversized_lines > 0
-                        || stats.invalid_usage_records > 0;
-                    root_stats.add_filtered(&stats, catalog, filter)?;
-                } else {
-                    children_stats.add_filtered(&stats, catalog, filter)?;
+                Err(source) if id == thread_id => {
+                    return Err(ReportError::SelectedRolloutUnreadable {
+                        id: thread_id.into(),
+                        source,
+                    });
+                }
+                Err(_) => {
+                    tree_stats.add_unreadable();
+                    type_stats.add_unreadable();
+                    children_stats.add_unreadable();
+                    warnings.push(format!("descendant rollout {id} could not be read"));
                 }
             }
-            Err(source) if id == thread_id => {
-                return Err(ReportError::SelectedRolloutUnreadable {
-                    id: thread_id.into(),
-                    source,
-                });
-            }
-            Err(_) => {
-                tree_stats.add_unreadable();
-                type_stats.add_unreadable();
-                children_stats.add_unreadable();
-                warnings.push(format!("descendant rollout {id} could not be read"));
+            if let Some(progress) = progress.as_deref_mut() {
+                progress.analyzed_rollout();
             }
         }
-        if let Some(progress) = progress.as_deref_mut() {
-            progress.analyzed_rollout();
-        }
-    }
 
-    let by_model = tree_stats.model_reports(catalog);
-    let tree = tree_stats.report(catalog);
-    let root_stats = root_stats.report(catalog);
-    let children_stats = children_stats.report(catalog);
-    Ok(Report {
-        date_range: filter
-            .filter(|filter| filter.is_filtered())
-            .map(DateRangeReport::from_filter),
-        rollout: RolloutReport {
-            rollout_id: thread_id.into(),
-            rollout_type: root.kind.report_type(),
-            project: root.cwd.clone(),
-            thread_name: names.get(thread_id),
-            total_subagent_spawns: descendants.len(),
-            total_subagent_turn_duration_seconds: children_stats.total_turn_duration_seconds,
-            stats: root_stats,
-        },
-        tree,
-        by_model,
-        by_rollout_type: by_rollout_type
-            .into_iter()
-            .map(|(kind, stats)| (kind, stats.report(catalog)))
-            .collect(),
-        pricing: pricing_report(catalog),
-        has_unusable_rollout,
-        incomplete_input_warnings: {
-            let session_index = &names.index;
-            if session_index.read_error().is_some() {
-                warnings.push("session index could not be read".into());
-            } else {
-                if session_index.oversized_records() > 0 {
-                    warnings.push("session index skipped oversized JSONL records".into());
+        let by_model = tree_stats.model_reports(catalog);
+        let tree = tree_stats.report(catalog);
+        let root_stats = root_stats.report(catalog);
+        let children_stats = children_stats.report(catalog);
+        Ok(Report {
+            date_range: filter
+                .filter(|filter| filter.is_filtered())
+                .map(DateRangeReport::from_filter),
+            rollout: RolloutReport {
+                rollout_id: thread_id.into(),
+                rollout_type: root.kind.report_type(),
+                project: root.cwd.clone(),
+                thread_name: self.name(thread_id),
+                total_subagent_spawns: descendants.len(),
+                total_subagent_turn_duration_seconds: children_stats.total_turn_duration_seconds,
+                stats: root_stats,
+            },
+            tree,
+            by_model,
+            by_rollout_type: by_rollout_type
+                .into_iter()
+                .map(|(kind, stats)| (kind, stats.report(catalog)))
+                .collect(),
+            pricing: pricing_report(catalog),
+            has_unusable_rollout,
+            incomplete_input_warnings: {
+                for names in &self.names {
+                    let session_index = &names.index;
+                    let warning = if session_index.read_error().is_some() {
+                        vec!["session index could not be read"]
+                    } else {
+                        [
+                            (session_index.oversized_records() > 0)
+                                .then_some("session index skipped oversized JSONL records"),
+                            (session_index.malformed_records() > 0)
+                                .then_some("session index contains malformed JSONL records"),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect()
+                    };
+                    for warning in warning {
+                        if !warnings.iter().any(|existing| existing == warning) {
+                            warnings.push(warning.into());
+                        }
+                    }
                 }
-                if session_index.malformed_records() > 0 {
-                    warnings.push("session index contains malformed JSONL records".into());
-                }
-            }
-            warnings
-        },
-    })
+                warnings
+            },
+        })
+    }
 }
 
 fn round(value: f64, decimal_places: i32) -> f64 {
@@ -1289,20 +1276,18 @@ fn round(value: f64, decimal_places: i32) -> f64 {
 
 /// Title selection is explicit so a missing ID can never select an unrelated chat.
 pub(crate) fn resolve_title(
-    home: &Path,
+    homes: Rc<Homes>,
     query: &str,
-    cache: Rc<RolloutCache>,
     progress: &mut Progress,
 ) -> Result<String, ReportError> {
-    let context = ReportContext::new_cached_with_progress(home, cache, progress)?;
+    let context = ReportContext::scan(homes, Some(progress))?;
     let query_lower = query.trim().to_lowercase();
     let mut matches = context
         .roots()
         .filter(|record| {
             !query_lower.is_empty()
                 && context
-                    .names
-                    .get(&record.id)
+                    .name(&record.id)
                     .is_some_and(|name| name.to_lowercase().contains(&query_lower))
         })
         .map(|record| record.id.clone())
@@ -1740,7 +1725,7 @@ mod tests {
         fs::remove_file(home.path().join("archived_sessions/child.jsonl")).unwrap();
 
         let report =
-            build_with_index("root", home.path(), &index, &Catalog::embedded().unwrap()).unwrap();
+            build_with_index("root", home.path(), index, &Catalog::embedded().unwrap()).unwrap();
 
         assert_eq!(report.tree.rollout_count, 2);
         assert_eq!(report.tree.estimated_cost_usd, None);
@@ -1758,7 +1743,7 @@ mod tests {
         let index = RolloutIndex::build(home.path());
         fs::remove_file(home.path().join("sessions/root.jsonl")).unwrap();
 
-        let error = build_with_index("root", home.path(), &index, &Catalog::embedded().unwrap())
+        let error = build_with_index("root", home.path(), index, &Catalog::embedded().unwrap())
             .unwrap_err();
 
         assert!(matches!(
@@ -1778,7 +1763,7 @@ mod tests {
         if fs::File::open(&selected).is_ok() {
             return;
         }
-        let error = build_with_index("root", home.path(), &index, &Catalog::embedded().unwrap())
+        let error = build_with_index("root", home.path(), index, &Catalog::embedded().unwrap())
             .unwrap_err();
 
         assert!(matches!(
