@@ -1,24 +1,20 @@
 # TODO
 
-- Research and resolve [ccusage issue #950](https://github.com/ccusage/ccusage/issues/950): distinguish duplicated historical `token_count` records from billable inherited context before changing totals, retain ambiguous usage, and avoid heuristic deletion.
-- Decide from deployment evidence whether Windows arm64 is warranted.
-- Clean Apple Silicon Homebrew install and first run are verified. Still verify the formula on clean Intel macOS, plus schedule repair after upgrade and package-manager uninstall on both architectures.
-- Verify the first Developer ID-signed and notarized direct archive on clean Apple Silicon and Intel Macs, including a quarantined browser download and first execution while online.
-- Verify tagged `cargo install --locked` on clean Windows x64 machines with SmartScreen and, where practical, Smart App Control enabled; record policy and first-run outcomes without promising warning-free execution.
-- After that Windows verification, publish a portable WinGet manifest for the checksummed x64 ZIP and a Scoop manifest in an appropriate bucket; verify install, upgrade, schedule repair, and uninstall for each.
-- Verify the source-building Homebrew formula on Linuxbrew x86_64 and aarch64 before documenting it as a supported Linux package-manager path.
-- Add a complete price-catalog override/export workflow after the reporting contract is stable.
-- Execute the [ccusage accounting and pricing follow-up](docs/plans/ccusage-accounting-pricing-and-multi-home-handoff.md):
-  - Add effective-dated long-context thresholds and rates, rechecking the rapidly changing official pricing immediately before implementation.
-  - Price recorded Standard and Fast/Priority service tiers, including mixed-tier rollouts.
-  - Validate physical parent/child usage replay before suppressing anything; qualify unresolved replay ambiguity instead of applying heuristic deletion.
-  - Rename the report option to `--codex-homes` and accept a comma-separated list while keeping update and scheduling mutations scoped to one `--codex-home`.
-- Add a privacy-safe, confirmation-gated submit-issue mode using an allowlist only.
-- Evaluate naming threads younger than 15 minutes without racing or preempting Codex's own delayed, improved title evaluation.
-- Add an optional Tufte-style title mode: append cost first, then numeric input and output token totals paired with compact per-turn eight-height sparklines, so narrow panels clip the trailing sparklines before the cost.
-- Research whether the running ChatGPT/Codex desktop app's app server can be signaled to reload externally updated titles without relaunching or cycling windows.
-- Research whether the desktop app offers a practical extension point for a per-thread context-menu update action.
-- Research hooks that could update a thread's cost at turn completion, turn start, or idle time.
-- Explore session activity-range reporting separately from summed turn time: define meaningful idle-gap boundaries, represent disjoint active date ranges compactly, and verify how automatic continuations and scheduled wakeups appear in rollout lifecycle events.
-- Add a `doctor` command once multiple concrete diagnostics justify it; include rollout-cache integrity, writability, and explicit repair.
-- Reconsider SignPath Foundation, Azure Artifact Signing, or Microsoft Store MSIX only if measured Windows direct-download friction justifies the account, cost, and packaging work.
+## Accounting
+
+- Check whether current `thread_spawn` subagent rollouts replay parent `token_count` history, as reported in [ccusage issue #950](https://github.com/ccusage/ccusage/issues/950). v1.1.0 removes replay only from explicit legacy forks and deliberately keeps subagent-only candidates. Remove a subagent prefix only when it exactly matches the parent's usage sequence. Keep ambiguous usage, and do not use timestamp-burst or cross-session dedupe heuristics.
+- Add multi-home reporting: replace the report-only `--codex-home` with `--codex-homes HOME[,HOME...]`, and deduplicate rollout IDs across homes. `update` and `schedule` keep a single `--codex-home`. See step 5 of the [handoff plan](docs/plans/ccusage-accounting-pricing-and-multi-home-handoff.md#5-add-multi-home-reporting).
+- Explore reporting a session's active time ranges, separate from summed turn time. Define which idle gaps split a range, show disjoint date ranges compactly, and verify how automatic continuations and scheduled wakeups appear in rollout lifecycle events.
+
+## Titles
+
+- Evaluate titling threads younger than 15 minutes without racing or overriding the improved title that Codex generates after a delay.
+
+## Diagnostics and support
+
+- Add a `doctor` command once several concrete diagnostics justify it. Start with rollout-cache integrity, writability checks, and explicit repair.
+- Add a privacy-safe issue-submission mode. It collects only allowlisted fields and requires confirmation before it sends anything.
+
+## Installation feedback
+
+So far, the only user-confirmed installation is on an Apple Silicon Mac. Reports of successful installs or problems are welcome.
