@@ -820,6 +820,7 @@ mod tests {
             path,
             page_start: None,
             pages: Vec::new(),
+            home: 0,
         }
     }
 
@@ -921,6 +922,7 @@ mod tests {
             path: parent_path,
             page_start: None,
             pages: Vec::new(),
+            home: 0,
         };
         let mut child = RolloutRecord {
             id: "child".into(),
@@ -931,6 +933,7 @@ mod tests {
             path: child_path.clone(),
             page_start: None,
             pages: Vec::new(),
+            home: 0,
         };
         let child_meta = json!({"type": "session_meta", "timestamp": "2026-08-13T12:01:00Z", "payload": {"id": "child"}});
         let embedded_parent = json!({"type": "session_meta", "timestamp": "2026-08-13T12:00:00Z", "payload": {"id": "parent"}});

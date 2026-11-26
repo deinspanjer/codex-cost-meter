@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.10.0]
+
+- Combine several Codex homes in one report with `report --codex-homes HOME[,HOME...]`. Each rollout ID counts once across homes, task trees and fork replay resolve across homes, and same-named Desktop Projects merge. `update` and `schedule` stay single-home.
+- Fix an exact report of a legacy fork child that could charge its parent's copied history to the child, and stop a copied home from reading rollout files that its metadata places in another home.
+
 ## [1.9.0]
 
 - Price GPT-6.2 Astra and Sol offline from November 17, including Fast, Ultrafast, and long context. Restore two historical Codex Priority rates.
